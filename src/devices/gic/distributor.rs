@@ -2,7 +2,7 @@
 /// 
 /// This emulates a minimal GICD for guest interrupt configuration.
 
-use super::MmioDevice;
+use crate::devices::MmioDevice;
 
 /// GICD base address
 const GICD_BASE: u64 = 0x08000000;

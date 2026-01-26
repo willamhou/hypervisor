@@ -2,7 +2,7 @@
 /// 
 /// This emulates a minimal PL011 UART for guest output.
 
-use super::MmioDevice;
+use crate::devices::MmioDevice;
 
 /// UART base address (same as physical UART in QEMU virt machine)
 const UART_BASE: u64 = 0x09000000;

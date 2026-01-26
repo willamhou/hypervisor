@@ -3,8 +3,8 @@
 /// This module provides a framework for emulating MMIO devices using
 /// the trap-and-emulate approach.
 
-pub mod uart;
-pub mod gicd;
+pub mod pl011;
+pub mod gic;
 
 /// MMIO device trait
 pub trait MmioDevice {
@@ -46,16 +46,16 @@ pub trait MmioDevice {
 
 /// MMIO device manager
 pub struct DeviceManager {
-    uart: uart::VirtualUart,
-    gicd: gicd::VirtualGicd,
+    uart: pl011::VirtualUart,
+    gicd: gic::VirtualGicd,
 }
 
 impl DeviceManager {
     /// Create a new device manager
     pub fn new() -> Self {
         Self {
-            uart: uart::VirtualUart::new(),
-            gicd: gicd::VirtualGicd::new(),
+            uart: pl011::VirtualUart::new(),
+            gicd: gic::VirtualGicd::new(),
         }
     }
     
