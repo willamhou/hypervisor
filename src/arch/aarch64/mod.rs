@@ -5,9 +5,12 @@
 //! - Exception vector tables
 //! - VM entry/exit mechanisms
 //! - System register access
+//! - Memory management (Stage-2 translation)
 
 pub mod regs;
 pub mod exception;
+pub mod mmu;
 
 pub use regs::*;
 pub use exception::*;
+pub use mmu::*;

@@ -21,17 +21,17 @@ static GUEST_CODE: GuestCode = GuestCode {
     code: [
         // Print 'G' - Hypercall 0
         0xd2800000,  // mov x0, #0          (hypercall 0: print char)
-        0xd2800de1,  // mov x1, #'G' (0x47)
+        0xd28008e1,  // mov x1, #'G' (0x47 = 71 decimal, shifted: 71 << 5 = 0x8E0)
         0xd4000002,  // hvc #0
         
         // Print '!'
         0xd2800000,  // mov x0, #0
-        0xd2800421,  // mov x1, #'!' (0x21)
+        0xd2800421,  // mov x1, #'!' (0x21 = 33, shifted: 33 << 5 = 0x420)
         0xd4000002,  // hvc #0
         
         // Print newline
         0xd2800000,  // mov x0, #0
-        0xd2800141,  // mov x1, #'\n' (0x0a)
+        0xd2800141,  // mov x1, #'\n' (0x0a = 10, shifted: 10 << 5 = 0x140)
         0xd4000002,  // hvc #0
         
         // Exit - Hypercall 1
@@ -67,7 +67,7 @@ pub fn run_test() {
     // Get guest code and stack addresses
     let guest_entry = &GUEST_CODE.code as *const _ as u64;
     let guest_stack = unsafe {
-        &raw const GUEST_STACK.stack as u64 + 16384
+        (&GUEST_STACK.stack as *const [u8; 16384]) as u64 + 16384
     };
     
     uart_puts(b"[TEST] Guest entry point: 0x");
@@ -77,6 +77,14 @@ pub fn run_test() {
     uart_puts(b"[TEST] Guest stack: 0x");
     print_hex(guest_stack);
     uart_puts(b"\n");
+    
+    // Initialize memory mapping
+    // Map the region containing guest code and stack
+    let mem_start = guest_entry & !(2 * 1024 * 1024 - 1); // Align to 2MB
+    let mem_end = ((guest_stack + 2 * 1024 * 1024 - 1) / (2 * 1024 * 1024)) * (2 * 1024 * 1024);
+    let mem_size = mem_end - mem_start;
+    
+    vm.init_memory(mem_start, mem_size);
     
     // Add vCPU with guest entry point
     match vm.add_vcpu(guest_entry, guest_stack) {

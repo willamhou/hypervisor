@@ -1,9 +1,10 @@
 //! Virtual Machine Management
 //! 
 //! This module provides the VM abstraction that contains one or more vCPUs
-//! and manages guest resources.
+//! and manages guest resources including memory.
 
 use crate::vcpu::Vcpu;
+use crate::arch::aarch64::mmu::{MemoryAttributes, init_stage2};
 
 /// Maximum number of vCPUs per VM
 pub const MAX_VCPUS: usize = 8;
@@ -29,7 +30,7 @@ pub enum VmState {
 
 /// Virtual Machine
 /// 
-/// Represents a complete virtual machine with one or more vCPUs.
+/// Represents a complete virtual machine with one or more vCPUs and memory.
 pub struct Vm {
     /// Unique identifier for this VM
     id: usize,
@@ -42,6 +43,9 @@ pub struct Vm {
     
     /// Number of active vCPUs
     vcpu_count: usize,
+    
+    /// Whether memory is initialized
+    memory_initialized: bool,
 }
 
 impl Vm {
@@ -56,6 +60,7 @@ impl Vm {
             state: VmState::Uninitialized,
             vcpus: [INIT; MAX_VCPUS],
             vcpu_count: 0,
+            memory_initialized: false,
         }
     }
     
@@ -72,6 +77,49 @@ impl Vm {
     /// Get number of vCPUs
     pub fn vcpu_count(&self) -> usize {
         self.vcpu_count
+    }
+    
+    /// Initialize memory for the VM
+    /// 
+    /// Sets up identity mapping for guest memory regions.
+    /// 
+    /// # Arguments
+    /// * `guest_mem_start` - Start of guest memory region
+    /// * `guest_mem_size` - Size of guest memory region
+    pub fn init_memory(&mut self, guest_mem_start: u64, guest_mem_size: u64) {
+        use crate::uart_puts;
+        use crate::arch::aarch64::mmu::IdentityMapper;
+        
+        if self.memory_initialized {
+            uart_puts(b"[VM] Memory already initialized\n");
+            return;
+        }
+        
+        uart_puts(b"[VM] Initializing memory mapping...\n");
+        
+        // Use a global static mapper (to avoid large stack allocation)
+        static mut MAPPER: IdentityMapper = IdentityMapper::new();
+        
+        // Map guest memory region (identity mapping)
+        // Round to 2MB boundaries
+        let start_aligned = guest_mem_start & !(2 * 1024 * 1024 - 1);
+        let size_aligned = ((guest_mem_size + 2 * 1024 * 1024 - 1) / (2 * 1024 * 1024)) * (2 * 1024 * 1024);
+        
+        uart_puts(b"[VM] Mapping region: 0x");
+        print_hex(start_aligned);
+        uart_puts(b" - 0x");
+        print_hex(start_aligned + size_aligned);
+        uart_puts(b"\n");
+        
+        unsafe {
+            MAPPER.map_region(start_aligned, size_aligned, MemoryAttributes::NORMAL);
+            
+            // Initialize Stage-2 translation
+            init_stage2(&MAPPER);
+        }
+        
+        self.memory_initialized = true;
+        uart_puts(b"[VM] Memory mapping complete\n");
     }
     
     /// Add a vCPU to this VM
@@ -188,4 +236,18 @@ impl core::fmt::Debug for Vm {
             .field("vcpu_count", &self.vcpu_count)
             .finish()
     }
+}
+
+/// Helper function to print hex value
+fn print_hex(value: u64) {
+    use crate::uart_puts;
+    const HEX_CHARS: &[u8; 16] = b"0123456789abcdef";
+    let mut buffer = [0u8; 16];
+    
+    for i in 0..16 {
+        let nibble = ((value >> ((15 - i) * 4)) & 0xF) as usize;
+        buffer[i] = HEX_CHARS[nibble];
+    }
+    
+    uart_puts(&buffer);
 }
