@@ -1,10 +1,5 @@
 .PHONY: all build run debug clean
 
-# Auto-load Cargo environment
-SHELL := /bin/bash
-CARGO_HOME ?= $(HOME)/.cargo
-export PATH := $(CARGO_HOME)/bin:$(PATH)
-
 # Target binary name
 TARGET := hypervisor
 BUILD_DIR := target/aarch64-unknown-none/debug

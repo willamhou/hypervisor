@@ -78,11 +78,6 @@ pub fn init() {
 /// # Returns
 /// * `true` - Continue running guest
 /// * `false` - Exit to host
-
-// Exception loop prevention: track consecutive exceptions
-static mut EXCEPTION_COUNT: u32 = 0;
-const MAX_CONSECUTIVE_EXCEPTIONS: u32 = 100;
-
 #[no_mangle]
 pub extern "C" fn handle_exception(context: &mut VcpuContext) -> bool {
     // Read ESR_EL2 to determine exception cause
@@ -107,22 +102,6 @@ pub extern "C" fn handle_exception(context: &mut VcpuContext) -> bool {
     }
     context.sys_regs.far_el2 = far;
     
-    // Check for exception loop
-    unsafe {
-        EXCEPTION_COUNT += 1;
-        if EXCEPTION_COUNT > MAX_CONSECUTIVE_EXCEPTIONS {
-            uart_puts(b"\n[FATAL] Too many consecutive exceptions, halting\n");
-            uart_puts(b"[DEBUG] ESR_EL2=0x");
-            print_hex(esr);
-            uart_puts(b" FAR_EL2=0x");
-            print_hex(far);
-            uart_puts(b" PC=0x");
-            print_hex(context.pc);
-            uart_puts(b"\n");
-            return false; // Exit to prevent infinite loop
-        }
-    }
-    
     // Get exit reason
     let exit_reason = context.exit_reason();
     
@@ -132,8 +111,6 @@ pub extern "C" fn handle_exception(context: &mut VcpuContext) -> bool {
     
     match exit_reason {
         ExitReason::WfiWfe => {
-            // Reset exception counter on successful WFI handling
-            unsafe { EXCEPTION_COUNT = 0; }
             // WFI/WFE: Guest is waiting for interrupt
             // Return exit code 1 to indicate WFI
             // Don't advance PC - guest should resume from WFI when interrupt is injected
@@ -141,8 +118,6 @@ pub extern "C" fn handle_exception(context: &mut VcpuContext) -> bool {
         }
         
         ExitReason::HvcCall => {
-            // Reset exception counter on hypercall
-            unsafe { EXCEPTION_COUNT = 0; }
             // HVC: Hypercall from guest
             // x0 contains the hypercall number
             let should_continue = handle_hypercall(context);
@@ -171,8 +146,6 @@ pub extern "C" fn handle_exception(context: &mut VcpuContext) -> bool {
             
             // Try to handle as MMIO
             if handle_mmio_abort(context, far) {
-                // Reset exception counter on successful MMIO
-                unsafe { EXCEPTION_COUNT = 0; }
                 // Successfully handled, advance PC and continue
                 context.pc += 4;
                 true
@@ -186,12 +159,15 @@ pub extern "C" fn handle_exception(context: &mut VcpuContext) -> bool {
         }
         
         ExitReason::Unknown | ExitReason::Other(_) => {
-            // Don't try to handle as IRQ - unknown exceptions should exit
-            // This prevents infinite loops from unhandled exceptions
+            // Check if this is an IRQ or FIQ from the vector entry
+            // ESR_EL2 might not have meaningful data for IRQ/FIQ
+            // We'll try to handle it as an interrupt
+            if is_irq_or_fiq() {
+                return handle_irq(context);
+            }
+            
             uart_puts(b"[VCPU] Unknown exception, ESR=0x");
             print_hex(esr);
-            uart_puts(b" PC=0x");
-            print_hex(context.pc);
             uart_puts(b"\n");
             // This is a fatal error
             false // Exit
@@ -298,6 +274,14 @@ fn handle_mmio_abort(context: &mut VcpuContext, addr: u64) -> bool {
             }
         }
     }
+}
+
+/// Check if current exception is IRQ or FIQ
+fn is_irq_or_fiq() -> bool {
+    // For now, we'll assume any exception with ESR_EL2.EC = 0 might be an interrupt
+    // A better approach would be to track which vector entry was used
+    // TODO: Pass vector information from assembly
+    true // Optimistic: try to handle as interrupt
 }
 
 /// Handle IRQ interrupts
