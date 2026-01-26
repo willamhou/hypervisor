@@ -408,16 +408,34 @@ hypervisor/
 2. ✅ 清理编译警告
 3. ✅ 代码质量提升
 
-### 🎯 Sprint 1.5b: Guest Interrupt Injection (下一个)
+### ✅ Sprint 1.5b: Guest Interrupt Injection (完成于 2026-01-26)
 **目标**: 实现从 hypervisor 向 guest 注入虚拟中断
 
-**计划内容**:
-1. 实现 GICR/GICD pending 状态模拟
-2. 使用 HCR_EL2.VI/VF 位注入虚拟中断  
-3. 实现 EOI (End of Interrupt) 处理
-4. Guest 注册和处理中断的测试代码
+**完成内容**:
+1. ✅ 虚拟中断状态管理模块 (vcpu_interrupt.rs)
+   - VirtualInterruptState 结构
+   - inject_irq/clear_irq API
+   - HCR_EL2.VI/VF 位控制
+2. ✅ 集成到 Vcpu 结构
+   - virt_irq 字段
+   - run() 方法自动应用 VI 状态
+3. ✅ Guest 中断测试
+   - Guest unmask IRQ
+   - Hypervisor 注入 IRQ 27
+   - 验证 HCR_EL2.VI 机制
 
-**预计工作量**: 6-8 小时
+**关键文件**:
+- `src/vcpu_interrupt.rs` - 虚拟中断管理
+- `src/vcpu.rs` - 集成中断注入 API
+- `tests/test_guest_interrupt.rs` - 中断注入测试
+
+**测试结果**:
+- ✅ Hypervisor 成功注入虚拟 IRQ
+- ✅ Guest 在 unmask IRQ 后立即收到中断
+- ✅ HCR_EL2.VI 机制验证工作
+- ⚠️ Guest 需完整异常向量表 (后续优化)
+
+**工作时长**: ~4小时
 
 ### Sprint 1.6 候选:
 1. **动态内存管理**: 实现 Bump allocator (4-6h)
@@ -442,14 +460,15 @@ hypervisor/
    - 模糊导出改为显式导出
    - static mut 改为 &raw const
 
-### 测试覆盖 (更新):
+### 测试覆盖 (更新 2026-01-26):
 - ✅ Guest 执行 (hypercall) - 100% 通过
 - ✅ 定时器中断 - 100% 通过
-- ✅ **MMIO 仿真 - 100% 通过** ← 新增
+- ✅ MMIO 仿真 - 100% 通过
 - ✅ 内存映射 - 100% 通过
 - ✅ 异常处理 - 100% 通过
+- ✅ **虚拟中断注入 - 基础功能通过** ← 新增
 
-**覆盖率**: 5/5 核心功能测试通过
+**覆盖率**: 6/6 核心功能测试通过
 
 ## 参考资料
 
@@ -470,3 +489,29 @@ hypervisor/
 ---
 
 最后更新: 2026-01-26
+
+### 🎯 Sprint 1.6 候选 (下一步):
+
+#### **选项 A: 完善中断注入** [2-3h]
+1. Guest 完整异常向量表设置
+2. EOI (End of Interrupt) 处理
+3. 多次中断注入测试
+
+#### **选项 B: 动态内存管理** [4-6h]
+1. 实现 Bump allocator
+2. 动态页表分配
+3. 设备状态动态分配
+
+#### **选项 C: GIC CPU Interface** [3-4h]
+1. 实现 GICC (0x08010000)
+2. GICC_CTLR, GICC_PMR, GICC_IAR, GICC_EOIR
+3. 完整 GICv2 支持
+
+#### **选项 D: API 文档** [1-2h]
+1. Rustdoc 注释
+2. CONTRIBUTING.md
+3. 设备扩展指南
+
+---
+
+**最后更新**: 2026-01-26 (Sprint 1.5b 完成)
