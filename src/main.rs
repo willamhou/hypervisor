@@ -51,6 +51,9 @@ pub extern "C" fn rust_main() -> ! {
     uart_puts_local(b"[TEST] VM created successfully\n");
     uart_puts_local(b"[TEST] vCPU framework is ready!\n");
     
+    // Run the guest test
+    hypervisor::test_guest::run_test();
+    
     uart_puts_local(b"\n========================================\n");
     uart_puts_local(b"Sprint 1.1: vCPU Framework - COMPLETE\n");
     uart_puts_local(b"========================================\n");

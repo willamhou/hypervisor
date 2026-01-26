@@ -131,12 +131,16 @@ exception_handler:
     mrs     x2, spsr_el1
     str     x2, [x0, #264]       // spsr_el1
     
-    // Save PC (ELR_EL2) and SP
-    mrs     x2, elr_el2
-    str     x2, [x0, #384]       // pc (at end of VcpuContext)
-    
+    // Save SP and PC
+    // Offset calculation:
+    // GP regs: 31*8 = 248
+    // Sys regs: 17*8 = 136  
+    // Total before sp: 248 + 136 = 384
     mov     x2, sp
-    str     x2, [x0, #376]       // sp
+    str     x2, [x0, #384]       // sp
+    
+    mrs     x2, elr_el2
+    str     x2, [x0, #392]       // pc
     
     // Call Rust exception handler
     // x0 already contains context pointer
@@ -207,7 +211,7 @@ enter_guest:
     msr     spsr_el1, x1
     
     // Restore PC (into ELR_EL2 for ERET)
-    ldr     x1, [x0, #384]       // pc
+    ldr     x1, [x0, #392]       // pc (offset 392)
     msr     elr_el2, x1
     
     // Restore SPSR_EL2 to enter guest at EL1

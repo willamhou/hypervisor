@@ -4,6 +4,7 @@ pub mod uart;
 pub mod arch;
 pub mod vcpu;
 pub mod vm;
+pub mod test_guest;
 
 // Note: println! macro is exported at the crate root via #[macro_export]
 // It can be used as: use hypervisor::println;
