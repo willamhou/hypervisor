@@ -197,7 +197,19 @@ exception_handler:
     eret
 
 guest_exit:
-    // Guest wants to exit - return to caller (host)
+    // Guest wants to exit - return to enter_guest's caller
+    // We need to restore the host context that was saved by enter_guest
+    
+    // Restore host callee-saved registers
+    ldp     x19, x20, [sp], #16
+    ldp     x21, x22, [sp], #16
+    ldp     x23, x24, [sp], #16
+    ldp     x25, x26, [sp], #16
+    ldp     x27, x28, [sp], #16
+    ldp     x29, x30, [sp], #16
+    
+    // Return 0 (success) to enter_guest's caller
+    mov     x0, #0
     ret
 
 exception_no_context:

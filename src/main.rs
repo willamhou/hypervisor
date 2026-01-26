@@ -16,8 +16,8 @@ fn uart_puts_local(s: &[u8]) {
 #[no_mangle]
 pub extern "C" fn rust_main() -> ! {
     uart_puts_local(b"========================================\n");
-    uart_puts_local(b"  ARM64 Hypervisor - Sprint 1.1\n");
-    uart_puts_local(b"  vCPU Framework Test\n");
+    uart_puts_local(b"  ARM64 Hypervisor - Sprint 1.3\n");
+    uart_puts_local(b"  Interrupt Handling Test\n");
     uart_puts_local(b"========================================\n");
     uart_puts_local(b"\n");
     uart_puts_local(b"[INIT] Initializing at EL2...\n");
@@ -26,6 +26,14 @@ pub extern "C" fn rust_main() -> ! {
     uart_puts_local(b"[INIT] Setting up exception vector table...\n");
     exception::init();
     uart_puts_local(b"[INIT] Exception handling initialized\n");
+    
+    // Initialize GIC
+    hypervisor::arch::aarch64::gic::init();
+    
+    // Initialize timer
+    uart_puts_local(b"[INIT] Configuring timer...\n");
+    hypervisor::arch::aarch64::timer::init_hypervisor_timer();
+    hypervisor::arch::aarch64::timer::print_timer_info();
     
     // Check current exception level
     let current_el: u64;
@@ -54,8 +62,11 @@ pub extern "C" fn rust_main() -> ! {
     // Run the guest test
     hypervisor::test_guest::run_test();
     
+    // Run timer interrupt test
+    hypervisor::test_timer::run_timer_test();
+    
     uart_puts_local(b"\n========================================\n");
-    uart_puts_local(b"Sprint 1.1: vCPU Framework - COMPLETE\n");
+    uart_puts_local(b"Sprint 1.3: Interrupt Handling - COMPLETE\n");
     uart_puts_local(b"========================================\n");
     
     // Halt - we'll implement proper VM execution later

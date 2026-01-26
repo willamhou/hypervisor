@@ -149,6 +149,13 @@ pub extern "C" fn handle_exception(context: &mut VcpuContext) -> bool {
         }
         
         ExitReason::Unknown | ExitReason::Other(_) => {
+            // Check if this is an IRQ or FIQ from the vector entry
+            // ESR_EL2 might not have meaningful data for IRQ/FIQ
+            // We'll try to handle it as an interrupt
+            if is_irq_or_fiq() {
+                return handle_irq(context);
+            }
+            
             uart_puts(b"[VCPU] Unknown exception, ESR=0x");
             print_hex(esr);
             uart_puts(b"\n");
@@ -199,6 +206,98 @@ fn handle_hypercall(context: &mut VcpuContext) -> bool {
             uart_puts(b"\n");
             context.gp_regs.x0 = !0; // Error
             false // Exit on error
+        }
+    }
+}
+
+/// Check if current exception is IRQ or FIQ
+fn is_irq_or_fiq() -> bool {
+    // For now, we'll assume any exception with ESR_EL2.EC = 0 might be an interrupt
+    // A better approach would be to track which vector entry was used
+    // TODO: Pass vector information from assembly
+    true // Optimistic: try to handle as interrupt
+}
+
+/// Handle IRQ interrupts
+/// 
+/// # Returns
+/// * `true` - Continue running guest
+/// * `false` - Exit to host
+fn handle_irq(context: &mut VcpuContext) -> bool {
+    use crate::arch::aarch64::gic::{GICC, VTIMER_IRQ};
+    use crate::arch::aarch64::timer;
+    use crate::uart_puts;
+    
+    // Acknowledge the interrupt
+    let irq = GICC.acknowledge();
+    
+    // Check for spurious interrupt (ID 1023)
+    if irq == 1023 {
+        // Spurious interrupt, just continue
+        return true;
+    }
+    
+    uart_puts(b"[IRQ] Received IRQ ");
+    print_u32(irq);
+    uart_puts(b"\n");
+    
+    // Handle specific interrupts
+    match irq {
+        VTIMER_IRQ => {
+            // Virtual timer interrupt
+            uart_puts(b"[IRQ] Virtual timer interrupt\n");
+            
+            // Disable the timer to prevent continuous interrupts
+            timer::disable_timer();
+            
+            // Inject interrupt to guest by setting pending interrupt in guest context
+            // For now, we'll just print a message
+            // TODO: Implement proper interrupt injection
+        }
+        
+        _ => {
+            uart_puts(b"[IRQ] Unhandled IRQ: ");
+            print_u32(irq);
+            uart_puts(b"\n");
+        }
+    }
+    
+    // Signal end of interrupt
+    GICC.end_of_interrupt(irq);
+    
+    // Continue running guest
+    true
+}
+
+/// Helper function to print a 32-bit decimal value
+fn print_u32(value: u32) {
+    use crate::uart_puts;
+    
+    if value == 0 {
+        uart_puts(b"0");
+        return;
+    }
+    
+    let mut buffer = [0u8; 10];
+    let mut num = value;
+    let mut i = 0;
+    
+    while num > 0 {
+        buffer[i] = b'0' + (num % 10) as u8;
+        num /= 10;
+        i += 1;
+    }
+    
+    // Print in reverse order
+    for j in (0..i).rev() {
+        unsafe {
+            let uart_base = 0x09000000usize;
+            core::arch::asm!(
+                "str {val:w}, [{addr}]",
+                addr = in(reg) uart_base,
+                val = in(reg) buffer[j] as u32,
+                options(nostack),
+            );
         }
     }
 }

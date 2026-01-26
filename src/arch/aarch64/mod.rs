@@ -10,7 +10,11 @@
 pub mod regs;
 pub mod exception;
 pub mod mmu;
+pub mod gic;
+pub mod timer;
 
 pub use regs::*;
 pub use exception::*;
 pub use mmu::*;
+pub use gic::*;
+pub use timer::*;
