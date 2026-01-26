@@ -124,6 +124,17 @@ impl Vm {
         unsafe {
             MAPPER.map_region(start_aligned, size_aligned, MemoryAttributes::NORMAL);
             
+            // Map MMIO device regions (DEVICE memory type)
+            // UART (PL011): 0x09000000 - 0x09001000 (4KB)
+            let uart_base = 0x09000000u64;
+            let uart_size = 2 * 1024 * 1024;  // 2MB block
+            MAPPER.map_region(uart_base, uart_size, MemoryAttributes::DEVICE);
+            
+            // GIC Distributor: 0x08000000 - 0x08010000 (64KB)
+            let gicd_base = 0x08000000u64;
+            let gicd_size = 2 * 1024 * 1024;  // 2MB block
+            MAPPER.map_region(gicd_base, gicd_size, MemoryAttributes::DEVICE);
+            
             // Initialize Stage-2 translation
             init_stage2(&MAPPER);
         }

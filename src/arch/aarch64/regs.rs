@@ -282,8 +282,8 @@ impl VcpuContext {
             0x01 => ExitReason::WfiWfe,
             0x16 => ExitReason::HvcCall,
             0x18 => ExitReason::TrapMsrMrs,
-            0x20 | 0x24 => ExitReason::InstructionAbort,
-            0x21 | 0x25 => ExitReason::DataAbort,
+            0x20 | 0x21 => ExitReason::InstructionAbort,  // 0x20=Lower EL, 0x21=Same EL
+            0x24 | 0x25 => ExitReason::DataAbort,         // 0x24=Lower EL, 0x25=Same EL
             _ => ExitReason::Other(ec),
         }
     }
