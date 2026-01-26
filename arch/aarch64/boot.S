@@ -9,15 +9,7 @@
 .global _start
 
 _start:
-    // We should be in EL2 when QEMU starts with -machine virt
-    // Check current exception level (optional, for debugging)
-    mrs     x0, CurrentEL
-    lsr     x0, x0, #2          // Extract EL field (bits [3:2])
-    cmp     x0, #2              // Should be 2 (EL2)
-    b.ne    halt                // If not EL2, halt
-
-    // Set up stack pointer for EL2
-    // Stack grows downward, so point to end of stack region
+    // Set up stack
     adr     x0, stack_top
     mov     sp, x0
 

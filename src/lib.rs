@@ -2,5 +2,5 @@
 
 pub mod uart;
 
-// Re-export commonly used items
-pub use uart::println;
+// Note: println! macro is exported at the crate root via #[macro_export]
+// It can be used as: use hypervisor::println;

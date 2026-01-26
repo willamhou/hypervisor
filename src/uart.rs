@@ -14,6 +14,7 @@ const UART_FR_TXFF: u32 = 1 << 5;  // Transmit FIFO full
 
 /// UART device structure
 pub struct Uart {
+    #[allow(dead_code)]
     base: usize,
 }
 
@@ -59,7 +60,15 @@ static UART: Uart = Uart::new(UART_BASE);
 pub fn init() {
     // For QEMU virt, UART is already initialized by firmware
     // Just write a test character to verify it works
-    UART.putc(b'\n');
+    unsafe {
+        core::arch::asm!(
+            "mov x9, #0x09000000",
+            "mov w10, #10",      // '\n'
+            "str w10, [x9]",
+            out("x9") _,
+            out("w10") _,
+        );
+    }
 }
 
 /// Print a string to the UART

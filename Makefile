@@ -4,6 +4,7 @@
 TARGET := hypervisor
 BUILD_DIR := target/aarch64-unknown-none/debug
 BINARY := $(BUILD_DIR)/$(TARGET)
+BINARY_BIN := $(BUILD_DIR)/$(TARGET).bin
 
 # QEMU configuration
 QEMU := qemu-system-aarch64
@@ -12,7 +13,7 @@ QEMU_FLAGS := -machine virt \
               -smp 1 \
               -m 1G \
               -nographic \
-              -kernel $(BINARY)
+              -kernel $(BINARY_BIN)
 
 # Build in debug mode
 all: build
@@ -20,6 +21,8 @@ all: build
 build:
 	@echo "Building hypervisor..."
 	cargo build --target aarch64-unknown-none
+	@echo "Creating raw binary..."
+	aarch64-linux-gnu-objcopy -O binary $(BINARY) $(BINARY_BIN)
 
 # Run in QEMU
 run: build

@@ -4,8 +4,8 @@ ENTRY(_start)
 
 SECTIONS
 {
-    /* Load at 2GB mark (typical for EL2) */
-    . = 0x80000000;
+    /* QEMU virt machine: RAM starts at 0x40000000 */
+    . = 0x40000000;
 
     .text : {
         KEEP(*(.text.boot))
