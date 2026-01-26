@@ -7,53 +7,40 @@ use hypervisor::uart_puts;
 
 /// Guest code that accesses UART via MMIO
 /// 
-/// Strategy: Use a simpler approach with MOVZ/MOVK to build the address
+/// Generated from guest_mmio.S using GNU assembler
 #[repr(C, align(4096))]
 struct GuestCodeMmio {
-    code: [u32; 28],
+    code: [u32; 13],
 }
 
 static GUEST_CODE_MMIO: GuestCodeMmio = GuestCodeMmio {
     code: [
-        // Build UART base address 0x09000000 in x19
-        // movz x19, #0x9000, lsl #0  (bits [15:0] = 0x0000)
-        0xd2800013,  // movz x19, #0
+        // mov x19, #0x9000000 (UART base)
+        0xd2a12013,
         
-        // movk x19, #0x0900, lsl #16 (bits [31:16] = 0x0900)
-        0xf2a12013,  // movk x19, #0x0900, lsl #16
-        
-        // Now x19 = 0x09000000
-        
-        // Store 'M' (77) to UART
-        0x528009a1,  // mov w1, #0x4d (77)
-        0xb9000261,  // str w1, [x19]
-        
-        // Store 'M'
+        // Write 'M' (0x4D)
         0x528009a1,  // mov w1, #0x4d
         0xb9000261,  // str w1, [x19]
         
-        // Store 'I' (73)
+        // Write 'M' (0x4D)
+        0x528009a1,  // mov w1, #0x4d
+        0xb9000261,  // str w1, [x19]
+        
+        // Write 'I' (0x49)
         0x52800921,  // mov w1, #0x49
         0xb9000261,  // str w1, [x19]
         
-        // Store 'O' (79)
+        // Write 'O' (0x4F)
         0x528009e1,  // mov w1, #0x4f
         0xb9000261,  // str w1, [x19]
         
-        // Store '!' (33)
-        0x52800421,  // mov w1, #0x21
+        // Write '\n' (0x0A)
+        0x52800141,  // mov w1, #0xa
         0xb9000261,  // str w1, [x19]
         
-        // Store '\n' (10)
-        0x52800141,  // mov w1, #0x0a
-        0xb9000261,  // str w1, [x19]
-        
-        // Exit
+        // Exit via hypercall
         0xd2800020,  // mov x0, #1
         0xd4000002,  // hvc #0
-        
-        // Padding
-        0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
     ],
 };
 
