@@ -3,9 +3,10 @@
 ///! This test demonstrates handling timer interrupts at EL2 (hypervisor level)
 
 use hypervisor::uart_puts;
-use hypervisor::arch::aarch64::{timer, gic};
+use hypervisor::arch::aarch64::peripherals::timer;
 
 /// Run a simple timer interrupt test
+#[allow(dead_code)]
 pub fn run_timer_test() {
     uart_puts(b"\n========================================\n");
     uart_puts(b"  Timer Interrupt Test\n");

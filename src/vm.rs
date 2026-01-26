@@ -4,7 +4,7 @@
 //! and manages guest resources including memory.
 
 use crate::vcpu::Vcpu;
-use crate::arch::aarch64::mmu::{MemoryAttributes, init_stage2};
+use crate::arch::aarch64::{MemoryAttributes, init_stage2};
 use crate::devices::DeviceManager;
 
 /// Maximum number of vCPUs per VM
@@ -49,6 +49,8 @@ pub struct Vm {
     memory_initialized: bool,
     
     /// Device manager for MMIO emulation
+    /// Note: Currently accessed via global::DEVICES for exception handler access
+    #[allow(dead_code)]
     devices: DeviceManager,
 }
 
@@ -98,7 +100,7 @@ impl Vm {
     /// * `guest_mem_size` - Size of guest memory region
     pub fn init_memory(&mut self, guest_mem_start: u64, guest_mem_size: u64) {
         use crate::uart_puts;
-        use crate::arch::aarch64::mmu::IdentityMapper;
+        use crate::arch::aarch64::mm::IdentityMapper;
         
         if self.memory_initialized {
             uart_puts(b"[VM] Memory already initialized\n");

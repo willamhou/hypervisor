@@ -24,10 +24,13 @@ const GICD_CTLR: u64 = 0x000;        // Distributor Control Register
 const GICD_TYPER: u64 = 0x004;       // Interrupt Controller Type Register
 const GICD_ISENABLER: u64 = 0x100;   // Interrupt Set-Enable Registers
 const GICD_ICENABLER: u64 = 0x180;   // Interrupt Clear-Enable Registers
+#[allow(dead_code)]
 const GICD_ISPENDR: u64 = 0x200;     // Interrupt Set-Pending Registers
 const GICD_ICPENDR: u64 = 0x280;     // Interrupt Clear-Pending Registers
 const GICD_IPRIORITYR: u64 = 0x400;  // Interrupt Priority Registers
+#[allow(dead_code)]
 const GICD_ITARGETSR: u64 = 0x800;   // Interrupt Processor Targets Registers
+#[allow(dead_code)]
 const GICD_ICFGR: u64 = 0xC00;       // Interrupt Configuration Registers
 
 /// GICC Register offsets

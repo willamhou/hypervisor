@@ -40,8 +40,8 @@ impl MmioAccess {
         // ISS is valid, extract fields
         let sas = (iss >> 22) & 0x3;     // Size: 00=byte, 01=half, 10=word, 11=double
         let srt = (iss >> 16) & 0x1F;    // Source/dest register
-        let sf = (iss >> 15) & 1;        // 0=32-bit, 1=64-bit
-        let ar = (iss >> 14) & 1;        // Acquire/Release
+        let _sf = (iss >> 15) & 1;        // 0=32-bit, 1=64-bit
+        let _ar = (iss >> 14) & 1;        // Acquire/Release
         let wnr = (iss >> 6) & 1;        // Write not Read: 0=read, 1=write
         let sext = (iss >> 23) & 1;      // Sign extend
         
@@ -76,10 +76,10 @@ impl MmioAccess {
         
         // LDR/STR (immediate, unsigned offset)
         // Encoding: op1|1|op2|op3|Rn|Rt where op1=[11,10], op2=[1,0]
-        let op0 = (insn >> 28) & 0xF;
-        let op1 = (insn >> 26) & 0x3;
-        let op2 = (insn >> 23) & 0x3;
-        let op3 = (insn >> 22) & 0x3;
+        let _op0 = (insn >> 28) & 0xF;
+        let _op1 = (insn >> 26) & 0x3;
+        let _op2 = (insn >> 23) & 0x3;
+        let _op3 = (insn >> 22) & 0x3;
         
         // Load/Store register (unsigned immediate)
         // xx|111|0|01|xx|...... where xx is size

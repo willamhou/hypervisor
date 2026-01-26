@@ -14,6 +14,7 @@ const UARTFR: u64 = 0x018;      // Flag Register
 const UARTCR: u64 = 0x030;      // Control Register
 
 /// Flag Register bits
+#[allow(dead_code)]
 const FR_TXFF: u32 = 1 << 5;    // Transmit FIFO full
 const FR_RXFE: u32 = 1 << 4;    // Receive FIFO empty
 

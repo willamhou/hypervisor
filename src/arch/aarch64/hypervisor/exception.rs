@@ -226,7 +226,7 @@ fn handle_hypercall(context: &mut VcpuContext) -> bool {
 /// * `true` if successfully handled
 /// * `false` if not MMIO or handling failed
 fn handle_mmio_abort(context: &mut VcpuContext, addr: u64) -> bool {
-    use crate::arch::aarch64::decode::MmioAccess;
+    use crate::arch::aarch64::hypervisor::decode::MmioAccess;
     use crate::uart_puts;
     
     // Get the faulting instruction
@@ -289,9 +289,9 @@ fn is_irq_or_fiq() -> bool {
 /// # Returns
 /// * `true` - Continue running guest
 /// * `false` - Exit to host
-fn handle_irq(context: &mut VcpuContext) -> bool {
-    use crate::arch::aarch64::gic::{GICC, VTIMER_IRQ};
-    use crate::arch::aarch64::timer;
+fn handle_irq(_context: &mut VcpuContext) -> bool {
+    use crate::arch::aarch64::peripherals::gic::{GICC, VTIMER_IRQ};
+    use crate::arch::aarch64::peripherals::timer;
     use crate::uart_puts;
     
     // Acknowledge the interrupt

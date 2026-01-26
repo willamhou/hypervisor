@@ -68,7 +68,7 @@ pub fn run_mmio_test() {
     // Get guest code and stack addresses
     let guest_entry = &GUEST_CODE_MMIO.code as *const _ as u64;
     let guest_stack = unsafe {
-        (&GUEST_STACK_MMIO.stack as *const [u8; 16384]) as u64 + 16384
+        (&raw const GUEST_STACK_MMIO.stack as *const [u8; 16384]) as u64 + 16384
     };
     
     uart_puts(b"[MMIO TEST] Guest entry: 0x");

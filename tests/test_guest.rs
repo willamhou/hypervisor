@@ -67,7 +67,7 @@ pub fn run_test() {
     // Get guest code and stack addresses
     let guest_entry = &GUEST_CODE.code as *const _ as u64;
     let guest_stack = unsafe {
-        (&GUEST_STACK.stack as *const [u8; 16384]) as u64 + 16384
+        (&raw const GUEST_STACK.stack as *const [u8; 16384]) as u64 + 16384
     };
     
     uart_puts(b"[TEST] Guest entry point: 0x");

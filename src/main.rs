@@ -2,8 +2,7 @@
 #![no_main]
 
 use core::panic::PanicInfo;
-use hypervisor::arch::aarch64::exception;
-use hypervisor::vm::Vm;
+use hypervisor::arch::aarch64::hypervisor::exception;
 use hypervisor::uart_puts;
 
 // Include test module
@@ -33,12 +32,12 @@ pub extern "C" fn rust_main() -> ! {
     uart_puts_local(b"[INIT] Exception handling initialized\n");
     
     // Initialize GIC
-    hypervisor::arch::aarch64::gic::init();
+    hypervisor::arch::aarch64::peripherals::gic::init();
     
     // Initialize timer
     uart_puts_local(b"[INIT] Configuring timer...\n");
-    hypervisor::arch::aarch64::timer::init_hypervisor_timer();
-    hypervisor::arch::aarch64::timer::print_timer_info();
+    hypervisor::arch::aarch64::peripherals::timer::init_hypervisor_timer();
+    hypervisor::arch::aarch64::peripherals::timer::print_timer_info();
     
     // Check current exception level
     let current_el: u64;

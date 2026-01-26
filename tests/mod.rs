@@ -9,5 +9,6 @@ pub mod test_mmio;
 
 // Re-export test functions for easy access
 pub use test_guest::run_test as run_guest_test;
+#[allow(unused_imports)]
 pub use test_timer::run_timer_test;
 pub use test_mmio::run_mmio_test;

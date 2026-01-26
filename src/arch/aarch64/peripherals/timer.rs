@@ -11,6 +11,7 @@ use core::arch::asm;
 
 /// Timer control register bits
 const TIMER_ENABLE: u64 = 1 << 0;    // Enable timer
+#[allow(dead_code)]
 const TIMER_IMASK: u64 = 1 << 1;     // Interrupt mask (1 = masked)
 const TIMER_ISTATUS: u64 = 1 << 2;   // Interrupt status (read-only)
 

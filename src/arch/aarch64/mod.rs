@@ -13,7 +13,7 @@ pub mod hypervisor;
 pub mod mm;
 pub mod peripherals;
 
-pub use regs::*;
-pub use hypervisor::*;
-pub use mm::*;
-pub use peripherals::*;
+// Re-export commonly used types
+pub use regs::{VcpuContext, GeneralPurposeRegs, SystemRegs, ExitReason};
+pub use hypervisor::{enter_guest, exception_vector_table};
+pub use mm::{IdentityMapper, MemoryAttributes, init_stage2};
