@@ -2,21 +2,18 @@
 //! 
 //! This module contains ARM64-specific virtualization support including:
 //! - Register definitions and structures
-//! - Exception vector tables
+//! - Exception vector tables and trap handling
 //! - VM entry/exit mechanisms
 //! - System register access
 //! - Memory management (Stage-2 translation)
+//! - Peripheral access (GIC, Timer)
 
 pub mod regs;
-pub mod exception;
-pub mod mmu;
-pub mod gic;
-pub mod timer;
-pub mod decode;
+pub mod hypervisor;
+pub mod mm;
+pub mod peripherals;
 
 pub use regs::*;
-pub use exception::*;
-pub use mmu::*;
-pub use gic::*;
-pub use timer::*;
-pub use decode::*;
+pub use hypervisor::*;
+pub use mm::*;
+pub use peripherals::*;
