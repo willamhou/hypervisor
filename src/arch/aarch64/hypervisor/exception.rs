@@ -111,7 +111,7 @@ pub extern "C" fn handle_exception(context: &mut VcpuContext) -> bool {
     unsafe {
         EXCEPTION_COUNT += 1;
         if EXCEPTION_COUNT > MAX_CONSECUTIVE_EXCEPTIONS {
-            uart_puts(b"\n[FATAL] Too many consecutive exceptions, halting\n");
+            uart_puts(b"\n[FATAL] Too many consecutive exceptions, halting system\n");
             uart_puts(b"[DEBUG] ESR_EL2=0x");
             print_hex(esr);
             uart_puts(b" FAR_EL2=0x");
@@ -119,7 +119,10 @@ pub extern "C" fn handle_exception(context: &mut VcpuContext) -> bool {
             uart_puts(b" PC=0x");
             print_hex(context.pc);
             uart_puts(b"\n");
-            return false; // Exit to prevent infinite loop
+            // Halt the system completely to prevent further execution
+            loop {
+                core::arch::asm!("wfe");
+            }
         }
     }
     
