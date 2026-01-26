@@ -6,6 +6,11 @@ use hypervisor::arch::aarch64::exception;
 use hypervisor::vm::Vm;
 use hypervisor::uart_puts;
 
+// Include test module
+mod tests {
+    include!("../tests/mod.rs");
+}
+
 /// Simple function to write a string to UART using inline assembly
 #[inline(never)]
 fn uart_puts_local(s: &[u8]) {
@@ -50,10 +55,10 @@ pub extern "C" fn rust_main() -> ! {
     uart_puts_local(b"\n\n");
     
     // Run the MMIO device emulation test
-    hypervisor::test_mmio::run_mmio_test();
+    tests::run_mmio_test();
     
     // Run the original guest test (hypercall)
-    hypervisor::test_guest::run_test();
+    tests::run_guest_test();
     
     uart_puts_local(b"\n========================================\n");
     uart_puts_local(b"Sprint 1.4: Device Emulation - COMPLETE\n");

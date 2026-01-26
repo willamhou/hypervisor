@@ -3,7 +3,7 @@
 ///! This module is a placeholder for future guest interrupt tests.
 ///! For Sprint 1.3, we test interrupts at the hypervisor (EL2) level.
 
-use crate::uart_puts;
+use hypervisor::uart_puts;
 
 /// Run interrupt test (placeholder)
 pub fn run_irq_test() {

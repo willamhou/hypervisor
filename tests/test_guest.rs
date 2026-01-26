@@ -3,8 +3,8 @@
 //! This module provides a simple guest program that can be used
 //! to test the vCPU framework.
 
-use crate::vm::Vm;
-use crate::uart_puts;
+use hypervisor::vm::Vm;
+use hypervisor::uart_puts;
 
 /// Guest code area - simple assembly instructions
 /// 

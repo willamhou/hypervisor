@@ -2,73 +2,58 @@
 ///! 
 ///! This test creates a guest that directly accesses UART via MMIO
 
-use crate::vm::Vm;
-use crate::uart_puts;
+use hypervisor::vm::Vm;
+use hypervisor::uart_puts;
 
 /// Guest code that accesses UART via MMIO
+/// 
+/// Strategy: Use a simpler approach with MOVZ/MOVK to build the address
 #[repr(C, align(4096))]
 struct GuestCodeMmio {
-    code: [u32; 26],
+    code: [u32; 28],
 }
 
 static GUEST_CODE_MMIO: GuestCodeMmio = GuestCodeMmio {
     code: [
-        // Print "MMIO!" via direct UART access
-        // UART base = 0x09000000
+        // Build UART base address 0x09000000 in x19
+        // movz x19, #0x9000, lsl #0  (bits [15:0] = 0x0000)
+        0xd2800013,  // movz x19, #0
         
-        // Load UART base address into x19 (callee-saved, safer)
-        // We'll build 0x09000000 step by step
-        // movz x19, #0x0900
-        0xd2812013,  // movz x19, #0x0900 (imm16=0x0900, shift=0)
-        // movk x19, #0x0000, lsl #16
-        // Actually, let's use a different approach - load via PC-relative
+        // movk x19, #0x0900, lsl #16 (bits [31:16] = 0x0900)
+        0xf2a12013,  // movk x19, #0x0900, lsl #16
         
-        // Alternative: Use an immediate that's easier to encode
-        // Let's try: mov x19, #0x09000000 directly
-        // But that doesn't work in one instruction for large immediates
+        // Now x19 = 0x09000000
         
-        // Better approach: use literal load
-        // ldr x19, #offset to literal pool
-        0x58000133,  // ldr x19, [PC + #0x26*4] = load from literal at offset
-        
-        // Actually, simplest: just hardcode the address calculation
-        // movz x19, #0x0900, lsl #16
-        // Encoding: sf=1, opc=10, hw=01, imm16=0x0900
-        // 1|10|100101|01|0000100100000000|19 = 0xd2a12013
-        0xd2a12013,  // movz x19, #0x0900, lsl #16 = x19 = 0x09000000
-        
-        // Now x19 = 0x09000000 (UART base)
-        
-        // Store 'M' (0x4D = 77) to UART
-        0xd28009a1,  // mov x1, #77
-        0xb9000261,  // str w1, [x19, #0]
-        
-        // Store 'M' again
-        0xd28009a1,  // mov x1, #77
+        // Store 'M' (77) to UART
+        0x528009a1,  // mov w1, #0x4d (77)
         0xb9000261,  // str w1, [x19]
         
-        // Store 'I' (0x49 = 73)
-        0xd2800921,  // mov x1, #73
+        // Store 'M'
+        0x528009a1,  // mov w1, #0x4d
         0xb9000261,  // str w1, [x19]
         
-        // Store 'O' (0x4F = 79)
-        0xd28009e1,  // mov x1, #79
+        // Store 'I' (73)
+        0x52800921,  // mov w1, #0x49
         0xb9000261,  // str w1, [x19]
         
-        // Store '!' (0x21 = 33)
-        0xd2800421,  // mov x1, #33
+        // Store 'O' (79)
+        0x528009e1,  // mov w1, #0x4f
         0xb9000261,  // str w1, [x19]
         
-        // Store '\n' (0x0A = 10)
-        0xd2800141,  // mov x1, #10
+        // Store '!' (33)
+        0x52800421,  // mov w1, #0x21
         0xb9000261,  // str w1, [x19]
         
-        // Exit via hypercall
-        0xd2800020,  // mov x0, #1 (exit hypercall)
+        // Store '\n' (10)
+        0x52800141,  // mov w1, #0x0a
+        0xb9000261,  // str w1, [x19]
+        
+        // Exit
+        0xd2800020,  // mov x0, #1
         0xd4000002,  // hvc #0
         
         // Padding
-        0, 0, 0, 0, 0, 0, 0, 0, 0,
+        0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
     ],
 };
 

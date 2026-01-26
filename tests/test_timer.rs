@@ -2,8 +2,8 @@
 ///! 
 ///! This test demonstrates handling timer interrupts at EL2 (hypervisor level)
 
-use crate::uart_puts;
-use crate::arch::aarch64::{timer, gic};
+use hypervisor::uart_puts;
+use hypervisor::arch::aarch64::{timer, gic};
 
 /// Run a simple timer interrupt test
 pub fn run_timer_test() {
@@ -16,14 +16,14 @@ pub fn run_timer_test() {
     // Get timer frequency
     let freq = timer::get_frequency();
     uart_puts(b"[TIMER TEST] Timer frequency: ");
-    crate::uart_put_u64(freq);
+    hypervisor::uart_put_u64(freq);
     uart_puts(b" Hz\n");
     
     // Calculate ticks for 100ms
     // 100ms = 0.1s, so ticks = freq * 0.1
     let ticks_100ms = (freq / 10) as u32;
     uart_puts(b"[TIMER TEST] Setting timer for ");
-    crate::uart_put_u64(ticks_100ms as u64);
+    hypervisor::uart_put_u64(ticks_100ms as u64);
     uart_puts(b" ticks (100ms)\n");
     
     // Note: Skipping GIC configuration for now as it requires MMIO access
@@ -45,9 +45,9 @@ pub fn run_timer_test() {
     let start_counter = timer::get_counter();
     for i in 0..10 {
         uart_puts(b"[TIMER TEST] Iteration ");
-        crate::uart_put_u64(i);
+        hypervisor::uart_put_u64(i);
         uart_puts(b", timer status: 0x");
-        crate::uart_put_hex(timer::get_ctl());
+        hypervisor::uart_put_hex(timer::get_ctl());
         uart_puts(b"\n");
         
         // Check if timer fired
@@ -63,7 +63,7 @@ pub fn run_timer_test() {
         if elapsed > (ticks_100ms as u64) {
             uart_puts(b"[TIMER TEST] Timer expired (counter check)\n");
             uart_puts(b"[TIMER TEST] Elapsed ticks: ");
-            crate::uart_put_u64(elapsed);
+            hypervisor::uart_put_u64(elapsed);
             uart_puts(b"\n");
             timer::disable_timer();
             break;
