@@ -4,6 +4,7 @@
 //! CPU running in a guest VM.
 
 use crate::arch::aarch64::{VcpuContext, enter_guest};
+use crate::vcpu_interrupt::VirtualInterruptState;
 
 /// Virtual CPU State
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -33,6 +34,9 @@ pub struct Vcpu {
     
     /// Register context for this vCPU
     context: VcpuContext,
+    
+    /// Virtual interrupt state for this vCPU
+    virt_irq: VirtualInterruptState,
 }
 
 impl Vcpu {
@@ -47,6 +51,7 @@ impl Vcpu {
             id,
             state: VcpuState::Ready,
             context: VcpuContext::new(entry_point, stack_pointer),
+            virt_irq: VirtualInterruptState::new(),
         }
     }
     
@@ -84,6 +89,14 @@ impl Vcpu {
         
         self.state = VcpuState::Running;
         
+        // Apply virtual interrupt state to HCR_EL2 before entering guest
+        unsafe {
+            use crate::vcpu_interrupt::{get_hcr_el2, set_hcr_el2};
+            let hcr = get_hcr_el2();
+            let hcr_with_vi = self.virt_irq.apply_to_hcr(hcr);
+            set_hcr_el2(hcr_with_vi);
+        }
+        
         // Enter the guest
         let result = unsafe {
             enter_guest(&mut self.context as *mut VcpuContext)
@@ -107,6 +120,34 @@ impl Vcpu {
     pub fn reset(&mut self, entry_point: u64, stack_pointer: u64) {
         self.context = VcpuContext::new(entry_point, stack_pointer);
         self.state = VcpuState::Ready;
+    }
+    
+    /// Inject a virtual IRQ into the guest
+    ///
+    /// # Arguments
+    /// * `irq_num` - The interrupt number to inject
+    pub fn inject_irq(&mut self, irq_num: u32) {
+        self.virt_irq.inject_irq(irq_num);
+    }
+    
+    /// Check if vCPU has pending interrupts
+    pub fn has_pending_interrupt(&self) -> bool {
+        self.virt_irq.has_pending_interrupt()
+    }
+    
+    /// Clear pending IRQ
+    pub fn clear_irq(&mut self) {
+        self.virt_irq.clear_irq();
+    }
+    
+    /// Get virtual interrupt state
+    pub fn virt_irq(&self) -> &VirtualInterruptState {
+        &self.virt_irq
+    }
+    
+    /// Get mutable virtual interrupt state
+    pub fn virt_irq_mut(&mut self) -> &mut VirtualInterruptState {
+        &mut self.virt_irq
     }
 }
 

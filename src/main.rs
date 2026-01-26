@@ -56,11 +56,14 @@ pub extern "C" fn rust_main() -> ! {
     // Run the MMIO device emulation test
     tests::run_mmio_test();
     
+    // Run the guest interrupt injection test
+    tests::run_guest_interrupt_test();
+    
     // Run the original guest test (hypercall)
     tests::run_guest_test();
     
     uart_puts_local(b"\n========================================\n");
-    uart_puts_local(b"Sprint 1.4: Device Emulation - COMPLETE\n");
+    uart_puts_local(b"Sprint 1.5b: Guest Interrupt Injection - COMPLETE\n");
     uart_puts_local(b"========================================\n");
     
     // Halt - we'll implement proper VM execution later
