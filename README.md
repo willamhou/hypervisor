@@ -1,219 +1,215 @@
 # ARM64 Hypervisor
 
-[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
-[![License: Apache 2.0](https://img.shields.io/badge/License-Apache%202.0-blue.svg)](https://opensource.org/licenses/Apache-2.0)
+一个使用 Rust 编写的教育性 ARM64 Type-1 Hypervisor 实现。
 
-An open-source Type-1 Hypervisor for ARM64, written in Rust, supporting both traditional virtualization and confidential computing (TEE/FF-A/RME).
+## 特性
 
-## 🎯 Project Status
+- ✅ **vCPU 管理**: 完整的虚拟 CPU 抽象和上下文切换
+- ✅ **Stage-2 内存管理**: Guest 物理地址到 Host 物理地址的转换
+- ✅ **中断处理**: GIC 支持和 ARM Generic Timer
+- ✅ **设备模拟**: Trap-and-Emulate 架构，支持 UART 和 GICD
+- ✅ **Hypercall 接口**: Guest 与 Hypervisor 通信机制
 
-**Current Milestone**: M0 - Project Initialization (Week 1-2)
+## 快速开始
 
-- [x] Requirements document
-- [x] Development plan
-- [x] Project structure
-- [ ] Rust environment setup
-- [ ] First boot in QEMU
-- [ ] "Hello from EL2!" output
+### 前置要求
 
-See [DEVELOPMENT_PLAN.md](DEVELOPMENT_PLAN.md) for the full roadmap.
+- Rust nightly (支持 no_std 和 ARM64 target)
+- QEMU (qemu-system-aarch64)
+- ARM64 交叉编译工具链 (aarch64-linux-gnu-*)
 
-## 🌟 Features (Planned)
-
-### Core Virtualization (M1-M2)
-- ✅ **vCPU Management**: Create and manage virtual CPUs
-- ✅ **Stage-2 Memory Virtualization**: IPA to PA translation
-- ✅ **GICv3 Interrupt Virtualization**: Virtual interrupt controller
-- ✅ **virtio Devices**: virtio-console, virtio-blk
-- ✅ **SMP Support**: Multi-core virtual machines
-
-### Security Extensions (M3-M5)
-- 🔒 **FF-A (Firmware Framework)**: Secure Partition communication
-- 🔒 **TEE Support**: Secure Hypervisor (S-EL2) with OP-TEE integration
-- 🔒 **RME & CCA**: Realm Management Extension for confidential computing
-- 🔒 **Remote Attestation**: Verify Realm integrity
-
-## 🚀 Quick Start
-
-### Prerequisites
-
-1. **Rust Toolchain** (nightly):
 ```bash
-curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
-rustup default nightly
+# 安装 Rust target
 rustup target add aarch64-unknown-none
-rustup component add rust-src rustfmt clippy
+
+# 安装 QEMU (Ubuntu/Debian)
+sudo apt install qemu-system-arm
+
+# 安装交叉编译工具链
+sudo apt install gcc-aarch64-linux-gnu
 ```
 
-2. **ARM64 Cross-Compilation Tools**:
-```bash
-# Ubuntu/Debian
-sudo apt install gcc-aarch64-linux-gnu binutils-aarch64-linux-gnu
+### 编译
 
-# macOS
-brew install aarch64-elf-gcc
+```bash
+make
 ```
 
-3. **QEMU**:
-```bash
-# Ubuntu/Debian
-sudo apt install qemu-system-aarch64
-
-# macOS
-brew install qemu
-```
-
-4. **GDB** (optional, for debugging):
-```bash
-# Ubuntu/Debian
-sudo apt install gdb-multiarch
-
-# macOS
-brew install gdb
-```
-
-### Building
+### 运行
 
 ```bash
-# Build the hypervisor
-make build
-
-# Or use cargo directly
-cargo build --target aarch64-unknown-none
-```
-
-### Running
-
-```bash
-# Run in QEMU
 make run
-
-# Expected output:
-# ========================================
-#   ARM64 Hypervisor - Milestone 0
-# ========================================
-#
-# Hello from EL2!
-# ...
 ```
 
-To exit QEMU: Press `Ctrl+A` then `X`
+退出 QEMU: 按 `Ctrl+A` 然后按 `X`
 
-### Debugging
+### 调试
 
 ```bash
-# Terminal 1: Start QEMU with GDB server
+# 在一个终端启动 GDB server
 make debug
 
-# Terminal 2: Connect GDB
+# 在另一个终端连接 GDB
 gdb-multiarch target/aarch64-unknown-none/debug/hypervisor
 (gdb) target remote :1234
-(gdb) break rust_main
-(gdb) continue
+(gdb) b rust_main
+(gdb) c
 ```
 
-## 📁 Project Structure
+## 项目结构
 
 ```
 hypervisor/
-├── arch/
-│   └── aarch64/
-│       ├── boot.S              # Assembly boot code
-│       └── linker.ld           # Linker script
-├── src/
-│   ├── main.rs                 # Rust entry point
-│   ├── lib.rs                  # Library root
-│   └── uart.rs                 # UART driver (PL011)
-├── docs/
-│   └── design/                 # Design documents
-├── Cargo.toml                  # Rust package config
-├── Makefile                    # Build automation
-├── REQUIREMENTS.md             # Project requirements
-└── DEVELOPMENT_PLAN.md         # Development roadmap
+├── arch/aarch64/          # 汇编启动和异常处理代码
+│   ├── boot.S            # 启动代码
+│   └── exception.S       # 异常向量表和上下文切换
+│
+├── src/                   # Rust 源代码
+│   ├── arch/aarch64/     # ARM64 架构特定代码
+│   │   ├── hypervisor/   # EL2 特定实现
+│   │   │   ├── exception.rs  # 异常处理
+│   │   │   └── decode.rs     # 指令解码
+│   │   ├── mm/           # 内存管理
+│   │   │   └── mmu.rs    # Stage-2 页表
+│   │   ├── peripherals/  # 外设驱动
+│   │   │   ├── gic.rs    # GIC 支持
+│   │   │   └── timer.rs  # ARM Generic Timer
+│   │   └── regs.rs       # 寄存器定义
+│   │
+│   ├── devices/          # 设备模拟
+│   │   ├── pl011/        # UART (PL011)
+│   │   └── gic/          # GIC Distributor
+│   │
+│   ├── vcpu.rs           # vCPU 抽象
+│   ├── vm.rs             # VM 管理
+│   ├── global.rs         # 全局状态
+│   ├── uart.rs           # UART 驱动
+│   ├── lib.rs            # 库入口
+│   └── main.rs           # 主程序
+│
+├── tests/                # 测试代码
+│   ├── test_guest.rs     # Guest 执行测试
+│   ├── test_timer.rs     # Timer 中断测试
+│   └── test_mmio.rs      # MMIO 设备模拟测试
+│
+├── Cargo.toml            # Rust 项目配置
+├── Makefile              # 构建脚本
+├── aarch64-qemu.ld       # 链接脚本
+├── PROGRESS.md           # 开发进度文档
+└── README.md             # 本文件
 ```
 
-## 📚 Documentation
+## 技术详情
 
-- [Requirements Document](REQUIREMENTS.md) - Detailed project requirements
-- [Development Plan](DEVELOPMENT_PLAN.md) - Milestone-based development roadmap
-- Design Documents (coming soon in `docs/design/`)
+### 虚拟化模型
 
-## 🛠️ Development
+- **Type**: Type-1 (裸机 Hypervisor)
+- **Privilege Level**: EL2 (Hypervisor mode)
+- **Guest Level**: EL1 (Guest kernel mode)
+- **Translation**: Stage-2 (IPA → PA)
 
-### Code Style
+### 内存管理
 
-```bash
-# Format code
-make fmt
+- **IPA Space**: 40-bit (1TB)
+- **PA Space**: 48-bit (256TB)
+- **Page Size**: 4KB granule
+- **Mapping**: 2MB block mapping
+- **Attributes**: NORMAL (cached), DEVICE (uncached), READONLY
 
-# Run linter
-make clippy
+### 中断处理
 
-# Check without building
-make check
+- **GIC Version**: GICv2
+- **IRQ Routing**: HCR_EL2.IMO = 1 (route to EL2)
+- **FIQ Routing**: HCR_EL2.FMO = 1 (route to EL2)
+- **Timer**: ARM Generic Timer (Virtual Timer, PPI 27)
+
+### 设备模拟
+
+- **方法**: Trap-and-Emulate
+- **MMIO 检测**: Data Abort (ESR_EL2.EC = 0x24/0x25)
+- **指令解码**: ISS (Instruction Specific Syndrome)
+- **支持设备**:
+  - PL011 UART (0x09000000)
+  - GIC Distributor (0x08000000)
+
+## 开发进度
+
+查看 [PROGRESS.md](PROGRESS.md) 了解详细的开发进度和技术笔记。
+
+### 已完成
+
+- ✅ Sprint 1.1: vCPU Framework
+- ✅ Sprint 1.2: Memory Management  
+- ✅ Sprint 1.3: Interrupt Handling
+- ✅ Sprint 1.4: Device Emulation
+- ✅ 目录结构重组 (Phase 1-3)
+
+### 进行中
+
+- 🔄 Phase 4: 文档完善
+- 🔄 MMIO 测试调试
+
+### 计划中
+
+- Multi-vCPU support
+- Guest interrupt injection
+- Dynamic memory allocator
+- More device emulation
+
+## 测试
+
+项目包含多个测试，在 `make run` 时自动运行：
+
+1. **Guest Execution Test**: 测试基本的 guest 执行和 hypercall
+2. **Timer Interrupt Test**: 测试 ARM Generic Timer 中断检测
+3. **MMIO Device Test**: 测试设备模拟框架（调试中）
+
+测试输出示例：
+
+```
+========================================
+  ARM64 Hypervisor - Sprint 1.4
+  Device Emulation Test
+========================================
+
+[INIT] Initializing at EL2...
+[INIT] Current EL: EL2
+
+[TEST] Starting guest execution test...
+[GUEST] G!
+[VCPU] Guest requested exit
+[TEST] Guest exited successfully
 ```
 
-### Testing
+## 参考资料
 
-Testing infrastructure is being developed. TDD approach will be followed.
+- [ARM Architecture Reference Manual](https://developer.arm.com/documentation/) - ARMv8-A 架构手册
+- [Hafnium](https://github.com/TF-Hafnium/hafnium) - TensorFlow 的参考 Hypervisor
+- [KVM/ARM](https://www.kernel.org/doc/html/latest/virt/kvm/arm/index.html) - Linux KVM ARM 实现
+- [Rust Embedded Book](https://docs.rust-embedded.org/book/) - Embedded Rust 编程
 
-## 🗺️ Roadmap
+## 贡献
 
-| Milestone | Description | Timeline | Status |
-|-----------|-------------|----------|--------|
-| M0 | Project Initialization | Week 1-2 | 🚧 In Progress |
-| M1 | MVP - Basic Virtualization | Week 3-10 | 📅 Planned |
-| M2 | Enhanced Features | Week 11-18 | 📅 Planned |
-| M3 | FF-A Implementation | Week 19-28 | 📅 Planned |
-| M4 | Secure EL2 & TEE | Week 29-36 | 📅 Planned |
-| M5 | RME & CCA | Week 37-52+ | 📅 Planned |
+这是一个教育性项目，欢迎：
 
-**Total Estimated Time**: 12-14 months
+- Bug 报告
+- 功能建议
+- 代码改进
+- 文档完善
 
-## 🤝 Contributing
+## 许可证
 
-This project is in early development. Contributions are welcome!
+[待定]
 
-1. Fork the repository
-2. Create a feature branch (`git checkout -b feature/amazing-feature`)
-3. Commit your changes (`git commit -m 'Add amazing feature'`)
-4. Push to the branch (`git push origin feature/amazing-feature`)
-5. Open a Pull Request
+## 致谢
 
-Please read the [Development Plan](DEVELOPMENT_PLAN.md) to understand the project direction.
-
-## 📖 Learning Resources
-
-### ARM Architecture
-- [ARM Architecture Reference Manual](https://developer.arm.com/documentation/) - Official ARM documentation
-- ARM RME Specification
-- FF-A Specification v1.1/v1.2
-
-### Reference Projects
-- [KVM/ARM](https://www.kernel.org/doc/html/latest/virt/kvm/arm/) - Linux kernel ARM virtualization
-- [ARM Trusted Firmware-A](https://github.com/ARM-software/arm-trusted-firmware) - EL3 firmware
-- [OP-TEE](https://github.com/OP-TEE/optee_os) - Open Portable TEE
-- [TF-RMM](https://git.trustedfirmware.org/TF-RMM/tf-rmm.git/) - ARM's reference RMM
-
-## 📄 License
-
-This project is dual-licensed under:
-
-- MIT License ([LICENSE-MIT](LICENSE-MIT) or http://opensource.org/licenses/MIT)
-- Apache License, Version 2.0 ([LICENSE-APACHE](LICENSE-APACHE) or http://www.apache.org/licenses/LICENSE-2.0)
-
-You may choose either license for your use.
-
-## 👤 Author
-
-Willam Hou - [@willamhou](https://github.com/willamhou)
-
-## 🙏 Acknowledgments
-
-- ARM for excellent architecture documentation
-- The Rust embedded community
-- KVM, Xen, and other open-source hypervisors for inspiration
+- Rust 社区的 embedded-rs 生态
+- QEMU 项目
+- ARM 文档团队
+- Hafnium 项目的架构灵感
 
 ---
 
-**Note**: This is an educational and research project. It is not production-ready and should not be used in production environments without thorough testing and security audits.
+**作者**: [你的名字]  
+**创建时间**: 2026-01  
+**最后更新**: 2026-01-26

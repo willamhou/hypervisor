@@ -4,6 +4,51 @@
 
 本项目是一个从零开始构建的 ARM64 Type-1 Hypervisor，使用 Rust 和少量汇编实现。目标是创建一个教育性的、可理解的虚拟化实现。
 
+### 系统架构
+
+```
+┌─────────────────────────────────────────────────────────┐
+│                     Host (EL2)                          │
+│  ┌──────────────┐  ┌──────────────┐  ┌──────────────┐ │
+│  │    VM        │  │   Device     │  │   Memory     │ │
+│  │  Management  │  │  Emulation   │  │  Management  │ │
+│  └──────────────┘  └──────────────┘  └──────────────┘ │
+│         │                  │                  │         │
+│  ┌──────┴──────────────────┴──────────────────┴──────┐ │
+│  │         Exception Handler & Trap Handling         │ │
+│  └───────────────────────────────────────────────────┘ │
+└─────────────────────────────────────────────────────────┘
+                          ↕ ERET/Exception
+┌─────────────────────────────────────────────────────────┐
+│                    Guest (EL1)                          │
+│  ┌──────────────────────────────────────────────────┐  │
+│  │          Guest Operating System / Code           │  │
+│  └──────────────────────────────────────────────────┘  │
+│                          │                              │
+│  ┌──────────────────────┴──────────────────────────┐  │
+│  │  Stage-2 Translation (GPA → HPA)                │  │
+│  └─────────────────────────────────────────────────┘  │
+└─────────────────────────────────────────────────────────┘
+                          │
+                ┌─────────┴─────────┐
+                │  Physical Memory  │
+                └───────────────────┘
+```
+
+### 技术栈
+
+- **语言**: Rust (no_std) + ARM64 汇编
+- **目标**: ARM64 (AArch64)
+- **运行环境**: QEMU virt machine (开发), 裸机 (未来)
+- **工具链**: rustc + aarch64-linux-gnu-*
+
+### 代码统计 (截至 2026-01-26)
+
+- Rust 代码: ~3500 行
+- 汇编代码: ~300 行  
+- 总计: ~3800 行
+- 测试代码: ~400 行
+
 ## 已完成的 Sprint
 
 ### Sprint 1.1: vCPU Framework ✅
@@ -260,6 +305,102 @@ Total            20    ~4300    ~3450
 
 ## 下一步计划
 
+### 目录结构重组 (2026-01-26 完成)
+
+基于 [Hafnium](https://github.com/TF-Hafnium/hafnium) 项目的最佳实践，我们对代码库进行了系统性重组：
+
+#### Phase 1: 测试分离 ✅
+**变更**:
+```
+src/test_*.rs  →  tests/test_*.rs
+src/mod.rs     →  tests/mod.rs (新建)
+```
+
+**收益**:
+- 清晰区分产品代码和测试代码
+- 更好的模块化
+- 符合 Rust 项目惯例
+
+#### Phase 2: 设备驱动模块化 ✅
+**变更**:
+```
+src/devices/
+├── mod.rs
+├── pl011/           (新)
+│   ├── mod.rs
+│   └── emulator.rs  (原 uart.rs)
+└── gic/             (新)
+    ├── mod.rs
+    └── distributor.rs  (原 gicd.rs)
+```
+
+**收益**:
+- 每个设备独立子目录
+- 便于添加更多设备实现（如 CPU interface, redistributor）
+- 遵循 "一个设备一个目录" 原则
+
+#### Phase 3: 架构代码分层 ✅
+**变更**:
+```
+src/arch/aarch64/
+├── regs.rs          (保留)
+├── hypervisor/      (新)
+│   ├── mod.rs
+│   ├── exception.rs (EL2 异常处理)
+│   └── decode.rs    (指令解码)
+├── mm/              (新)
+│   ├── mod.rs
+│   └── mmu.rs       (内存管理)
+└── peripherals/     (新)
+    ├── mod.rs
+    ├── gic.rs       (GIC 寄存器)
+    └── timer.rs     (ARM Timer)
+```
+
+**收益**:
+- 清晰的层次结构：hypervisor (EL2) / mm (内存) / peripherals (外设)
+- 更容易定位代码
+- 参考了 Hafnium 的 `src/arch/aarch64/hypervisor/` 模式
+
+#### Phase 4: 文档完善 🔄
+**计划内容**:
+- ✅ 更新 PROGRESS.md
+- 添加架构图
+- 添加 API 文档
+- 创建开发者指南
+
+### 最终目录结构
+
+```
+hypervisor/
+├── arch/aarch64/        # 汇编启动代码
+│   ├── boot.S
+│   └── exception.S
+├── src/
+│   ├── arch/aarch64/    # ARM64 特定代码
+│   │   ├── regs.rs
+│   │   ├── hypervisor/  # EL2 特定
+│   │   ├── mm/          # 内存管理
+│   │   └── peripherals/ # 外设驱动
+│   ├── devices/         # 设备模拟
+│   │   ├── pl011/       # UART
+│   │   └── gic/         # 中断控制器
+│   ├── vcpu.rs
+│   ├── vm.rs
+│   ├── global.rs
+│   └── lib.rs
+├── tests/               # 测试代码
+│   ├── mod.rs
+│   ├── test_guest.rs
+│   ├── test_timer.rs
+│   └── test_mmio.rs
+├── Cargo.toml
+├── Makefile
+└── PROGRESS.md
+```
+
+## Sprint 候选计划
+
 ### Sprint 1.5 候选:
 1. **修复 MMIO 测试**: 使用正确的指令编码
 2. **多 vCPU 支持**: 实现 vCPU 调度
@@ -268,10 +409,10 @@ Total            20    ~4300    ~3450
 5. **更多设备**: GIC CPU Interface, 更多外设
 
 ### 架构优化:
-1. ✅ Phase 1: 测试代码分离
-2. Phase 2: 设备驱动子目录化
-3. Phase 3: 架构代码分层
-4. Phase 4: 文档完善
+1. ✅ Phase 1: 测试代码分离 (完成于 2026-01-26)
+2. ✅ Phase 2: 设备驱动子目录化 (完成于 2026-01-26)
+3. ✅ Phase 3: 架构代码分层 (完成于 2026-26)
+4. 🔄 Phase 4: 文档完善 (进行中)
 
 ## 参考资料
 
