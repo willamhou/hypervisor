@@ -76,9 +76,10 @@ pub fn init() {
 /// * `context` - The saved vCPU context at the time of the exception
 /// 
 /// # Returns
-/// * The updated context to restore when re-entering the guest
+/// * `true` - Continue running guest
+/// * `false` - Exit to host
 #[no_mangle]
-pub extern "C" fn handle_exception(context: &mut VcpuContext) {
+pub extern "C" fn handle_exception(context: &mut VcpuContext) -> bool {
     // Read ESR_EL2 to determine exception cause
     let esr: u64;
     unsafe {
@@ -111,58 +112,59 @@ pub extern "C" fn handle_exception(context: &mut VcpuContext) {
     match exit_reason {
         ExitReason::WfiWfe => {
             // WFI/WFE: Just advance PC and continue
-            uart_puts(b"[VCPU] WFI/WFE trapped\n");
+            // uart_puts(b"[VCPU] WFI/WFE trapped\n");  // Disabled for cleaner output
             context.pc += 4; // Skip the WFI/WFE instruction
+            true // Continue
         }
         
         ExitReason::HvcCall => {
             // HVC: Hypercall from guest
-            uart_puts(b"[VCPU] HVC call\n");
             // x0 contains the hypercall number
-            handle_hypercall(context);
-            context.pc += 4; // Skip the HVC instruction
+            let should_continue = handle_hypercall(context);
+            // Don't advance PC - ELR_EL2 already points to the next instruction
+            should_continue
         }
         
         ExitReason::TrapMsrMrs => {
             uart_puts(b"[VCPU] MSR/MRS trap\n");
             // For now, skip the instruction
             context.pc += 4;
+            true // Continue
         }
         
         ExitReason::InstructionAbort => {
             uart_puts(b"[VCPU] Instruction abort at 0x");
             print_hex(context.sys_regs.far_el2);
             uart_puts(b"\n");
-            // This is a fatal error for now
-            loop {
-                unsafe { core::arch::asm!("wfe"); }
-            }
+            // This is a fatal error
+            false // Exit
         }
         
         ExitReason::DataAbort => {
             uart_puts(b"[VCPU] Data abort at 0x");
             print_hex(context.sys_regs.far_el2);
             uart_puts(b"\n");
-            // This is a fatal error for now
-            loop {
-                unsafe { core::arch::asm!("wfe"); }
-            }
+            // This is a fatal error
+            false // Exit
         }
         
         ExitReason::Unknown | ExitReason::Other(_) => {
             uart_puts(b"[VCPU] Unknown exception, ESR=0x");
             print_hex(esr);
             uart_puts(b"\n");
-            // This is a fatal error for now
-            loop {
-                unsafe { core::arch::asm!("wfe"); }
-            }
+            // This is a fatal error
+            false // Exit
         }
     }
 }
 
 /// Handle hypercalls from guest
-fn handle_hypercall(context: &mut VcpuContext) {
+/// 
+/// # Returns
+/// * `true` - Continue running guest
+/// * `false` - Exit to host
+fn handle_hypercall(context: &mut VcpuContext) -> bool {
+    use crate::uart_puts;
     let hypercall_num = context.gp_regs.x0;
     
     match hypercall_num {
@@ -180,23 +182,23 @@ fn handle_hypercall(context: &mut VcpuContext) {
                 );
             }
             context.gp_regs.x0 = 0; // Success
+            true // Continue
         }
         
         1 => {
             // Hypercall 1: Exit guest
-            use crate::uart_puts;
-            uart_puts(b"[VCPU] Guest requested exit\n");
+            uart_puts(b"\n[VCPU] Guest requested exit\n");
             context.gp_regs.x0 = 0; // Success
-            // In a real implementation, we would signal the VM to stop
+            false // Exit - guest wants to terminate
         }
         
         _ => {
             // Unknown hypercall
-            use crate::uart_puts;
-            uart_puts(b"[VCPU] Unknown hypercall: 0x");
+            uart_puts(b"\n[VCPU] Unknown hypercall: 0x");
             print_hex(hypercall_num);
             uart_puts(b"\n");
             context.gp_regs.x0 = !0; // Error
+            false // Exit on error
         }
     }
 }

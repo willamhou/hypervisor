@@ -146,9 +146,58 @@ exception_handler:
     // x0 already contains context pointer
     bl      handle_exception
     
-    // Restore will happen in enter_guest when we return
+    // Check return value: true (1) = continue, false (0) = exit
+    cbz     w0, guest_exit
     
-    // Return to caller (exit from guest)
+    // Continue running guest - restore context and re-enter
+    // Load the context pointer again
+    adrp    x0, current_vcpu_context
+    add     x0, x0, :lo12:current_vcpu_context
+    ldr     x0, [x0]
+    
+    // Restore guest general purpose registers
+    ldp     x2, x3, [x0, #16]
+    ldp     x4, x5, [x0, #32]
+    ldp     x6, x7, [x0, #48]
+    ldp     x8, x9, [x0, #64]
+    ldp     x10, x11, [x0, #80]
+    ldp     x12, x13, [x0, #96]
+    ldp     x14, x15, [x0, #112]
+    ldp     x16, x17, [x0, #128]
+    ldp     x18, x19, [x0, #144]
+    ldp     x20, x21, [x0, #160]
+    ldp     x22, x23, [x0, #176]
+    ldp     x24, x25, [x0, #192]
+    ldp     x26, x27, [x0, #208]
+    ldp     x28, x29, [x0, #224]
+    ldr     x30, [x0, #240]
+    
+    // Restore system registers
+    ldr     x1, [x0, #248]       // sp_el1
+    msr     sp_el1, x1
+    
+    ldr     x1, [x0, #256]       // elr_el1
+    msr     elr_el1, x1
+    
+    ldr     x1, [x0, #264]       // spsr_el1
+    msr     spsr_el1, x1
+    
+    // Restore PC (into ELR_EL2 for ERET)
+    ldr     x1, [x0, #392]       // pc (offset 392)
+    msr     elr_el2, x1
+    
+    // Restore SPSR_EL2 to enter guest at EL1
+    mov     x1, #0x5
+    msr     spsr_el2, x1
+    
+    // Restore x0, x1 last
+    ldp     x0, x1, [x0, #0]
+    
+    // Enter guest with ERET
+    eret
+
+guest_exit:
+    // Guest wants to exit - return to caller (host)
     ret
 
 exception_no_context:
