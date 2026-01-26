@@ -7,6 +7,9 @@ pub mod vm;
 pub mod test_guest;
 pub mod test_guest_irq;
 pub mod test_timer;
+pub mod test_mmio;
+pub mod devices;
+pub mod global;
 
 // Note: println! macro is exported at the crate root via #[macro_export]
 // It can be used as: use hypervisor::println;

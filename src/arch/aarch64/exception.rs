@@ -141,11 +141,21 @@ pub extern "C" fn handle_exception(context: &mut VcpuContext) -> bool {
         }
         
         ExitReason::DataAbort => {
-            uart_puts(b"[VCPU] Data abort at 0x");
-            print_hex(context.sys_regs.far_el2);
-            uart_puts(b"\n");
-            // This is a fatal error
-            false // Exit
+            // Data abort - might be MMIO access
+            let far = context.sys_regs.far_el2;
+            
+            // Try to handle as MMIO
+            if handle_mmio_abort(context, far) {
+                // Successfully handled, advance PC and continue
+                context.pc += 4;
+                true
+            } else {
+                // Not MMIO or failed to handle
+                uart_puts(b"[VCPU] Data abort at 0x");
+                print_hex(far);
+                uart_puts(b" (not MMIO)\n");
+                false // Exit
+            }
         }
         
         ExitReason::Unknown | ExitReason::Other(_) => {
@@ -206,6 +216,62 @@ fn handle_hypercall(context: &mut VcpuContext) -> bool {
             uart_puts(b"\n");
             context.gp_regs.x0 = !0; // Error
             false // Exit on error
+        }
+    }
+}
+
+/// Handle MMIO data abort
+/// 
+/// # Returns
+/// * `true` if successfully handled
+/// * `false` if not MMIO or handling failed
+fn handle_mmio_abort(context: &mut VcpuContext, addr: u64) -> bool {
+    use crate::arch::aarch64::decode::MmioAccess;
+    use crate::uart_puts;
+    
+    // Get the faulting instruction
+    let insn = unsafe {
+        core::ptr::read_volatile(context.pc as *const u32)
+    };
+    
+    // Get ISS from ESR_EL2
+    let iss = (context.sys_regs.esr_el2 & 0x1FFFFFF) as u32;
+    
+    // Decode the instruction
+    let access = match MmioAccess::decode(insn, iss) {
+        Some(a) => a,
+        None => {
+            uart_puts(b"[MMIO] Failed to decode instruction at 0x");
+            print_hex(context.pc);
+            uart_puts(b"\n");
+            return false;
+        }
+    };
+    
+    // Log the access (optional, can be disabled for production)
+    // uart_puts(b"[MMIO] Access at 0x");
+    // print_hex(addr);
+    // uart_puts(if access.is_load() { b" (load)\n" } else { b" (store)\n" });
+    
+    // Handle the MMIO access
+    if access.is_store() {
+        // Store: get value from source register
+        let value = context.gp_regs.get_reg(access.reg());
+        crate::global::DEVICES.handle_mmio(addr, value, access.size(), true);
+        true
+    } else {
+        // Load: get value from device and write to destination register
+        match crate::global::DEVICES.handle_mmio(addr, 0, access.size(), false) {
+            Some(value) => {
+                context.gp_regs.set_reg(access.reg(), value);
+                true
+            }
+            None => {
+                uart_puts(b"[MMIO] Read failed at 0x");
+                print_hex(addr);
+                uart_puts(b"\n");
+                false
+            }
         }
     }
 }

@@ -5,6 +5,7 @@
 
 use crate::vcpu::Vcpu;
 use crate::arch::aarch64::mmu::{MemoryAttributes, init_stage2};
+use crate::devices::DeviceManager;
 
 /// Maximum number of vCPUs per VM
 pub const MAX_VCPUS: usize = 8;
@@ -46,6 +47,9 @@ pub struct Vm {
     
     /// Whether memory is initialized
     memory_initialized: bool,
+    
+    /// Device manager for MMIO emulation
+    devices: DeviceManager,
 }
 
 impl Vm {
@@ -55,12 +59,18 @@ impl Vm {
     /// * `id` - Unique identifier for this VM
     pub fn new(id: usize) -> Self {
         const INIT: Option<Vcpu> = None;
+        let devices = DeviceManager::new();
+        
+        // Install device manager globally for exception handler access
+        crate::global::DEVICES.init(devices);
+        
         Self {
             id,
             state: VmState::Uninitialized,
             vcpus: [INIT; MAX_VCPUS],
             vcpu_count: 0,
             memory_initialized: false,
+            devices: DeviceManager::new(), // Dummy, real one is in global
         }
     }
     

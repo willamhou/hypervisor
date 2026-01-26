@@ -59,6 +59,91 @@ impl Default for GeneralPurposeRegs {
     }
 }
 
+impl GeneralPurposeRegs {
+    /// Get value of a general purpose register
+    /// 
+    /// # Arguments
+    /// * `reg` - Register number (0-30, x31/SP not accessible)
+    pub fn get_reg(&self, reg: u8) -> u64 {
+        match reg {
+            0 => self.x0,
+            1 => self.x1,
+            2 => self.x2,
+            3 => self.x3,
+            4 => self.x4,
+            5 => self.x5,
+            6 => self.x6,
+            7 => self.x7,
+            8 => self.x8,
+            9 => self.x9,
+            10 => self.x10,
+            11 => self.x11,
+            12 => self.x12,
+            13 => self.x13,
+            14 => self.x14,
+            15 => self.x15,
+            16 => self.x16,
+            17 => self.x17,
+            18 => self.x18,
+            19 => self.x19,
+            20 => self.x20,
+            21 => self.x21,
+            22 => self.x22,
+            23 => self.x23,
+            24 => self.x24,
+            25 => self.x25,
+            26 => self.x26,
+            27 => self.x27,
+            28 => self.x28,
+            29 => self.x29,
+            30 => self.x30,
+            _ => 0, // Invalid register
+        }
+    }
+    
+    /// Set value of a general purpose register
+    /// 
+    /// # Arguments
+    /// * `reg` - Register number (0-30, x31/SP not accessible)
+    /// * `value` - Value to set
+    pub fn set_reg(&mut self, reg: u8, value: u64) {
+        match reg {
+            0 => self.x0 = value,
+            1 => self.x1 = value,
+            2 => self.x2 = value,
+            3 => self.x3 = value,
+            4 => self.x4 = value,
+            5 => self.x5 = value,
+            6 => self.x6 = value,
+            7 => self.x7 = value,
+            8 => self.x8 = value,
+            9 => self.x9 = value,
+            10 => self.x10 = value,
+            11 => self.x11 = value,
+            12 => self.x12 = value,
+            13 => self.x13 = value,
+            14 => self.x14 = value,
+            15 => self.x15 = value,
+            16 => self.x16 = value,
+            17 => self.x17 = value,
+            18 => self.x18 = value,
+            19 => self.x19 = value,
+            20 => self.x20 = value,
+            21 => self.x21 = value,
+            22 => self.x22 = value,
+            23 => self.x23 = value,
+            24 => self.x24 = value,
+            25 => self.x25 = value,
+            26 => self.x26 = value,
+            27 => self.x27 = value,
+            28 => self.x28 = value,
+            29 => self.x29 = value,
+            30 => self.x30 = value,
+            _ => {} // Invalid register, ignore
+        }
+    }
+}
+
 /// System Registers
 /// 
 /// These are the key system registers that need to be managed when
