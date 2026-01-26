@@ -5,9 +5,6 @@ target = "aarch64-unknown-none"
 rustflags = [
     "-C", "link-arg=-Tarch/aarch64/linker.ld",
     "-C", "relocation-model=static",
-    "-C", "link-arg=--whole-archive",
-    "-C", "link-arg=-lboot",
-    "-C", "link-arg=--no-whole-archive",
 ]
 
 [unstable]

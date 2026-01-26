@@ -8,12 +8,12 @@ BINARY_BIN := $(BUILD_DIR)/$(TARGET).bin
 
 # QEMU configuration
 QEMU := qemu-system-aarch64
-QEMU_FLAGS := -machine virt \
+QEMU_FLAGS := -machine virt,virtualization=on \
               -cpu cortex-a57 \
               -smp 1 \
               -m 1G \
               -nographic \
-              -kernel $(BINARY_BIN)
+              -kernel $(BINARY)
 
 # Build in debug mode
 all: build
