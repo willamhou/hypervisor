@@ -31,8 +31,8 @@ pub extern "C" fn rust_main() -> ! {
     exception::init();
     uart_puts_local(b"[INIT] Exception handling initialized\n");
     
-    // Initialize GIC
-    hypervisor::arch::aarch64::peripherals::gic::init();
+    // Initialize GIC - try GICv3 first, fall back to GICv2
+    hypervisor::arch::aarch64::peripherals::gicv3::init();
     
     // Initialize timer
     uart_puts_local(b"[INIT] Configuring timer...\n");
@@ -56,14 +56,14 @@ pub extern "C" fn rust_main() -> ! {
     // Run the MMIO device emulation test
     tests::run_mmio_test();
     
-    // Run the guest interrupt injection test
-    tests::run_guest_interrupt_test();
+    // Run the complete interrupt injection test (with guest exception vector)
+    tests::run_complete_interrupt_test();
     
     // Run the original guest test (hypercall)
     tests::run_guest_test();
     
     uart_puts_local(b"\n========================================\n");
-    uart_puts_local(b"Sprint 1.5b: Guest Interrupt Injection - COMPLETE\n");
+    uart_puts_local(b"Sprint 1.6: Complete Interrupt Injection - COMPLETE\n");
     uart_puts_local(b"========================================\n");
     
     // Halt - we'll implement proper VM execution later

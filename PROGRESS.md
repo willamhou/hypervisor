@@ -44,10 +44,11 @@
 
 ### 代码统计 (截至 2026-01-26)
 
-- Rust 代码: ~3500 行
-- 汇编代码: ~300 行  
-- 总计: ~3800 行
-- 测试代码: ~400 行
+- Rust 代码: ~4100 行（+600）
+- 汇编代码: ~350 行（+50）
+- 总计: ~4450 行
+- 测试代码: ~770 行（+370）
+- 文档: ~1200 行
 
 ## 已完成的 Sprint
 
@@ -437,10 +438,48 @@ hypervisor/
 
 **工作时长**: ~4小时
 
-### Sprint 1.6 候选:
-1. **动态内存管理**: 实现 Bump allocator (4-6h)
-2. **GIC CPU Interface**: 完整 GICv2 支持 (3-4h)
-3. **多 vCPU 支持**: vCPU 调度 (15-20h)
+### ✅ Sprint 1.6: Complete Interrupt Injection (完成于 2026-01-26)
+**目标**: 完善中断注入功能，实现完整的 Guest 异常处理流程
+
+**完成内容**:
+1. ✅ **Guest 异常向量表** - 完整的 EL1 异常向量表（2KB，16个向量入口）
+2. ✅ **IRQ Handler 实现** - Guest 端中断处理程序（保存/恢复上下文，EOI）
+3. ✅ **WFI 支持** - 正确处理 Wait-For-Interrupt 指令
+   - Hypervisor 检测 WFI（EC = 0x01）
+   - 返回特殊退出码（1）
+   - PC += 4 跳过 WFI 指令
+4. ✅ **多次中断注入** - 支持连续注入多个虚拟中断（测试 3 次）
+5. ✅ **自动 EOI** - Guest 返回后自动清除 VI 位
+
+**关键实现**:
+- **Vector Table**: 0x280 偏移的 IRQ handler（Current EL with SPx）
+- **Context Save/Restore**: 保存 x0, x1, x29, x30，递增计数器，ERET 返回
+- **WFI Detection**: 汇编层面检测 ESR_EL2.EC，返回不同退出码
+- **Test Loop**: WFI → Inject → Handle → Resume（循环 3 次）
+
+**技术亮点**:
+- 完整的端到端中断流程
+- Guest 异常向量表符合 ARM64 规范（2KB对齐，128字节/向量）
+- 自动化测试：验证 3 次中断都被正确处理
+
+**测试结果**:
+- ✅ Guest 设置 VBAR_EL1 成功
+- ✅ Guest unmask IRQ (DAIF.I = 0)
+- ✅ 3 次 WFI 循环成功
+- ✅ 中断计数器正确递增到 3
+- ✅ Guest 通过 x0 返回正确的计数值
+
+**工作时长**: ~2小时
+
+**文档**: 详见 `docs/SPRINT_1.6_SUMMARY.md`
+
+---
+
+### Sprint 1.6+ 候选:
+1. **GIC CPU Interface**: 完整 GICv2 支持 (3-4h) ⭐ 推荐
+2. **API 文档**: Rustdoc 注释和文档生成 (1-2h)
+3. **动态内存管理**: 实现 Bump allocator (4-6h)
+4. **多 vCPU 支持**: vCPU 调度 (15-20h)
 4. **PSCI**: 电源管理接口 (8-10h)
 
 ### 架构优化:
@@ -514,4 +553,4 @@ hypervisor/
 
 ---
 
-**最后更新**: 2026-01-26 (Sprint 1.5b 完成)
+**最后更新**: 2026-01-26 (Sprint 1.6 完成 - 完善中断注入)

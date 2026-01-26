@@ -1,15 +1,18 @@
 //! Virtual Interrupt Management for Guest vCPUs
 //!
-//! This module handles injecting virtual interrupts into guest VMs using
-//! HCR_EL2.VI (Virtual IRQ) mechanism.
+//! This module handles injecting virtual interrupts into guest VMs.
+//! 
+//! ## GICv3/v4 List Register Mechanism
+//! GICv3+ uses List Registers (LRs) instead of HCR_EL2.VI for interrupt injection.
+//! Each LR can hold one pending/active virtual interrupt with its state, priority, etc.
 //!
 //! ## Interrupt Injection Flow
 //! 1. Hypervisor receives physical interrupt (e.g., timer)
-//! 2. If interrupt is for guest, mark as pending
-//! 3. Set HCR_EL2.VI bit before entering guest
-//! 4. Guest takes virtual IRQ exception at EL1
+//! 2. If interrupt is for guest, call inject_irq()
+//! 3. inject_irq() writes to an available List Register
+//! 4. Hardware automatically injects virtual interrupt into guest
 //! 5. Guest handles interrupt and performs EOI
-//! 6. Hypervisor clears pending state
+//! 6. Hardware clears the LR automatically
 
 /// Virtual interrupt state for a vCPU
 #[derive(Debug, Clone, Copy)]
@@ -22,6 +25,9 @@ pub struct VirtualInterruptState {
     
     /// IRQ number that is pending (if any)
     pub pending_irq_num: Option<u32>,
+    
+    /// Use GICv3 List Registers (true) or HCR_EL2.VI (false)
+    pub use_gicv3: bool,
 }
 
 impl Default for VirtualInterruptState {
@@ -30,6 +36,7 @@ impl Default for VirtualInterruptState {
             irq_pending: false,
             fiq_pending: false,
             pending_irq_num: None,
+            use_gicv3: true, // Default to GICv3
         }
     }
 }
@@ -45,8 +52,26 @@ impl VirtualInterruptState {
     /// # Arguments
     /// * `irq_num` - The interrupt number to inject
     pub fn inject_irq(&mut self, irq_num: u32) {
-        self.irq_pending = true;
-        self.pending_irq_num = Some(irq_num);
+        if self.use_gicv3 {
+            // Use GICv3 List Register injection
+            use crate::arch::aarch64::peripherals::gicv3::GicV3VirtualInterface;
+            
+            match GicV3VirtualInterface::inject_interrupt(irq_num, 0xA0) {
+                Ok(()) => {
+                    self.irq_pending = true;
+                    self.pending_irq_num = Some(irq_num);
+                }
+                Err(_) => {
+                    // Fallback to HCR_EL2.VI if LRs are full
+                    self.irq_pending = true;
+                    self.pending_irq_num = Some(irq_num);
+                }
+            }
+        } else {
+            // Use legacy HCR_EL2.VI mechanism
+            self.irq_pending = true;
+            self.pending_irq_num = Some(irq_num);
+        }
     }
     
     /// Inject a virtual FIQ
@@ -56,6 +81,14 @@ impl VirtualInterruptState {
     
     /// Clear IRQ pending state
     pub fn clear_irq(&mut self) {
+        if self.use_gicv3 {
+            // GICv3 LRs are cleared automatically by hardware
+            // when guest performs EOI, but we can manually clear if needed
+            if let Some(irq_num) = self.pending_irq_num {
+                use crate::arch::aarch64::peripherals::gicv3::GicV3VirtualInterface;
+                GicV3VirtualInterface::clear_interrupt(irq_num);
+            }
+        }
         self.irq_pending = false;
         self.pending_irq_num = None;
     }
@@ -72,7 +105,8 @@ impl VirtualInterruptState {
     
     /// Apply interrupt state to HCR_EL2
     ///
-    /// This sets the VI/VF bits in HCR_EL2 to inject virtual interrupts.
+    /// This is only used for legacy mode (GICv2 or fallback).
+    /// GICv3+ uses List Registers instead.
     ///
     /// # Arguments
     /// * `hcr` - Current HCR_EL2 value
@@ -80,23 +114,30 @@ impl VirtualInterruptState {
     /// # Returns
     /// Updated HCR_EL2 value with VI/VF bits set
     pub fn apply_to_hcr(&self, hcr: u64) -> u64 {
-        let mut new_hcr = hcr;
-        
-        // Bit 7: VI - Virtual IRQ pending
-        if self.irq_pending {
-            new_hcr |= 1 << 7;
+        if self.use_gicv3 {
+            // GICv3 mode: don't use HCR_EL2.VI
+            // Just return HCR unchanged
+            hcr
         } else {
-            new_hcr &= !(1 << 7);
+            // Legacy mode: use HCR_EL2.VI/VF
+            let mut new_hcr = hcr;
+            
+            // Bit 7: VI - Virtual IRQ pending
+            if self.irq_pending {
+                new_hcr |= 1 << 7;
+            } else {
+                new_hcr &= !(1 << 7);
+            }
+            
+            // Bit 6: VF - Virtual FIQ pending
+            if self.fiq_pending {
+                new_hcr |= 1 << 6;
+            } else {
+                new_hcr &= !(1 << 6);
+            }
+            
+            new_hcr
         }
-        
-        // Bit 6: VF - Virtual FIQ pending
-        if self.fiq_pending {
-            new_hcr |= 1 << 6;
-        } else {
-            new_hcr &= !(1 << 6);
-        }
-        
-        new_hcr
     }
 }
 

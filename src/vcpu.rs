@@ -80,8 +80,9 @@ impl Vcpu {
     /// This will enter the guest and execute code until an exit occurs.
     /// 
     /// # Returns
-    /// * `Ok(())` - Guest exited normally
-    /// * `Err(msg)` - Error occurred
+    /// * `Ok(())` - Guest exited normally (HVC #0)
+    /// * `Err("WFI")` - Guest executed WFI (waiting for interrupt)
+    /// * `Err(msg)` - Other error occurred
     pub fn run(&mut self) -> Result<(), &'static str> {
         if self.state != VcpuState::Ready {
             return Err("vCPU is not in Ready state");
@@ -104,10 +105,16 @@ impl Vcpu {
         
         self.state = VcpuState::Ready;
         
-        if result == 0 {
-            Ok(())
-        } else {
-            Err("Guest exit with error")
+        // After guest exit, check if interrupt was handled and clear VI bit if needed
+        if self.virt_irq.has_pending_interrupt() {
+            // Guest returned from interrupt handler, clear pending state
+            self.virt_irq.clear_irq();
+        }
+        
+        match result {
+            0 => Ok(()),          // Normal exit (HVC #0)
+            1 => Err("WFI"),      // Guest executed WFI
+            _ => Err("Guest exit with error"),
         }
     }
     

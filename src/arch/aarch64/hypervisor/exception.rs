@@ -111,10 +111,10 @@ pub extern "C" fn handle_exception(context: &mut VcpuContext) -> bool {
     
     match exit_reason {
         ExitReason::WfiWfe => {
-            // WFI/WFE: Just advance PC and continue
-            // uart_puts(b"[VCPU] WFI/WFE trapped\n");  // Disabled for cleaner output
-            context.pc += 4; // Skip the WFI/WFE instruction
-            true // Continue
+            // WFI/WFE: Guest is waiting for interrupt
+            // Return exit code 1 to indicate WFI
+            // Don't advance PC - guest should resume from WFI when interrupt is injected
+            false // Exit with code 1 (WFI)
         }
         
         ExitReason::HvcCall => {

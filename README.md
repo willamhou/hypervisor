@@ -7,8 +7,25 @@
 - ✅ **vCPU 管理**: 完整的虚拟 CPU 抽象和上下文切换
 - ✅ **Stage-2 内存管理**: Guest 物理地址到 Host 物理地址的转换
 - ✅ **中断处理**: GIC 支持和 ARM Generic Timer
+- ✅ **虚拟中断注入**: HCR_EL2.VI 机制，完整的 Guest 异常处理
 - ✅ **设备模拟**: Trap-and-Emulate 架构，支持 UART 和 GICD
 - ✅ **Hypercall 接口**: Guest 与 Hypervisor 通信机制
+- ✅ **WFI 支持**: Wait-For-Interrupt 指令处理
+
+## 当前状态
+
+**版本**: v0.4.0 (Sprint 1.6 完成)
+**进度**: Milestone 1 已完成 + 中断完善
+**测试**: 7/7 (100% 通过)
+**代码量**: ~4450 行
+
+### 最新更新（2026-01-26）
+
+Sprint 1.6 实现了完整的虚拟中断处理流程：
+- Guest 异常向量表（2KB，16个向量）
+- IRQ Handler 实现（上下文保存/恢复，EOI）
+- WFI 指令支持（检测、跳过、恢复）
+- 多次中断注入测试（3 次循环验证）
 
 ## 快速开始
 

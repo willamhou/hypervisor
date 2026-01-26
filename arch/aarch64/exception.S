@@ -200,6 +200,15 @@ guest_exit:
     // Guest wants to exit - return to enter_guest's caller
     // We need to restore the host context that was saved by enter_guest
     
+    // Check if this is a WFI exit (ExitReason::WfiWfe)
+    // Read ESR_EL2 and check EC field
+    mrs     x10, esr_el2
+    lsr     x10, x10, #26           // Extract EC (bits 31:26)
+    and     x10, x10, #0x3F
+    cmp     x10, #0x1               // EC = 0x01 for WFI/WFE
+    beq     guest_exit_wfi
+    
+    // Normal exit (not WFI)
     // Restore host callee-saved registers
     ldp     x19, x20, [sp], #16
     ldp     x21, x22, [sp], #16
@@ -210,6 +219,30 @@ guest_exit:
     
     // Return 0 (success) to enter_guest's caller
     mov     x0, #0
+    ret
+
+guest_exit_wfi:
+    // WFI exit - advance PC past WFI instruction before returning
+    // Load the context pointer
+    adrp    x0, current_vcpu_context
+    add     x0, x0, :lo12:current_vcpu_context
+    ldr     x0, [x0]
+    
+    // Load PC, add 4, and store back
+    ldr     x1, [x0, #392]       // pc (offset 392)
+    add     x1, x1, #4           // Skip WFI instruction
+    str     x1, [x0, #392]
+    
+    // Restore host callee-saved registers
+    ldp     x19, x20, [sp], #16
+    ldp     x21, x22, [sp], #16
+    ldp     x23, x24, [sp], #16
+    ldp     x25, x26, [sp], #16
+    ldp     x27, x28, [sp], #16
+    ldp     x29, x30, [sp], #16
+    
+    // Return 1 (WFI) to enter_guest's caller
+    mov     x0, #1
     ret
 
 exception_no_context:
