@@ -9,6 +9,7 @@ pub mod global;
 pub mod vcpu_interrupt;
 pub mod mm;
 pub mod scheduler;
+pub mod guest_loader;
 
 // Note: println! macro is exported at the crate root via #[macro_export]
 // It can be used as: use hypervisor::println;
