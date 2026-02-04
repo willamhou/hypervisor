@@ -20,8 +20,8 @@ fn uart_puts_local(s: &[u8]) {
 #[no_mangle]
 pub extern "C" fn rust_main() -> ! {
     uart_puts_local(b"========================================\n");
-    uart_puts_local(b"  ARM64 Hypervisor - Sprint 2.2\n");
-    uart_puts_local(b"  Dynamic Memory Management\n");
+    uart_puts_local(b"  ARM64 Hypervisor - Sprint 2.3\n");
+    uart_puts_local(b"  Multi-vCPU Support\n");
     uart_puts_local(b"========================================\n");
     uart_puts_local(b"\n");
     uart_puts_local(b"[INIT] Initializing at EL2...\n");
@@ -67,6 +67,15 @@ pub extern "C" fn rust_main() -> ! {
     // Run the dynamic page table test
     tests::run_dynamic_pt_test();
 
+    // Run the multi-vCPU test
+    tests::run_multi_vcpu_test();
+
+    // Run the scheduler test
+    tests::run_scheduler_test();
+
+    // Run the VM scheduler integration test
+    tests::run_vm_scheduler_test();
+
     // Run the MMIO device emulation test
     tests::run_mmio_test();
 
@@ -80,7 +89,7 @@ pub extern "C" fn rust_main() -> ! {
     tests::run_guest_test();
     
     uart_puts_local(b"\n========================================\n");
-    uart_puts_local(b"Sprint 2.2: Dynamic Memory - COMPLETE\n");
+    uart_puts_local(b"Sprint 2.3: Multi-vCPU Support - COMPLETE\n");
     uart_puts_local(b"========================================\n");
     
     // Halt - we'll implement proper VM execution later

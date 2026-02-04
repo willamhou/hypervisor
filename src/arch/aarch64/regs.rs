@@ -273,6 +273,16 @@ impl VcpuContext {
         ctx
     }
     
+    /// Get a general purpose register value
+    pub fn get_gpr(&self, reg: u8) -> u64 {
+        self.gp_regs.get_reg(reg)
+    }
+
+    /// Set a general purpose register value
+    pub fn set_gpr(&mut self, reg: u8, value: u64) {
+        self.gp_regs.set_reg(reg, value);
+    }
+
     /// Get the exit reason from ESR_EL2
     pub fn exit_reason(&self) -> ExitReason {
         let ec = (self.sys_regs.esr_el2 >> 26) & 0x3F;

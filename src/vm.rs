@@ -6,6 +6,7 @@
 use crate::vcpu::Vcpu;
 use crate::arch::aarch64::{MemoryAttributes, init_stage2};
 use crate::devices::DeviceManager;
+use crate::scheduler::Scheduler;
 
 /// Maximum number of vCPUs per VM
 pub const MAX_VCPUS: usize = 8;
@@ -30,42 +31,45 @@ pub enum VmState {
 }
 
 /// Virtual Machine
-/// 
+///
 /// Represents a complete virtual machine with one or more vCPUs and memory.
 pub struct Vm {
     /// Unique identifier for this VM
     id: usize,
-    
+
     /// Current state of the VM
     state: VmState,
-    
+
     /// vCPUs belonging to this VM
     vcpus: [Option<Vcpu>; MAX_VCPUS],
-    
+
     /// Number of active vCPUs
     vcpu_count: usize,
-    
+
     /// Whether memory is initialized
     memory_initialized: bool,
-    
+
     /// Device manager for MMIO emulation
     /// Note: Currently accessed via global::DEVICES for exception handler access
     #[allow(dead_code)]
     devices: DeviceManager,
+
+    /// Scheduler for multi-vCPU execution
+    scheduler: Scheduler,
 }
 
 impl Vm {
     /// Create a new VM
-    /// 
+    ///
     /// # Arguments
     /// * `id` - Unique identifier for this VM
     pub fn new(id: usize) -> Self {
         const INIT: Option<Vcpu> = None;
         let devices = DeviceManager::new();
-        
+
         // Install device manager globally for exception handler access
         crate::global::DEVICES.init(devices);
-        
+
         Self {
             id,
             state: VmState::Uninitialized,
@@ -73,6 +77,7 @@ impl Vm {
             vcpu_count: 0,
             memory_initialized: false,
             devices: DeviceManager::new(), // Dummy, real one is in global
+            scheduler: Scheduler::new(),
         }
     }
     
@@ -145,31 +150,59 @@ impl Vm {
         uart_puts(b"[VM] Memory mapping complete\n");
     }
     
+    /// Create a vCPU with specified ID
+    ///
+    /// # Arguments
+    /// * `vcpu_id` - Unique ID for the vCPU (0 to MAX_VCPUS-1)
+    ///
+    /// # Returns
+    /// * `Ok(&mut Vcpu)` - Reference to the created vCPU
+    /// * `Err(msg)` - Failed to create vCPU
+    pub fn create_vcpu(&mut self, vcpu_id: usize) -> Result<&mut Vcpu, &'static str> {
+        if vcpu_id >= MAX_VCPUS {
+            return Err("vCPU ID out of range");
+        }
+        if self.vcpus[vcpu_id].is_some() {
+            return Err("vCPU already exists");
+        }
+
+        let vcpu = Vcpu::new(vcpu_id, 0, 0);
+        self.vcpus[vcpu_id] = Some(vcpu);
+        self.vcpu_count += 1;
+        self.scheduler.add_vcpu(vcpu_id);
+
+        if self.state == VmState::Uninitialized {
+            self.state = VmState::Ready;
+        }
+
+        Ok(self.vcpus[vcpu_id].as_mut().unwrap())
+    }
+
     /// Add a vCPU to this VM
-    /// 
+    ///
     /// # Arguments
     /// * `entry_point` - Guest code entry point
     /// * `stack_pointer` - Guest stack pointer
-    /// 
+    ///
     /// # Returns
     /// * `Ok(vcpu_id)` - Successfully added vCPU with given ID
     /// * `Err(msg)` - Failed to add vCPU
-    pub fn add_vcpu(&mut self, entry_point: u64, stack_pointer: u64) 
+    pub fn add_vcpu(&mut self, entry_point: u64, stack_pointer: u64)
         -> Result<usize, &'static str> {
         if self.vcpu_count >= MAX_VCPUS {
             return Err("Maximum vCPU count reached");
         }
-        
+
         let vcpu_id = self.vcpu_count;
         let vcpu = Vcpu::new(vcpu_id, entry_point, stack_pointer);
-        
+
         self.vcpus[vcpu_id] = Some(vcpu);
         self.vcpu_count += 1;
-        
+
         if self.state == VmState::Uninitialized {
             self.state = VmState::Ready;
         }
-        
+
         Ok(vcpu_id)
     }
     
@@ -246,8 +279,56 @@ impl Vm {
         for vcpu in self.vcpus.iter_mut().flatten() {
             vcpu.stop();
         }
-        
+
         self.state = VmState::Stopped;
+    }
+
+    // ========== Scheduler Integration ==========
+
+    /// Schedule the next vCPU to run
+    ///
+    /// Returns the vCPU ID that should run next, or None if no vCPU is ready.
+    pub fn schedule(&mut self) -> Option<usize> {
+        self.scheduler.pick_next()
+    }
+
+    /// Run the currently scheduled vCPU
+    ///
+    /// # Returns
+    /// * `Ok(())` - Guest exited normally
+    /// * `Err("WFI")` - Guest executed WFI
+    /// * `Err(msg)` - Error occurred
+    pub fn run_current(&mut self) -> Result<(), &'static str> {
+        let vcpu_id = self.scheduler.current().ok_or("No current vCPU")?;
+        let vcpu = self.vcpus[vcpu_id].as_mut().ok_or("vCPU not found")?;
+        vcpu.run()
+    }
+
+    /// Mark the current vCPU as done (remove from scheduler)
+    pub fn mark_current_done(&mut self) {
+        if let Some(id) = self.scheduler.current() {
+            self.scheduler.remove_vcpu(id);
+        }
+    }
+
+    /// Yield the current vCPU (allow another vCPU to run)
+    pub fn yield_current(&mut self) {
+        self.scheduler.yield_current();
+    }
+
+    /// Block the current vCPU (e.g., waiting for I/O)
+    pub fn block_current(&mut self) {
+        self.scheduler.block_current();
+    }
+
+    /// Unblock a vCPU (make it ready to run again)
+    pub fn unblock(&mut self, vcpu_id: usize) {
+        self.scheduler.unblock(vcpu_id);
+    }
+
+    /// Get the currently scheduled vCPU ID
+    pub fn current_vcpu(&self) -> Option<usize> {
+        self.scheduler.current()
     }
 }
 
