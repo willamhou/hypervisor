@@ -20,8 +20,8 @@ fn uart_puts_local(s: &[u8]) {
 #[no_mangle]
 pub extern "C" fn rust_main() -> ! {
     uart_puts_local(b"========================================\n");
-    uart_puts_local(b"  ARM64 Hypervisor - Sprint 2.1\n");
-    uart_puts_local(b"  GICv3 Virtual Interface\n");
+    uart_puts_local(b"  ARM64 Hypervisor - Sprint 2.2\n");
+    uart_puts_local(b"  Dynamic Memory Management\n");
     uart_puts_local(b"========================================\n");
     uart_puts_local(b"\n");
     uart_puts_local(b"[INIT] Initializing at EL2...\n");
@@ -51,8 +51,22 @@ pub extern "C" fn rust_main() -> ! {
     let el = (current_el >> 2) & 0x3;
     uart_puts_local(b"[INIT] Current EL: EL");
     print_digit(el as u8);
-    uart_puts_local(b"\n\n");
-    
+    uart_puts_local(b"\n");
+
+    // Initialize heap
+    uart_puts_local(b"[INIT] Initializing heap...\n");
+    unsafe { hypervisor::mm::heap::init(); }
+    uart_puts_local(b"[INIT] Heap initialized (16MB at 0x41000000)\n\n");
+
+    // Run the allocator test
+    tests::run_allocator_test();
+
+    // Run the heap test
+    tests::run_heap_test();
+
+    // Run the dynamic page table test
+    tests::run_dynamic_pt_test();
+
     // Run the MMIO device emulation test
     tests::run_mmio_test();
 
@@ -66,7 +80,7 @@ pub extern "C" fn rust_main() -> ! {
     tests::run_guest_test();
     
     uart_puts_local(b"\n========================================\n");
-    uart_puts_local(b"Sprint 2.1: GICv3 Virtual Interface - COMPLETE\n");
+    uart_puts_local(b"Sprint 2.2: Dynamic Memory - COMPLETE\n");
     uart_puts_local(b"========================================\n");
     
     // Halt - we'll implement proper VM execution later

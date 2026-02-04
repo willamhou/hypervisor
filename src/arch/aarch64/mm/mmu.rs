@@ -294,6 +294,156 @@ impl IdentityMapper {
     }
 }
 
+/// Memory attribute enum for DynamicIdentityMapper
+#[derive(Clone, Copy, Debug)]
+pub enum MemoryAttribute {
+    /// Normal memory, write-back cacheable
+    Normal,
+    /// Device memory (MMIO)
+    Device,
+    /// Read-only memory
+    ReadOnly,
+}
+
+/// Dynamic identity mapper using heap allocation for page tables
+///
+/// This creates a 1:1 mapping where Guest PA == Host PA
+/// for a specified memory region, but uses dynamic allocation
+/// instead of static arrays.
+pub struct DynamicIdentityMapper {
+    /// Level 1 page table address (dynamically allocated)
+    l1_table: u64,
+    /// Level 2 page table addresses
+    l2_tables: [u64; 4],
+    /// Number of L2 tables allocated
+    l2_count: usize,
+}
+
+impl DynamicIdentityMapper {
+    /// Create a new dynamic identity mapper
+    pub fn new() -> Self {
+        let l1 = crate::mm::heap::alloc_page()
+            .expect("Failed to allocate L1 table");
+
+        // Zero-initialize the page table
+        unsafe {
+            core::ptr::write_bytes(l1 as *mut u8, 0, 4096);
+        }
+
+        Self {
+            l1_table: l1,
+            l2_tables: [0; 4],
+            l2_count: 0,
+        }
+    }
+
+    /// Map a memory region with identity mapping
+    ///
+    /// # Arguments
+    /// * `ipa` - Start address (Intermediate Physical Address)
+    /// * `size` - Size in bytes
+    /// * `attr` - Memory attributes
+    pub fn map_region(&mut self, ipa: u64, size: u64, attr: MemoryAttribute) -> Result<(), &'static str> {
+        let block_size = 0x20_0000u64; // 2MB
+        let mut offset = 0;
+
+        while offset < size {
+            let current_ipa = ipa + offset;
+            let l1_idx = ((current_ipa >> 30) & 0x1FF) as usize;
+            let l2_table = self.get_or_create_l2(l1_idx)?;
+            let l2_idx = ((current_ipa >> 21) & 0x1FF) as usize;
+            let entry = self.make_block_entry(current_ipa, attr);
+
+            unsafe {
+                let l2_ptr = l2_table as *mut u64;
+                *l2_ptr.add(l2_idx) = entry;
+            }
+
+            offset += block_size;
+        }
+        Ok(())
+    }
+
+    /// Get or create L2 table for given L1 index
+    fn get_or_create_l2(&mut self, l1_idx: usize) -> Result<u64, &'static str> {
+        let l1_entry = unsafe {
+            let l1_ptr = self.l1_table as *const u64;
+            *l1_ptr.add(l1_idx)
+        };
+
+        // Check if valid table entry already exists
+        if l1_entry & 0x3 == 0x3 {
+            return Ok(l1_entry & !0xFFF);
+        }
+
+        // Need to allocate new L2 table
+        if self.l2_count >= 4 {
+            return Err("Too many L2 tables");
+        }
+
+        let l2 = crate::mm::heap::alloc_page()
+            .ok_or("Failed to allocate L2 table")?;
+
+        // Zero-initialize
+        unsafe {
+            core::ptr::write_bytes(l2 as *mut u8, 0, 4096);
+        }
+
+        self.l2_tables[self.l2_count] = l2;
+        self.l2_count += 1;
+
+        // Create table descriptor and write to L1
+        let l1_entry = l2 | 0x3; // Valid + Table
+        unsafe {
+            let l1_ptr = self.l1_table as *mut u64;
+            *l1_ptr.add(l1_idx) = l1_entry;
+        }
+
+        Ok(l2)
+    }
+
+    /// Create a 2MB block entry
+    fn make_block_entry(&self, pa: u64, attr: MemoryAttribute) -> u64 {
+        // S2 descriptor for 2MB block:
+        // [1:0] = 01 (Block)
+        // [5:2] = MemAttr
+        // [7:6] = S2AP (Access permissions)
+        // [9:8] = SH (Shareability)
+        // [10] = AF (Access flag)
+        let attr_bits = match attr {
+            MemoryAttribute::Normal => {
+                // MemAttr=0b1111 (Normal WB), S2AP=0b11 (RW), SH=0b11 (Inner shareable), AF=1
+                (0b1111 << 2) | (0b11 << 6) | (0b11 << 8) | (1 << 10)
+            }
+            MemoryAttribute::Device => {
+                // MemAttr=0b0000 (Device-nGnRnE), S2AP=0b11 (RW), SH=0b00, AF=1
+                (0b0000 << 2) | (0b11 << 6) | (0b00 << 8) | (1 << 10)
+            }
+            MemoryAttribute::ReadOnly => {
+                // MemAttr=0b1111 (Normal), S2AP=0b01 (RO), SH=0b11, AF=1
+                (0b1111 << 2) | (0b01 << 6) | (0b11 << 8) | (1 << 10)
+            }
+        };
+        (pa & !0x1F_FFFF) | attr_bits | 0x1 // Block descriptor
+    }
+
+    /// Get VTTBR value (L1 table address)
+    pub fn vttbr(&self) -> u64 {
+        self.l1_table
+    }
+
+    /// Get the configuration for this mapper
+    pub fn config(&self) -> Stage2Config {
+        Stage2Config::new(self.l1_table)
+    }
+}
+
+impl Default for DynamicIdentityMapper {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 /// Initialize Stage-2 translation for a VM
 pub fn init_stage2(mapper: &IdentityMapper) {
     let config = mapper.config();
