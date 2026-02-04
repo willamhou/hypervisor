@@ -13,8 +13,8 @@ BINARY_BIN := $(BUILD_DIR)/$(TARGET).bin
 
 # QEMU configuration
 QEMU := qemu-system-aarch64
-QEMU_FLAGS := -machine virt,virtualization=on \
-              -cpu cortex-a72 \
+QEMU_FLAGS := -machine virt,virtualization=on,gic-version=3 \
+              -cpu max \
               -smp 1 \
               -m 1G \
               -nographic \
