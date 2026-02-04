@@ -20,8 +20,8 @@ fn uart_puts_local(s: &[u8]) {
 #[no_mangle]
 pub extern "C" fn rust_main() -> ! {
     uart_puts_local(b"========================================\n");
-    uart_puts_local(b"  ARM64 Hypervisor - Sprint 1.4\n");
-    uart_puts_local(b"  Device Emulation Test\n");
+    uart_puts_local(b"  ARM64 Hypervisor - Sprint 2.1\n");
+    uart_puts_local(b"  GICv3 Virtual Interface\n");
     uart_puts_local(b"========================================\n");
     uart_puts_local(b"\n");
     uart_puts_local(b"[INIT] Initializing at EL2...\n");
@@ -55,7 +55,10 @@ pub extern "C" fn rust_main() -> ! {
     
     // Run the MMIO device emulation test
     tests::run_mmio_test();
-    
+
+    // Run the GICv3 virtual interface test
+    tests::run_gicv3_virt_test();
+
     // Run the complete interrupt injection test (with guest exception vector)
     tests::run_complete_interrupt_test();
     
@@ -63,7 +66,7 @@ pub extern "C" fn rust_main() -> ! {
     tests::run_guest_test();
     
     uart_puts_local(b"\n========================================\n");
-    uart_puts_local(b"Sprint 1.6: Complete Interrupt Injection - COMPLETE\n");
+    uart_puts_local(b"Sprint 2.1: GICv3 Virtual Interface - COMPLETE\n");
     uart_puts_local(b"========================================\n");
     
     // Halt - we'll implement proper VM execution later

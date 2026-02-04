@@ -186,11 +186,23 @@ impl GicV3SystemRegs {
 }
 
 /// GICv3 Virtual Interface (for interrupt injection)
-/// 
+///
 /// These registers are used by the hypervisor to inject virtual interrupts
 /// into the guest. The guest sees these as real interrupts through its
 /// ICC_* registers.
 pub struct GicV3VirtualInterface;
+
+/// List Register state values
+impl GicV3VirtualInterface {
+    /// LR State: Invalid (free)
+    pub const LR_STATE_INVALID: u64 = 0b00;
+    /// LR State: Pending
+    pub const LR_STATE_PENDING: u64 = 0b01;
+    /// LR State: Active
+    pub const LR_STATE_ACTIVE: u64 = 0b10;
+    /// LR State: Pending and Active
+    pub const LR_STATE_PENDING_ACTIVE: u64 = 0b11;
+}
 
 impl GicV3VirtualInterface {
     /// Read ICH_HCR_EL2 - Hypervisor Control Register
@@ -354,6 +366,110 @@ impl GicV3VirtualInterface {
     pub fn num_list_registers() -> u32 {
         let vtr = Self::read_vtr();
         ((vtr & 0x1F) + 1) as u32
+    }
+
+    /// Build a List Register value
+    ///
+    /// # Arguments
+    /// * `intid` - Virtual interrupt ID (0-1023)
+    /// * `priority` - Interrupt priority (0-255, lower = higher priority)
+    ///
+    /// # Returns
+    /// A properly formatted LR value with state=Pending, group=Group1
+    pub fn build_lr(intid: u32, priority: u8) -> u64 {
+        (Self::LR_STATE_PENDING << 62)  // State = Pending
+            | (1u64 << 60)               // Group1
+            | ((priority as u64) << 48)  // Priority
+            | (intid as u64)             // vINTID
+    }
+
+    /// Extract the state field from a List Register value
+    ///
+    /// # Returns
+    /// State value (0=Invalid, 1=Pending, 2=Active, 3=Pending+Active)
+    #[inline]
+    pub fn get_lr_state(lr: u64) -> u64 {
+        (lr >> 62) & 0x3
+    }
+
+    /// Extract the INTID field from a List Register value
+    #[inline]
+    pub fn get_lr_intid(lr: u64) -> u32 {
+        (lr & 0xFFFF_FFFF) as u32
+    }
+
+    /// Extract the priority field from a List Register value
+    #[inline]
+    pub fn get_lr_priority(lr: u64) -> u8 {
+        ((lr >> 48) & 0xFF) as u8
+    }
+
+    /// Find a free (invalid state) List Register
+    ///
+    /// # Returns
+    /// Index of the first free LR, or None if all are in use
+    pub fn find_free_lr() -> Option<usize> {
+        let num_lrs = Self::num_list_registers() as usize;
+
+        for i in 0..num_lrs {
+            let lr = Self::read_lr(i as u32);
+            if Self::get_lr_state(lr) == Self::LR_STATE_INVALID {
+                return Some(i);
+            }
+        }
+        None
+    }
+
+    /// Get count of pending interrupts in List Registers
+    ///
+    /// Counts LRs that are in Pending or Pending+Active state.
+    pub fn pending_count() -> usize {
+        let num_lrs = Self::num_list_registers() as usize;
+        let mut count = 0;
+
+        for i in 0..num_lrs {
+            let lr = Self::read_lr(i as u32);
+            let state = Self::get_lr_state(lr);
+            if state == Self::LR_STATE_PENDING || state == Self::LR_STATE_PENDING_ACTIVE {
+                count += 1;
+            }
+        }
+        count
+    }
+
+    /// Check if GICv3 system register interface is available
+    ///
+    /// Reads ID_AA64PFR0_EL1 to check GIC version.
+    ///
+    /// # Returns
+    /// true if GICv3 or higher is available
+    pub fn is_available() -> bool {
+        is_gicv3_available()
+    }
+
+    /// Check ARMv8.4+ features for enhanced virtualization
+    ///
+    /// ARMv8.4 adds:
+    /// - Nested virtualization (NV, NV2)
+    /// - Enhanced VMID (16-bit)
+    /// - Data gathering hint
+    ///
+    /// # Returns
+    /// true if ARMv8.4+ features are available
+    pub fn has_armv8_4_features() -> bool {
+        let mmfr2: u64;
+        unsafe {
+            asm!(
+                "mrs {mmfr2}, ID_AA64MMFR2_EL1",
+                mmfr2 = out(reg) mmfr2,
+                options(nostack, nomem),
+            );
+        }
+
+        // Bits [27:24] = NV support (nested virtualization)
+        // 0001 = NV, NV2 supported (ARMv8.4)
+        let nv = (mmfr2 >> 24) & 0xF;
+        nv >= 1
     }
 }
 
