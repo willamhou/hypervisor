@@ -1,7 +1,81 @@
 //! Virtual Machine Management
-//! 
-//! This module provides the VM abstraction that contains one or more vCPUs
-//! and manages guest resources including memory.
+//!
+//! This module provides the [`Vm`] type which represents a complete virtual machine
+//! containing one or more vCPUs, Stage-2 memory mapping, and emulated devices.
+//!
+//! # Architecture
+//!
+//! ```text
+//! ┌──────────────────────────────────────────────────────────┐
+//! │                          Vm                              │
+//! ├──────────────────────────────────────────────────────────┤
+//! │  id: usize                    - VM identifier            │
+//! │  state: VmState               - Ready/Running/Paused/... │
+//! ├──────────────────────────────────────────────────────────┤
+//! │  vcpus[0..MAX_VCPUS]          - Virtual processors       │
+//! │  ┌────────┐ ┌────────┐ ┌────────┐                        │
+//! │  │ vCPU 0 │ │ vCPU 1 │ │  ...   │                        │
+//! │  └────────┘ └────────┘ └────────┘                        │
+//! ├──────────────────────────────────────────────────────────┤
+//! │  scheduler: Scheduler         - Round-robin vCPU sched   │
+//! ├──────────────────────────────────────────────────────────┤
+//! │  Stage-2 Page Tables          - IPA → PA translation     │
+//! │  ┌─────────────────────────────────────────────────┐     │
+//! │  │ Guest Memory (Normal)  │  MMIO (Device)         │     │
+//! │  │ 0x4000_0000-0x4020_0000│  0x0900_0000 (UART)    │     │
+//! │  └─────────────────────────────────────────────────┘     │
+//! ├──────────────────────────────────────────────────────────┤
+//! │  devices: DeviceManager       - MMIO trap-and-emulate    │
+//! └──────────────────────────────────────────────────────────┘
+//! ```
+//!
+//! # Example: Creating and Running a VM
+//!
+//! ```rust,ignore
+//! use hypervisor::vm::Vm;
+//!
+//! // Create a new VM
+//! let mut vm = Vm::new(0);
+//!
+//! // Initialize memory mapping
+//! vm.init_memory(0x4000_0000, 0x200000);
+//!
+//! // Create vCPUs
+//! {
+//!     let vcpu0 = vm.create_vcpu(0).unwrap();
+//!     vcpu0.context_mut().pc = guest_entry;
+//! }
+//! vm.create_vcpu(1).unwrap();
+//!
+//! // Run scheduler loop
+//! while let Some(vcpu_id) = vm.schedule() {
+//!     match vm.run_current() {
+//!         Ok(()) => {
+//!             // Guest exited normally
+//!             vm.mark_current_done();
+//!         }
+//!         Err("WFI") => {
+//!             // Guest waiting for interrupt
+//!             vm.block_current();
+//!         }
+//!         Err(e) => {
+//!             // Handle error
+//!             break;
+//!         }
+//!     }
+//! }
+//! ```
+//!
+//! # Memory Model
+//!
+//! The VM uses ARM Stage-2 translation to provide memory isolation:
+//!
+//! - **IPA (Intermediate Physical Address)**: Guest-visible physical addresses
+//! - **PA (Physical Address)**: Host physical addresses
+//! - **Identity Mapping**: IPA == PA for simplicity
+//!
+//! Guest memory accesses to unmapped MMIO regions cause Stage-2 faults,
+//! which are trapped to the hypervisor for device emulation.
 
 use crate::vcpu::Vcpu;
 use crate::arch::aarch64::{MemoryAttributes, init_stage2};
@@ -9,30 +83,48 @@ use crate::devices::DeviceManager;
 use crate::scheduler::Scheduler;
 
 /// Maximum number of vCPUs per VM
+///
+/// This limit is chosen to balance memory usage (each vCPU requires
+/// context storage) with practical multi-core guest support.
 pub const MAX_VCPUS: usize = 8;
 
-/// Virtual Machine State
+/// Virtual Machine lifecycle state
+///
+/// Tracks the overall state of the VM for lifecycle management.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum VmState {
-    /// VM is not initialized
+    /// VM created but no vCPUs or memory configured
     Uninitialized,
-    
-    /// VM is initialized and ready to run
+
+    /// VM fully configured and ready to execute
     Ready,
-    
-    /// VM is currently running
+
+    /// At least one vCPU is currently executing
     Running,
-    
-    /// VM is paused
+
+    /// VM execution suspended, can be resumed
     Paused,
-    
-    /// VM is stopped
+
+    /// VM terminated, requires reset to run again
     Stopped,
 }
 
 /// Virtual Machine
 ///
-/// Represents a complete virtual machine with one or more vCPUs and memory.
+/// A `Vm` represents a complete isolated execution environment containing:
+///
+/// - **vCPUs**: Up to [`MAX_VCPUS`] virtual processors
+/// - **Memory**: Stage-2 page tables for guest physical address translation
+/// - **Devices**: Emulated MMIO devices (UART, GIC, etc.)
+/// - **Scheduler**: Round-robin vCPU scheduling
+///
+/// # Lifecycle
+///
+/// 1. Create VM with `Vm::new(id)`
+/// 2. Initialize memory with `init_memory(start, size)`
+/// 3. Create vCPUs with `create_vcpu(id)`
+/// 4. Run scheduler loop with `schedule()` + `run_current()`
+/// 5. Stop with `stop()` when done
 pub struct Vm {
     /// Unique identifier for this VM
     id: usize,

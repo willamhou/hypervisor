@@ -1,12 +1,121 @@
-/// Device emulation framework
-/// 
-/// This module provides a framework for emulating MMIO devices using
-/// the trap-and-emulate approach.
+//! Device Emulation Framework
+//!
+//! This module provides the infrastructure for emulating hardware devices
+//! that guests interact with via MMIO (Memory-Mapped I/O).
+//!
+//! # Architecture
+//!
+//! ```text
+//! Guest Memory Access (Stage-2 Fault)
+//!              │
+//!              ▼
+//! ┌────────────────────────┐
+//! │   Data Abort Handler   │  (ESR_EL2.EC = 0x24/0x25)
+//! │   exception.rs         │
+//! └────────────────────────┘
+//!              │
+//!              ▼
+//! ┌────────────────────────┐
+//! │    DeviceManager       │  Routes by address range
+//! │    handle_mmio()       │
+//! └────────────────────────┘
+//!              │
+//!    ┌─────────┼─────────┐
+//!    ▼         ▼         ▼
+//! ┌──────┐ ┌───────┐ ┌───────┐
+//! │ UART │ │ GICD  │ │ (new) │
+//! │PL011 │ │       │ │       │
+//! └──────┘ └───────┘ └───────┘
+//!  0x0900   0x0800
+//!  _0000    _0000
+//! ```
+//!
+//! # Trap-and-Emulate Flow
+//!
+//! 1. Guest accesses MMIO address (e.g., `str x0, [x1]` to UART)
+//! 2. Stage-2 translation fails (no mapping or Device memory type)
+//! 3. Hardware traps to EL2 with Data Abort
+//! 4. Hypervisor decodes the faulting instruction
+//! 5. `DeviceManager::handle_mmio()` routes to appropriate device
+//! 6. Device emulates the read/write
+//! 7. Hypervisor updates guest registers and resumes
+//!
+//! # Adding a New Device
+//!
+//! 1. Create a new module (e.g., `src/devices/rtc.rs`)
+//! 2. Implement the [`MmioDevice`] trait
+//! 3. Add the device to [`DeviceManager`]
+//! 4. Map the MMIO region in Stage-2 tables (or leave unmapped for trap)
+//!
+//! ## Example: Custom Device
+//!
+//! ```rust,ignore
+//! use hypervisor::devices::MmioDevice;
+//!
+//! /// Simple counter device
+//! pub struct CounterDevice {
+//!     base: u64,
+//!     count: u32,
+//! }
+//!
+//! impl CounterDevice {
+//!     const REG_COUNT: u64 = 0x00;  // Read: current count
+//!     const REG_INCR: u64 = 0x04;   // Write: increment by value
+//!     const REG_RESET: u64 = 0x08;  // Write: reset to 0
+//!
+//!     pub fn new(base: u64) -> Self {
+//!         Self { base, count: 0 }
+//!     }
+//! }
+//!
+//! impl MmioDevice for CounterDevice {
+//!     fn read(&mut self, offset: u64, _size: u8) -> Option<u64> {
+//!         match offset {
+//!             Self::REG_COUNT => Some(self.count as u64),
+//!             _ => None,
+//!         }
+//!     }
+//!
+//!     fn write(&mut self, offset: u64, value: u64, _size: u8) -> bool {
+//!         match offset {
+//!             Self::REG_INCR => {
+//!                 self.count = self.count.wrapping_add(value as u32);
+//!                 true
+//!             }
+//!             Self::REG_RESET => {
+//!                 self.count = 0;
+//!                 true
+//!             }
+//!             _ => false,
+//!         }
+//!     }
+//!
+//!     fn base_address(&self) -> u64 { self.base }
+//!     fn size(&self) -> u64 { 0x1000 }  // 4KB region
+//! }
+//! ```
+//!
+//! # Supported Devices
+//!
+//! | Device | Base Address | Description |
+//! |--------|--------------|-------------|
+//! | PL011 UART | `0x0900_0000` | Serial console I/O |
+//! | GIC Distributor | `0x0800_0000` | Interrupt controller |
 
 pub mod pl011;
 pub mod gic;
 
-/// MMIO device trait
+/// Trait for MMIO-accessible devices
+///
+/// Implement this trait to create a new emulated device that can be
+/// accessed by guests through memory-mapped I/O.
+///
+/// # Implementation Notes
+///
+/// - `read()` and `write()` receive offsets relative to `base_address()`
+/// - `size` parameter indicates access width (1, 2, 4, or 8 bytes)
+/// - Return `None`/`false` for invalid offsets to signal access failure
+/// - Device state should be updated atomically where necessary
 pub trait MmioDevice {
     /// Read from device register
     /// 
@@ -44,7 +153,22 @@ pub trait MmioDevice {
     }
 }
 
-/// MMIO device manager
+/// MMIO Device Manager
+///
+/// Routes MMIO accesses to the appropriate emulated device based on
+/// the physical address. Acts as a dispatcher for all device emulation.
+///
+/// # Thread Safety
+///
+/// Currently not thread-safe. Access is serialized through the
+/// exception handler which runs with interrupts disabled.
+///
+/// # Device Routing
+///
+/// Addresses are checked in order:
+/// 1. UART (PL011) at `0x0900_0000`
+/// 2. GIC Distributor at `0x0800_0000`
+/// 3. Unknown addresses return 0 for reads
 pub struct DeviceManager {
     uart: pl011::VirtualUart,
     gicd: gic::VirtualGicd,

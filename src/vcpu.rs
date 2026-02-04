@@ -1,30 +1,128 @@
 //! Virtual CPU (vCPU) Management
-//! 
-//! This module provides the vCPU abstraction that represents a virtual
-//! CPU running in a guest VM.
+//!
+//! This module provides the [`Vcpu`] type which represents a virtual processor
+//! that can execute guest code. Each vCPU maintains its own register context,
+//! interrupt state, and execution state.
+//!
+//! # Architecture
+//!
+//! ```text
+//! ┌─────────────────────────────────────────┐
+//! │                 Vcpu                    │
+//! ├─────────────────────────────────────────┤
+//! │  id: usize          - vCPU identifier   │
+//! │  state: VcpuState   - Ready/Running/... │
+//! ├─────────────────────────────────────────┤
+//! │  VcpuContext                            │
+//! │  ├─ gp_regs (x0-x30)                    │
+//! │  ├─ sys_regs (ELR, SPSR, etc.)          │
+//! │  ├─ pc (program counter)                │
+//! │  └─ sp (stack pointer)                  │
+//! ├─────────────────────────────────────────┤
+//! │  VirtualInterruptState                  │
+//! │  └─ pending IRQ injection via HCR_EL2   │
+//! └─────────────────────────────────────────┘
+//! ```
+//!
+//! # State Machine
+//!
+//! ```text
+//!                    ┌──────────────┐
+//!                    │ Uninitialized│
+//!                    └──────┬───────┘
+//!                           │ new() / reset()
+//!                           ▼
+//!              ┌───────► Ready ◄───────┐
+//!              │            │          │
+//!              │            │ run()    │
+//!              │            ▼          │
+//!              │        Running ───────┘
+//!              │            │    (guest exit)
+//!              │            │
+//!              │            ▼
+//!              │        Stopped
+//!              │            │
+//!              └────────────┘
+//!                  reset()
+//! ```
+//!
+//! # Example
+//!
+//! ```rust,ignore
+//! use hypervisor::vcpu::Vcpu;
+//!
+//! // Create a vCPU with entry point and stack
+//! let mut vcpu = Vcpu::new(0, 0x4000_0000, 0x4001_0000);
+//!
+//! // Run the guest
+//! match vcpu.run() {
+//!     Ok(()) => println!("Guest exited normally"),
+//!     Err("WFI") => println!("Guest waiting for interrupt"),
+//!     Err(e) => println!("Error: {}", e),
+//! }
+//!
+//! // Inject an interrupt
+//! vcpu.inject_irq(27); // Timer interrupt
+//! ```
+//!
+//! # Interrupt Injection
+//!
+//! Virtual interrupts are injected using the GICv3 List Registers or the
+//! HCR_EL2.VI bit. When `inject_irq()` is called, the interrupt is marked
+//! as pending and will be delivered when the guest resumes execution with
+//! interrupts enabled.
 
 use crate::arch::aarch64::{VcpuContext, enter_guest};
 use crate::vcpu_interrupt::VirtualInterruptState;
 
-/// Virtual CPU State
+/// Virtual CPU execution state
+///
+/// Represents the current state of a vCPU in its lifecycle.
+///
+/// # State Transitions
+///
+/// | From | To | Trigger |
+/// |------|-----|---------|
+/// | `Uninitialized` | `Ready` | `new()` or `reset()` |
+/// | `Ready` | `Running` | `run()` called |
+/// | `Running` | `Ready` | Guest exit (HVC, WFI, etc.) |
+/// | `Running` | `Stopped` | Fatal error |
+/// | `Stopped` | `Ready` | `reset()` |
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum VcpuState {
-    /// vCPU is not initialized
+    /// vCPU has not been initialized with entry point
     Uninitialized,
-    
-    /// vCPU is ready to run
+
+    /// vCPU is ready to execute guest code
     Ready,
-    
-    /// vCPU is currently running
+
+    /// vCPU is currently executing in guest mode (EL1)
     Running,
-    
-    /// vCPU is stopped
+
+    /// vCPU has been stopped and cannot run
     Stopped,
 }
 
-/// Virtual CPU
-/// 
-/// Represents a single virtual CPU that can execute guest code.
+/// Virtual CPU (vCPU)
+///
+/// Represents a single virtual processor that can execute guest code at EL1.
+/// Each vCPU maintains its own register context, allowing multiple vCPUs
+/// to run independently within a VM.
+///
+/// # Thread Safety
+///
+/// A `Vcpu` is **not** thread-safe. Only one physical CPU should access
+/// a given `Vcpu` at a time. The hypervisor ensures this by binding vCPUs
+/// to physical CPUs during scheduling.
+///
+/// # Register Context
+///
+/// The vCPU saves and restores all guest-visible registers on entry/exit:
+/// - General purpose registers (x0-x30)
+/// - Stack pointer (SP_EL1)
+/// - Program counter (ELR_EL2)
+/// - Processor state (SPSR_EL2)
+/// - System registers (SCTLR_EL1, TTBR0_EL1, etc.)
 pub struct Vcpu {
     /// Unique identifier for this vCPU
     id: usize,

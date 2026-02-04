@@ -20,8 +20,8 @@ fn uart_puts_local(s: &[u8]) {
 #[no_mangle]
 pub extern "C" fn rust_main() -> ! {
     uart_puts_local(b"========================================\n");
-    uart_puts_local(b"  ARM64 Hypervisor - Sprint 2.3\n");
-    uart_puts_local(b"  Multi-vCPU Support\n");
+    uart_puts_local(b"  ARM64 Hypervisor - Sprint 2.4\n");
+    uart_puts_local(b"  API Documentation\n");
     uart_puts_local(b"========================================\n");
     uart_puts_local(b"\n");
     uart_puts_local(b"[INIT] Initializing at EL2...\n");
@@ -89,7 +89,7 @@ pub extern "C" fn rust_main() -> ! {
     tests::run_guest_test();
     
     uart_puts_local(b"\n========================================\n");
-    uart_puts_local(b"Sprint 2.3: Multi-vCPU Support - COMPLETE\n");
+    uart_puts_local(b"All Sprints Complete (2.1-2.4)\n");
     uart_puts_local(b"========================================\n");
     
     // Halt - we'll implement proper VM execution later
