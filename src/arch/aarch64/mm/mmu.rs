@@ -86,26 +86,34 @@ pub struct MemoryAttributes {
 }
 
 impl MemoryAttributes {
-    /// Normal memory, write-back cacheable
+    // Stage-2 Block Descriptor format (after << 2 in block()):
+    // bits [5:2]  = MemAttr[3:0]
+    // bits [7:6]  = S2AP[1:0] (00=None, 01=RO, 10=WO, 11=RW)
+    // bits [9:8]  = SH[1:0] (00=Non-shareable, 11=Inner shareable)
+    // bit  [10]   = AF (Access Flag, must be 1)
+
+    /// Normal memory, write-back cacheable, read-write
     pub const NORMAL: Self = Self {
         bits: (0b1111 << 0)  // MemAttr[3:0] = Normal, Write-back
+            | (0b11 << 4)     // S2AP[1:0] = Read-Write
             | (0b11 << 6)     // SH[1:0] = Inner shareable
-            | (0b11 << 8),    // AF=1, Accessed flag
+            | (1 << 8),       // AF = 1
     };
-    
-    /// Device memory (MMIO)
+
+    /// Device memory (MMIO), read-write
     pub const DEVICE: Self = Self {
         bits: (0b0000 << 0)  // MemAttr[3:0] = Device-nGnRnE
+            | (0b11 << 4)     // S2AP[1:0] = Read-Write
             | (0b00 << 6)     // SH[1:0] = Non-shareable
-            | (0b11 << 8),    // AF=1, Accessed flag
+            | (1 << 8),       // AF = 1
     };
-    
+
     /// Read-only memory
     pub const READONLY: Self = Self {
         bits: (0b1111 << 0)  // MemAttr[3:0] = Normal
+            | (0b01 << 4)     // S2AP[1:0] = Read-Only
             | (0b11 << 6)     // SH[1:0] = Inner shareable
-            | (0b11 << 8)     // AF=1
-            | (1 << 7),       // S2AP[1] = Read-only
+            | (1 << 8),       // AF = 1
     };
     
     /// Get raw bits
@@ -158,19 +166,23 @@ pub struct Stage2Config {
 
 impl Stage2Config {
     /// Create Stage-2 configuration
-    /// 
+    ///
     /// # Arguments
     /// * `page_table_addr` - Physical address of level 1 page table
     pub fn new(page_table_addr: u64) -> Self {
-        // VTCR_EL2 configuration:
-        // - T0SZ = 24 (40-bit IPA space)
-        // - SL0 = 1 (Start at level 1)
+        // VTCR_EL2 configuration for 4KB granule:
+        // - T0SZ = 25 (39-bit IPA space = 512GB, matches SL0=1)
+        // - SL0 = 1 (Start at level 1, covers up to 512GB)
         // - IRGN0 = 0b01 (Inner write-back cacheable)
         // - ORGN0 = 0b01 (Outer write-back cacheable)
         // - SH0 = 0b11 (Inner shareable)
         // - TG0 = 0b00 (4KB granule)
-        let vtcr = (24 << 0)      // T0SZ[5:0]
-            | (1 << 6)            // SL0[1:0] = 1
+        // - PS = 0b101 (48-bit PA space)
+        //
+        // Note: For SL0=1 (Level 1 start), T0SZ must be >= 25 for 4KB granule.
+        // IPA range: bits [38:0] = 512GB, enough for guest at 0x4800_0000.
+        let vtcr = (25 << 0)      // T0SZ[5:0] = 25 (512GB IPA)
+            | (1 << 6)            // SL0[1:0] = 1 (start at L1)
             | (0b01 << 8)         // IRGN0[1:0]
             | (0b01 << 10)        // ORGN0[1:0]
             | (0b11 << 12)        // SH0[1:0]
@@ -259,26 +271,40 @@ impl IdentityMapper {
         // Calculate indices
         let l1_index = ((addr >> 30) & 0x1FF) as usize; // Bits [38:30]
         let l2_index = ((addr >> 21) & 0x1FF) as usize; // Bits [29:21]
-        
-        // Check if L1 entry exists
-        if !self.l1_table.entry(l1_index).is_valid() {
-            // Allocate L2 table
+
+        // Check if L1 entry exists, allocate L2 table if needed
+        let l2_table_idx = if !self.l1_table.entry(l1_index).is_valid() {
+            // Allocate new L2 table
             if self.l2_count >= self.l2_tables.len() {
                 // Out of L2 tables (would need dynamic allocation)
                 return;
             }
-            
-            let l2_addr = self.l2_tables[self.l2_count].addr();
+
+            let idx = self.l2_count;
+            let l2_addr = self.l2_tables[idx].addr();
             self.l1_table.set_entry(l1_index, S2PageTableEntry::table(l2_addr));
             self.l2_count += 1;
-        }
-        
-        // Get L2 table index
-        let l2_table_idx = if l1_index == 0 { 0 } else { l1_index - 1 };
-        if l2_table_idx >= self.l2_count {
-            return;
-        }
-        
+            idx
+        } else {
+            // Find existing L2 table by matching address from L1 entry
+            let l1_entry = self.l1_table.entry(l1_index);
+            let l2_addr = l1_entry.addr();
+
+            // Search for matching L2 table
+            let mut found_idx = None;
+            for i in 0..self.l2_count {
+                if self.l2_tables[i].addr() == l2_addr {
+                    found_idx = Some(i);
+                    break;
+                }
+            }
+
+            match found_idx {
+                Some(idx) => idx,
+                None => return, // L2 table not found (shouldn't happen)
+            }
+        };
+
         // Set L2 entry (2MB block)
         self.l2_tables[l2_table_idx].set_entry(l2_index, S2PageTableEntry::block(addr, attrs));
     }
