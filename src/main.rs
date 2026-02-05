@@ -88,6 +88,9 @@ pub extern "C" fn rust_main() -> ! {
     // Run the original guest test (hypercall)
     tests::run_guest_test();
 
+    // Run the guest loader test
+    tests::run_guest_loader_test();
+
     // Check if we should boot a guest
     #[cfg(feature = "guest")]
     {
