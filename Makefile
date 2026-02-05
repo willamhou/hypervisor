@@ -35,6 +35,19 @@ run: build
 	@echo "Press Ctrl+A then X to exit QEMU"
 	$(QEMU) $(QEMU_FLAGS)
 
+# Guest ELF path (set via environment variable)
+GUEST_ELF ?=
+
+# Run hypervisor with guest ELF
+run-guest: build
+ifndef GUEST_ELF
+	$(error GUEST_ELF is not set. Usage: make run-guest GUEST_ELF=/path/to/zephyr.elf)
+endif
+	@echo "Starting QEMU with guest: $(GUEST_ELF)"
+	@echo "Press Ctrl+A then X to exit QEMU"
+	$(QEMU) $(QEMU_FLAGS) \
+	    -device loader,file=$(GUEST_ELF),addr=0x48000000
+
 # Run with GDB server (for debugging)
 debug: build
 	@echo "Starting QEMU with GDB server on port 1234..."
@@ -63,6 +76,7 @@ help:
 	@echo "  all     - Build the hypervisor (default)"
 	@echo "  build   - Build the hypervisor"
 	@echo "  run     - Build and run in QEMU"
+	@echo "  run-guest - Build and run with guest ELF (GUEST_ELF=/path/to/elf)"
 	@echo "  debug   - Build and run in QEMU with GDB server"
 	@echo "  clean   - Clean build artifacts"
 	@echo "  check   - Check code without building"
