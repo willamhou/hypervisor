@@ -91,6 +91,9 @@ pub extern "C" fn rust_main() -> ! {
     // Run the guest loader test
     tests::run_guest_loader_test();
 
+    // Run the simple guest test
+    tests::run_simple_guest_test();
+
     // Check if we should boot a guest
     #[cfg(feature = "guest")]
     {

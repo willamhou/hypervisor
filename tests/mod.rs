@@ -16,6 +16,7 @@ pub mod test_multi_vcpu;
 pub mod test_scheduler;
 pub mod test_vm_scheduler;
 pub mod test_guest_loader;
+pub mod test_simple_guest;
 
 // Re-export test functions for easy access
 pub use test_guest::run_test as run_guest_test;
@@ -32,3 +33,4 @@ pub use test_multi_vcpu::run_multi_vcpu_test;
 pub use test_scheduler::run_scheduler_test;
 pub use test_vm_scheduler::run_vm_scheduler_test;
 pub use test_guest_loader::run_test as run_guest_loader_test;
+pub use test_simple_guest::run_test as run_simple_guest_test;
