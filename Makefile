@@ -39,10 +39,14 @@ run: build
 GUEST_ELF ?=
 
 # Run hypervisor with guest ELF
-run-guest: build
+run-guest:
 ifndef GUEST_ELF
 	$(error GUEST_ELF is not set. Usage: make run-guest GUEST_ELF=/path/to/zephyr.elf)
 endif
+	@echo "Building hypervisor with guest support..."
+	cargo build --target aarch64-unknown-none --features guest
+	@echo "Creating raw binary..."
+	aarch64-linux-gnu-objcopy -O binary $(BINARY) $(BINARY_BIN)
 	@echo "Starting QEMU with guest: $(GUEST_ELF)"
 	@echo "Press Ctrl+A then X to exit QEMU"
 	$(QEMU) $(QEMU_FLAGS) \

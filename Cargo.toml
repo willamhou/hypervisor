@@ -19,6 +19,10 @@ path = "src/main.rs"
 panic = "abort"
 lto = false  # Disable LTO to prevent code elimination
 
+[features]
+default = []
+guest = []
+
 [profile.release]
 panic = "abort"
 lto = true

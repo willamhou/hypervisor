@@ -87,7 +87,27 @@ pub extern "C" fn rust_main() -> ! {
     
     // Run the original guest test (hypercall)
     tests::run_guest_test();
-    
+
+    // Check if we should boot a guest
+    #[cfg(feature = "guest")]
+    {
+        use hypervisor::guest_loader::{GuestConfig, run_guest};
+
+        uart_puts_local(b"\n[INIT] Booting guest VM...\n");
+
+        let config = GuestConfig::zephyr_default();
+        match run_guest(&config) {
+            Ok(()) => {
+                uart_puts_local(b"[INIT] Guest exited normally\n");
+            }
+            Err(e) => {
+                uart_puts_local(b"[INIT] Guest error: ");
+                uart_puts_local(e.as_bytes());
+                uart_puts_local(b"\n");
+            }
+        }
+    }
+
     uart_puts_local(b"\n========================================\n");
     uart_puts_local(b"All Sprints Complete (2.1-2.4)\n");
     uart_puts_local(b"========================================\n");
