@@ -22,14 +22,17 @@ pub struct GuestConfig {
 impl GuestConfig {
     /// Default configuration for Zephyr RTOS on qemu_cortex_a53
     ///
-    /// - Load address: 0x4800_0000
+    /// - Load address: 0x4800_0000 (offset to avoid DTB at 0x40000000)
     /// - Memory size: 128MB
-    /// - Entry point: 0x4800_10bc (Zephyr's actual _start)
+    /// - Entry point: 0x4800_0000 (for minimal test) or 0x4800_10bc (for Zephyr)
+    ///
+    /// Note: Zephyr is built with hypervisor_guest.overlay to link at 0x48000000.
     pub const fn zephyr_default() -> Self {
         Self {
             load_addr: 0x4800_0000,
             mem_size: 128 * 1024 * 1024, // 128MB
-            entry_point: 0x4800_10bc,  // Zephyr _start (from ELF header)
+            // Zephyr's actual entry point
+            entry_point: 0x4800_10bc,
         }
     }
 }
@@ -106,5 +109,27 @@ pub fn run_guest(config: &GuestConfig) -> Result<(), &'static str> {
     uart_puts(b"========================================\n\n");
 
     // Run VM
-    vm.run()
+    let result = vm.run();
+
+    // Debug: check UART state after guest exits
+    uart_puts(b"\n[GUEST] Guest exited, checking UART state...\n");
+    unsafe {
+        let uart_base = 0x09000000usize;
+        // Read UART Flag Register (UARTFR) at offset 0x18
+        let uartfr = core::ptr::read_volatile((uart_base + 0x18) as *const u32);
+        uart_puts(b"[GUEST] UART FR: 0x");
+        let fr_bytes = [
+            b"0123456789abcdef"[((uartfr >> 12) & 0xF) as usize],
+            b"0123456789abcdef"[((uartfr >> 8) & 0xF) as usize],
+            b"0123456789abcdef"[((uartfr >> 4) & 0xF) as usize],
+            b"0123456789abcdef"[(uartfr & 0xF) as usize],
+        ];
+        uart_puts(&fr_bytes);
+        uart_puts(b"\n");
+
+        // Write a test character to verify UART still works
+        uart_puts(b"[GUEST] Test output after guest: OK\n");
+    }
+
+    result
 }

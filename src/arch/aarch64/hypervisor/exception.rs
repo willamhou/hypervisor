@@ -132,10 +132,20 @@ pub extern "C" fn handle_exception(context: &mut VcpuContext) -> bool {
     // Count exception types for debugging
     use crate::arch::aarch64::regs::ExitReason as ER;
     static mut TOTAL_EXCEPTION_COUNT: u64 = 0;
+    static mut ZEPHYR_GUEST_STARTED: bool = false;
     unsafe {
         TOTAL_EXCEPTION_COUNT += 1;
-        // Print first few total exceptions
-        if TOTAL_EXCEPTION_COUNT <= 10 {
+        // Check if this is Zephyr guest (PC > 0x48000000)
+        let is_zephyr = context.pc >= 0x4800_0000 && context.pc < 0x5000_0000;
+        if is_zephyr && !ZEPHYR_GUEST_STARTED {
+            ZEPHYR_GUEST_STARTED = true;
+            uart_puts(b"[ZEPHYR] First exception from Zephyr guest\n");
+            // Reset counter for Zephyr
+            TOTAL_EXCEPTION_COUNT = 1;
+        }
+        // Print first 10 exceptions, or all Zephyr exceptions in first 20
+        let should_print = TOTAL_EXCEPTION_COUNT <= 10 || (is_zephyr && TOTAL_EXCEPTION_COUNT <= 20);
+        if should_print {
             uart_puts(b"[EXC] #");
             print_hex(TOTAL_EXCEPTION_COUNT);
             uart_puts(b" type=");
@@ -248,15 +258,44 @@ pub extern "C" fn handle_exception(context: &mut VcpuContext) -> bool {
     }
 }
 
+// PSCI function IDs (ARM Standard)
+const PSCI_VERSION: u64 = 0x84000000;
+const PSCI_CPU_SUSPEND_32: u64 = 0x84000001;
+const PSCI_CPU_OFF: u64 = 0x84000002;
+const PSCI_CPU_ON_32: u64 = 0x84000003;
+const PSCI_CPU_ON_64: u64 = 0xC4000003;
+const PSCI_AFFINITY_INFO_32: u64 = 0x84000004;
+const PSCI_AFFINITY_INFO_64: u64 = 0xC4000004;
+const PSCI_MIGRATE_INFO_TYPE: u64 = 0x84000006;
+const PSCI_SYSTEM_OFF: u64 = 0x84000008;
+const PSCI_SYSTEM_RESET: u64 = 0x84000009;
+const PSCI_FEATURES: u64 = 0x8400000A;
+
+// PSCI return values
+const PSCI_SUCCESS: u64 = 0;
+const PSCI_NOT_SUPPORTED: u64 = 0xFFFFFFFF; // -1 as unsigned
+const PSCI_INVALID_PARAMS: u64 = 0xFFFFFFFE; // -2 as unsigned
+const PSCI_DENIED: u64 = 0xFFFFFFFD; // -3 as unsigned
+
+// PSCI version: v0.2
+const PSCI_VERSION_0_2: u64 = 0x00000002;
+
 /// Handle hypercalls from guest
-/// 
+///
+/// Supports both custom hypercalls and PSCI standard calls.
+///
 /// # Returns
 /// * `true` - Continue running guest
 /// * `false` - Exit to host
 fn handle_hypercall(context: &mut VcpuContext) -> bool {
     use crate::uart_puts;
     let hypercall_num = context.gp_regs.x0;
-    
+
+    // Check if this is a PSCI call (bit 31 set indicates SMC/HVC standard call)
+    if hypercall_num & 0x80000000 != 0 {
+        return handle_psci(context, hypercall_num);
+    }
+
     match hypercall_num {
         0 => {
             // Hypercall 0: Print character
@@ -274,14 +313,14 @@ fn handle_hypercall(context: &mut VcpuContext) -> bool {
             context.gp_regs.x0 = 0; // Success
             true // Continue
         }
-        
+
         1 => {
             // Hypercall 1: Exit guest
             uart_puts(b"\n[VCPU] Guest requested exit\n");
             context.gp_regs.x0 = 0; // Success
             false // Exit - guest wants to terminate
         }
-        
+
         _ => {
             // Unknown hypercall
             uart_puts(b"\n[VCPU] Unknown hypercall: 0x");
@@ -289,6 +328,123 @@ fn handle_hypercall(context: &mut VcpuContext) -> bool {
             uart_puts(b"\n");
             context.gp_regs.x0 = !0; // Error
             false // Exit on error
+        }
+    }
+}
+
+/// Handle PSCI (Power State Coordination Interface) calls
+///
+/// Implements PSCI v0.2 for guest power management.
+///
+/// # Arguments
+/// * `context` - vCPU context
+/// * `function_id` - PSCI function ID from x0
+///
+/// # Returns
+/// * `true` - Continue running guest
+/// * `false` - Guest should exit
+fn handle_psci(context: &mut VcpuContext, function_id: u64) -> bool {
+    use crate::uart_puts;
+
+    // Debug: log PSCI calls (first few only)
+    static mut PSCI_CALL_COUNT: u32 = 0;
+    unsafe {
+        PSCI_CALL_COUNT += 1;
+        if PSCI_CALL_COUNT <= 10 {
+            uart_puts(b"[PSCI] Call: 0x");
+            print_hex(function_id);
+            uart_puts(b"\n");
+        }
+    }
+
+    match function_id {
+        PSCI_VERSION => {
+            // Return PSCI v0.2
+            context.gp_regs.x0 = PSCI_VERSION_0_2;
+            uart_puts(b"[PSCI] VERSION -> 0.2\n");
+            true
+        }
+
+        PSCI_FEATURES => {
+            // Query if a PSCI function is supported
+            let feature_id = context.gp_regs.x1;
+            let result = match feature_id {
+                PSCI_VERSION | PSCI_CPU_OFF | PSCI_SYSTEM_OFF |
+                PSCI_SYSTEM_RESET | PSCI_FEATURES => PSCI_SUCCESS,
+                PSCI_CPU_ON_32 | PSCI_CPU_ON_64 => PSCI_SUCCESS,
+                PSCI_AFFINITY_INFO_32 | PSCI_AFFINITY_INFO_64 => PSCI_SUCCESS,
+                _ => PSCI_NOT_SUPPORTED,
+            };
+            context.gp_regs.x0 = result;
+            true
+        }
+
+        PSCI_CPU_OFF => {
+            // CPU off - for single vCPU, this is like system halt
+            uart_puts(b"[PSCI] CPU_OFF\n");
+            context.gp_regs.x0 = PSCI_SUCCESS;
+            // For single-core guest, CPU_OFF means we're done
+            false
+        }
+
+        PSCI_CPU_ON_32 | PSCI_CPU_ON_64 => {
+            // CPU on - secondary CPU startup
+            // x1 = target CPU MPIDR
+            // x2 = entry point
+            // x3 = context ID
+            let _target_cpu = context.gp_regs.x1;
+            let _entry_point = context.gp_regs.x2;
+            let _context_id = context.gp_regs.x3;
+
+            uart_puts(b"[PSCI] CPU_ON (not fully implemented)\n");
+            // For now, return success but don't actually start another CPU
+            // Real implementation would need multi-vCPU support
+            context.gp_regs.x0 = PSCI_SUCCESS;
+            true
+        }
+
+        PSCI_AFFINITY_INFO_32 | PSCI_AFFINITY_INFO_64 => {
+            // Return affinity state
+            // 0 = ON, 1 = OFF, 2 = ON_PENDING
+            // For single vCPU, always return ON for CPU 0
+            let _target_affinity = context.gp_regs.x1;
+            context.gp_regs.x0 = 0; // ON
+            true
+        }
+
+        PSCI_MIGRATE_INFO_TYPE => {
+            // Return migration type (2 = not supported)
+            context.gp_regs.x0 = 2;
+            true
+        }
+
+        PSCI_SYSTEM_OFF => {
+            // System shutdown
+            uart_puts(b"[PSCI] SYSTEM_OFF\n");
+            false // Exit guest
+        }
+
+        PSCI_SYSTEM_RESET => {
+            // System reset
+            uart_puts(b"[PSCI] SYSTEM_RESET\n");
+            // For now, just exit - could implement reset later
+            false
+        }
+
+        PSCI_CPU_SUSPEND_32 => {
+            // CPU suspend - treat like WFI
+            uart_puts(b"[PSCI] CPU_SUSPEND\n");
+            context.gp_regs.x0 = PSCI_SUCCESS;
+            true
+        }
+
+        _ => {
+            // Unknown PSCI function
+            uart_puts(b"[PSCI] Unknown function: 0x");
+            print_hex(function_id);
+            uart_puts(b"\n");
+            context.gp_regs.x0 = PSCI_NOT_SUPPORTED;
+            true // Continue but return error
         }
     }
 }
