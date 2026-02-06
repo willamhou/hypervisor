@@ -128,19 +128,49 @@ pub extern "C" fn handle_exception(context: &mut VcpuContext) -> bool {
     
     // Get exit reason
     let exit_reason = context.exit_reason();
-    
+
+    // Count exception types for debugging
+    use crate::arch::aarch64::regs::ExitReason as ER;
+    static mut TOTAL_EXCEPTION_COUNT: u64 = 0;
+    unsafe {
+        TOTAL_EXCEPTION_COUNT += 1;
+        // Print first few total exceptions
+        if TOTAL_EXCEPTION_COUNT <= 10 {
+            uart_puts(b"[EXC] #");
+            print_hex(TOTAL_EXCEPTION_COUNT);
+            uart_puts(b" type=");
+            match exit_reason {
+                ER::WfiWfe => uart_puts(b"WFI"),
+                ER::HvcCall => uart_puts(b"HVC"),
+                ER::DataAbort => uart_puts(b"DAB"),
+                ER::TrapMsrMrs => uart_puts(b"MSR"),
+                _ => uart_puts(b"OTHER"),
+            }
+            uart_puts(b" PC=0x");
+            print_hex(context.pc);
+            uart_puts(b"\n");
+        }
+    }
+
     // For now, just handle basic cases
     use crate::arch::aarch64::regs::ExitReason;
     use crate::uart_puts;
-    
+
     match exit_reason {
         ExitReason::WfiWfe => {
             // Reset exception counter on successful WFI handling
             unsafe { EXCEPTION_COUNT = 0; }
+
             // WFI/WFE: Guest is waiting for interrupt
-            // Return exit code 1 to indicate WFI
-            // Don't advance PC - guest should resume from WFI when interrupt is injected
-            false // Exit with code 1 (WFI)
+            // Check if virtual timer is pending and inject it to guest
+            if handle_wfi_with_timer_injection(context.pc) {
+                // Advance PC past the WFI instruction
+                context.pc += 4;
+                true // Continue with injected interrupt
+            } else {
+                // No timer pending, exit to let host decide
+                false
+            }
         }
         
         ExitReason::HvcCall => {
@@ -171,7 +201,23 @@ pub extern "C" fn handle_exception(context: &mut VcpuContext) -> bool {
         ExitReason::DataAbort => {
             // Data abort - might be MMIO access
             let far = context.sys_regs.far_el2;
-            
+
+            // Debug: show GIC accesses
+            if far >= 0x0800_0000 && far < 0x0A00_0000 {
+                // This is a GIC access
+                static mut GIC_ACCESS_COUNT: u32 = 0;
+                unsafe {
+                    GIC_ACCESS_COUNT += 1;
+                    if GIC_ACCESS_COUNT <= 5 {
+                        uart_puts(b"[GIC MMIO] Access at 0x");
+                        print_hex(far);
+                        uart_puts(b" PC=0x");
+                        print_hex(context.pc);
+                        uart_puts(b"\n");
+                    }
+                }
+            }
+
             // Try to handle as MMIO
             if handle_mmio_abort(context, far) {
                 // Reset exception counter on successful MMIO
@@ -301,6 +347,178 @@ fn handle_mmio_abort(context: &mut VcpuContext, addr: u64) -> bool {
             }
         }
     }
+}
+
+/// WFI counter - track consecutive WFIs to detect infinite loops
+static mut WFI_CONSECUTIVE_COUNT: u32 = 0;
+static mut LAST_WFI_PC: u64 = 0;
+const MAX_CONSECUTIVE_WFI: u32 = 5000;
+
+/// Handle WFI by checking and injecting virtual timer interrupt
+///
+/// When guest executes WFI, it's waiting for an interrupt.
+/// We check if the virtual timer has fired and inject it via GICv3 List Registers.
+///
+/// Strategy:
+/// 1. If timer is pending, inject it and continue
+/// 2. If no timer pending, inject one anyway (the guest needs a tick)
+/// 3. If guest keeps calling WFI excessively, eventually exit
+///
+/// # Returns
+/// * `true` - Guest should continue (interrupt injected)
+/// * `false` - Guest should exit (stuck in WFI loop)
+fn handle_wfi_with_timer_injection(pc: u64) -> bool {
+    use crate::arch::aarch64::peripherals::timer;
+    use crate::arch::aarch64::peripherals::gicv3::{GicV3VirtualInterface, VTIMER_IRQ};
+    use crate::uart_puts;
+
+    let count = unsafe { WFI_CONSECUTIVE_COUNT };
+    let last_pc = unsafe { LAST_WFI_PC };
+
+    // Check if PC changed - that means guest is making progress
+    if pc != last_pc {
+        // Reset counter on progress
+        unsafe {
+            WFI_CONSECUTIVE_COUNT = 0;
+            LAST_WFI_PC = pc;
+        }
+        uart_puts(b"[WFI] New location PC=0x");
+        print_hex(pc);
+        uart_puts(b"\n");
+
+        // Print VBAR_EL1 on first WFI to check if guest exception vectors are set up
+        let vbar: u64;
+        unsafe {
+            core::arch::asm!("mrs {}, vbar_el1", out(reg) vbar);
+        }
+        uart_puts(b"[WFI] Guest VBAR_EL1 = 0x");
+        print_hex(vbar);
+        uart_puts(b"\n");
+
+        // Inject an interrupt on first WFI too - the guest needs it
+        let _ = GicV3VirtualInterface::inject_interrupt(VTIMER_IRQ, 0xA0);
+        return true;
+    }
+
+    // Debug output for first few WFIs at same location
+    if count < 3 {
+        uart_puts(b"[WFI] #");
+        print_hex(count as u64);
+        uart_puts(b" at PC=0x");
+        print_hex(pc);
+        uart_puts(b"\n");
+    }
+
+    // Increment WFI counter
+    unsafe {
+        WFI_CONSECUTIVE_COUNT += 1;
+        if WFI_CONSECUTIVE_COUNT > MAX_CONSECUTIVE_WFI {
+            // Guest is stuck in WFI loop without making progress
+            uart_puts(b"[WFI] Stuck at same PC (count=");
+            print_hex(WFI_CONSECUTIVE_COUNT as u64);
+            uart_puts(b", max=");
+            print_hex(MAX_CONSECUTIVE_WFI as u64);
+            uart_puts(b"), exiting\n");
+            return false;
+        }
+    }
+
+    // Check if virtual timer is pending
+    if timer::is_guest_vtimer_pending() {
+        // Reset WFI counter on successful timer handling
+        unsafe { WFI_CONSECUTIVE_COUNT = 0; }
+
+        if count < 10 {
+            uart_puts(b"[WFI] Timer pending, injecting IRQ 27\n");
+        }
+
+        // Mask the timer to prevent continuous firing
+        timer::mask_guest_vtimer();
+
+        // Inject virtual timer interrupt (IRQ 27) to guest via GICv3 List Register
+        let _ = GicV3VirtualInterface::inject_interrupt(VTIMER_IRQ, 0xA0);
+        return true;
+    }
+
+    // No timer pending - check if any interrupt is pending in List Registers
+    if GicV3VirtualInterface::pending_count() > 0 {
+        // Reset counter - there's work to do
+        unsafe { WFI_CONSECUTIVE_COUNT = 0; }
+        return true;
+    }
+
+    // No interrupts pending at all
+    // Inject a timer interrupt anyway - the guest needs a tick to make progress
+    // This simulates a periodic timer tick that RTOSes need for scheduling
+    if count % 100 == 0 && count < 1000 {
+        if count < 10 {
+            uart_puts(b"[WFI] No timer, injecting periodic tick\n");
+        }
+        let _ = GicV3VirtualInterface::inject_interrupt(VTIMER_IRQ, 0xA0);
+
+        // Debug: print GIC virtual interface state after injection
+        if count == 0 {
+            debug_print_gic_state();
+        }
+    }
+
+    // Allow guest to continue
+    true
+}
+
+/// Debug: Print GIC virtual interface state
+fn debug_print_gic_state() {
+    use crate::uart_puts;
+    use crate::arch::aarch64::peripherals::gicv3::GicV3VirtualInterface;
+
+    uart_puts(b"[DEBUG] GIC state:\n");
+
+    // Read ICH_HCR_EL2
+    let hcr = GicV3VirtualInterface::read_hcr();
+    uart_puts(b"  ICH_HCR_EL2 = 0x");
+    print_hex(hcr as u64);
+    uart_puts(b" (En=");
+    if hcr & 1 != 0 { uart_puts(b"1)\n"); } else { uart_puts(b"0)\n"); }
+
+    // Read ICH_VMCR_EL2
+    let vmcr = GicV3VirtualInterface::read_vmcr();
+    uart_puts(b"  ICH_VMCR_EL2 = 0x");
+    print_hex(vmcr as u64);
+    uart_puts(b"\n");
+    uart_puts(b"    VPMR (bits 31:24) = 0x");
+    print_hex(((vmcr >> 24) & 0xFF) as u64);
+    uart_puts(b"\n");
+    uart_puts(b"    VENG1 (bit 1) = ");
+    if vmcr & 2 != 0 { uart_puts(b"1\n"); } else { uart_puts(b"0\n"); }
+
+    // Read List Register 0
+    let lr0 = GicV3VirtualInterface::read_lr(0);
+    uart_puts(b"  ICH_LR0 = 0x");
+    print_hex(lr0);
+    uart_puts(b"\n");
+    let state = (lr0 >> 62) & 0x3;
+    uart_puts(b"    State = ");
+    match state {
+        0 => uart_puts(b"Invalid\n"),
+        1 => uart_puts(b"Pending\n"),
+        2 => uart_puts(b"Active\n"),
+        3 => uart_puts(b"Pending+Active\n"),
+        _ => uart_puts(b"Unknown\n"),
+    }
+    let intid = (lr0 & 0xFFFF_FFFF) as u32;
+    uart_puts(b"    INTID = ");
+    print_hex(intid as u64);
+    uart_puts(b"\n");
+
+    // Read SPSR_EL2 to check if guest IRQs are masked
+    let spsr: u64;
+    unsafe {
+        core::arch::asm!("mrs {}, spsr_el2", out(reg) spsr);
+    }
+    uart_puts(b"  SPSR_EL2 = 0x");
+    print_hex(spsr);
+    uart_puts(b" (I=");
+    if spsr & (1 << 7) != 0 { uart_puts(b"1-masked)\n"); } else { uart_puts(b"0-unmasked)\n"); }
 }
 
 /// Handle IRQ interrupts

@@ -24,12 +24,12 @@ impl GuestConfig {
     ///
     /// - Load address: 0x4800_0000
     /// - Memory size: 128MB
-    /// - Entry point: 0x4800_0000
+    /// - Entry point: 0x4800_10bc (Zephyr's actual _start)
     pub const fn zephyr_default() -> Self {
         Self {
             load_addr: 0x4800_0000,
             mem_size: 128 * 1024 * 1024, // 128MB
-            entry_point: 0x4800_0000,
+            entry_point: 0x4800_10bc,  // Zephyr _start (from ELF header)
         }
     }
 }
@@ -94,6 +94,10 @@ pub fn run_guest(config: &GuestConfig) -> Result<(), &'static str> {
             return Err(e);
         }
     }
+
+    // Initialize guest timer access (allows guest to use virtual timer)
+    uart_puts(b"[GUEST] Configuring virtual timer for guest...\n");
+    crate::arch::aarch64::peripherals::timer::init_guest_timer();
 
     // Enter guest
     uart_puts(b"[GUEST] Entering guest at 0x");

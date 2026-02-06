@@ -101,6 +101,65 @@ pub fn init_hypervisor_timer() {
     }
 }
 
+/// Configure timer access for guest VM
+///
+/// This allows the guest to access its virtual timer (CNTV_*)
+/// which is essential for RTOS scheduling.
+pub fn init_guest_timer() {
+    let mut cnthctl: u64;
+    unsafe {
+        asm!("mrs {}, cnthctl_el2", out(reg) cnthctl);
+    }
+
+    // EL1PCTEN (bit 0): EL0/EL1 can access physical counter (CNTPCT_EL0)
+    // EL1PCEN (bit 1): EL0/EL1 can access physical timer
+    // Note: Virtual timer (CNTV_*) is always accessible from EL1
+    // but we need to ensure physical counter is readable for time calculations
+    cnthctl |= (1 << 0);  // Allow EL1 access to physical counter
+
+    unsafe {
+        asm!("msr cnthctl_el2, {}", in(reg) cnthctl);
+        asm!("isb");
+    }
+
+    // Set virtual timer offset to 0 (guest sees same time as hypervisor)
+    unsafe {
+        asm!("msr cntvoff_el2, xzr");
+        asm!("isb");
+    }
+}
+
+/// Check if the guest's virtual timer is enabled and pending
+///
+/// Returns true if the guest's virtual timer has fired
+pub fn is_guest_vtimer_pending() -> bool {
+    let ctl: u64;
+    unsafe {
+        asm!("mrs {}, cntv_ctl_el0", out(reg) ctl);
+    }
+    // Timer is pending if: ENABLE=1 and ISTATUS=1 and IMASK=0
+    let enabled = (ctl & TIMER_ENABLE) != 0;
+    let pending = (ctl & TIMER_ISTATUS) != 0;
+    let masked = (ctl & TIMER_IMASK) != 0;
+    enabled && pending && !masked
+}
+
+/// Mask the guest's virtual timer interrupt
+///
+/// This prevents the timer from continuously firing while we handle it.
+/// The guest will unmask it when it's ready for another interrupt.
+pub fn mask_guest_vtimer() {
+    let mut ctl: u64;
+    unsafe {
+        asm!("mrs {}, cntv_ctl_el0", out(reg) ctl);
+    }
+    ctl |= TIMER_IMASK;  // Set IMASK bit
+    unsafe {
+        asm!("msr cntv_ctl_el0, {}", in(reg) ctl);
+        asm!("isb");
+    }
+}
+
 /// Enable the virtual timer with a timeout in ticks
 pub fn enable_timer(ticks: u32) {
     // Disable timer first

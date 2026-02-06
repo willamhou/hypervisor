@@ -21,6 +21,7 @@ fn main() {
             
             println!("cargo:rerun-if-changed={}", asm_src);
             
+            // Try gcc first, fall back to as
             let status = Command::new("aarch64-linux-gnu-gcc")
                 .args(&[
                     "-c",
@@ -31,6 +32,16 @@ fn main() {
                     "-ffreestanding",
                 ])
                 .status()
+                .or_else(|_| {
+                    // Fallback to using assembler directly
+                    Command::new("aarch64-linux-gnu-as")
+                        .args(&[
+                            asm_src,
+                            "-o",
+                            obj_path.to_str().unwrap(),
+                        ])
+                        .status()
+                })
                 .unwrap_or_else(|_| panic!("Failed to compile {}", asm_src));
             
             assert!(status.success(), "Failed to compile {}", asm_src);

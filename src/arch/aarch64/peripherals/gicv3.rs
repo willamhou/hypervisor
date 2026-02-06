@@ -233,6 +233,38 @@ impl GicV3VirtualInterface {
         }
     }
 
+    /// Read ICH_VMCR_EL2 - Virtual Machine Control Register
+    /// Controls virtual CPU interface seen by guest
+    #[inline]
+    pub fn read_vmcr() -> u32 {
+        let vmcr: u64;
+        unsafe {
+            asm!(
+                "mrs {vmcr}, ICH_VMCR_EL2",
+                vmcr = out(reg) vmcr,
+                options(nostack, nomem),
+            );
+        }
+        vmcr as u32
+    }
+
+    /// Write ICH_VMCR_EL2 - Virtual Machine Control Register
+    ///
+    /// Bits [31:24]: VPMR (Virtual Priority Mask)
+    /// Bits [20:18]: VBPR1 (Virtual Binary Point for Group 1)
+    /// Bit 1: VENG1 (Virtual Group 1 interrupt enable)
+    /// Bit 0: VENG0 (Virtual Group 0 interrupt enable)
+    #[inline]
+    pub fn write_vmcr(value: u32) {
+        unsafe {
+            asm!(
+                "msr ICH_VMCR_EL2, {value}",
+                value = in(reg) value as u64,
+                options(nostack, nomem),
+            );
+        }
+    }
+
     /// Read ICH_VTR_EL2 - VGIC Type Register
     /// Reports the number of list registers and priority bits
     #[inline]
@@ -348,15 +380,24 @@ impl GicV3VirtualInterface {
         // Enable virtual interrupts
         // Bit 0 (En): Enable
         Self::write_hcr(1);
-        
+
+        // Configure ICH_VMCR_EL2 for guest virtual CPU interface
+        // This is CRITICAL for the guest to receive virtual interrupts!
+        // Bits [31:24]: VPMR = 0xFF (allow all priorities)
+        // Bits [20:18]: VBPR1 = 0 (no preemption grouping)
+        // Bit 1: VENG1 = 1 (enable Group 1 interrupts for guest)
+        let vmcr: u32 = (0xFF << 24) | // VPMR: allow all interrupt priorities
+                        (1 << 1);       // VENG1: enable virtual Group 1 interrupts
+        Self::write_vmcr(vmcr);
+
         // Clear all list registers
         let vtr = Self::read_vtr();
         let num_lrs = ((vtr & 0x1F) + 1) as u32;
-        
+
         for i in 0..num_lrs {
             Self::write_lr(i, 0);
         }
-        
+
         unsafe {
             asm!("isb", options(nostack, nomem));
         }

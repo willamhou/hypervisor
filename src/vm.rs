@@ -233,6 +233,12 @@ impl Vm {
             let gicd_base = 0x08000000u64;
             let gicd_size = 2 * 1024 * 1024;  // 2MB block
             MAPPER.map_region(gicd_base, gicd_size, MemoryAttributes::DEVICE);
+
+            // GIC Redistributor: 0x080A0000 - 0x08100000 for GICv3
+            // Note: Redistributor is at different address than Distributor
+            let gicr_base = 0x080A0000u64 & !(2 * 1024 * 1024 - 1);  // Align to 2MB
+            let gicr_size = 2 * 1024 * 1024;  // 2MB block
+            MAPPER.map_region(gicr_base, gicr_size, MemoryAttributes::DEVICE);
             
             // Initialize Stage-2 translation
             init_stage2(&MAPPER);
