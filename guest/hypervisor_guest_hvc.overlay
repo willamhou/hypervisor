@@ -1,0 +1,24 @@
+/* Overlay for running Zephyr as hypervisor guest with HVC console */
+
+/* Relocate SRAM to 0x48000000 */
+&sram0 {
+	reg = <0x0 0x48000000 0x0 DT_SIZE_M(128)>;
+};
+
+/* Add Jailhouse HVC UART device */
+/ {
+	jailhouse_uart: jailhouse_uart {
+		compatible = "jailhouse,hvc-uart";
+		status = "okay";
+	};
+
+	chosen {
+		zephyr,shell-uart = &jailhouse_uart;
+		zephyr,console = &jailhouse_uart;
+	};
+};
+
+/* Disable the original UART since we're using HVC */
+&uart0 {
+	status = "disabled";
+};
