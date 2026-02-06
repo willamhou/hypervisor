@@ -298,6 +298,7 @@ const PSCI_VERSION_0_2: u64 = 0x00000002;
 // HVC #0x4a48 is "JH" in ASCII - Jailhouse hypercall signature
 const JAILHOUSE_HVC_IMMEDIATE: u32 = 0x4a48;
 const JAILHOUSE_HC_DEBUG_CONSOLE_PUTC: u64 = 8;
+const JAILHOUSE_HC_DEBUG_CONSOLE_GETC: u64 = 9;
 
 /// Handle hypercalls from guest
 ///
@@ -389,6 +390,39 @@ fn handle_jailhouse_debug_console(context: &mut VcpuContext) -> bool {
                 );
             }
             context.gp_regs.x0 = 0; // Success
+            true // Continue
+        }
+        JAILHOUSE_HC_DEBUG_CONSOLE_GETC => {
+            // Input character - read from real UART
+            // Returns character in x0, or -1 if no character available
+            let uart_base = 0x09000000usize;
+            let uart_fr = uart_base + 0x18; // Flag register
+
+            unsafe {
+                // Check if RX FIFO has data (FR bit 4 = RXFE, 0 = has data)
+                let fr: u32;
+                core::arch::asm!(
+                    "ldr {val:w}, [{addr}]",
+                    addr = in(reg) uart_fr,
+                    val = out(reg) fr,
+                    options(nostack, readonly),
+                );
+
+                if fr & (1 << 4) == 0 {
+                    // Data available, read it
+                    let ch: u32;
+                    core::arch::asm!(
+                        "ldr {val:w}, [{addr}]",
+                        addr = in(reg) uart_base,
+                        val = out(reg) ch,
+                        options(nostack, readonly),
+                    );
+                    context.gp_regs.x0 = (ch & 0xFF) as u64;
+                } else {
+                    // No data available
+                    context.gp_regs.x0 = !0u64; // -1
+                }
+            }
             true // Continue
         }
         _ => {
