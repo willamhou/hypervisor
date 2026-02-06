@@ -226,17 +226,17 @@ pub extern "C" fn handle_exception(context: &mut VcpuContext) -> bool {
             // Data abort - might be MMIO access
             let far = context.sys_regs.far_el2;
 
-            // Debug: show GIC accesses
-            if far >= 0x0800_0000 && far < 0x0A00_0000 {
-                // This is a GIC access
-                static mut GIC_ACCESS_COUNT: u32 = 0;
+            // Debug: show UART accesses from Zephyr guest (0x4800xxxx)
+            if far >= 0x0900_0000 && far < 0x0901_0000 && context.pc >= 0x4800_0000 {
+                // This is a UART access from Zephyr guest
+                static mut UART_ACCESS_COUNT: u32 = 0;
                 unsafe {
-                    GIC_ACCESS_COUNT += 1;
-                    if GIC_ACCESS_COUNT <= 5 {
-                        uart_puts(b"[GIC MMIO] Access at 0x");
-                        print_hex(far);
-                        uart_puts(b" PC=0x");
+                    UART_ACCESS_COUNT += 1;
+                    if UART_ACCESS_COUNT <= 20 {
+                        uart_puts(b"[UART MMIO] Guest PC=0x");
                         print_hex(context.pc);
+                        uart_puts(b" addr=0x");
+                        print_hex(far);
                         uart_puts(b"\n");
                     }
                 }

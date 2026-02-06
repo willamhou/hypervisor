@@ -222,13 +222,11 @@ impl Vm {
         
         unsafe {
             MAPPER.map_region(start_aligned, size_aligned, MemoryAttributes::NORMAL);
-            
+
             // Map MMIO device regions (DEVICE memory type)
-            // UART (PL011): 0x09000000 - 0x09001000 (4KB)
-            let uart_base = 0x09000000u64;
-            let uart_size = 2 * 1024 * 1024;  // 2MB block
-            MAPPER.map_region(uart_base, uart_size, MemoryAttributes::DEVICE);
-            
+            // NOTE: UART is NOT mapped - accesses will trap for virtualization
+            // This allows the hypervisor to emulate UART I/O
+
             // GIC Distributor: 0x08000000 - 0x08010000 (64KB)
             let gicd_base = 0x08000000u64;
             let gicd_size = 2 * 1024 * 1024;  // 2MB block
@@ -239,7 +237,10 @@ impl Vm {
             let gicr_base = 0x080A0000u64 & !(2 * 1024 * 1024 - 1);  // Align to 2MB
             let gicr_size = 2 * 1024 * 1024;  // 2MB block
             MAPPER.map_region(gicr_base, gicr_size, MemoryAttributes::DEVICE);
-            
+
+            // NOTE: UART is NOT mapped - Zephyr uses Jailhouse console (HVC) instead
+            // UART virtualization is deferred for now
+
             // Initialize Stage-2 translation
             init_stage2(&MAPPER);
         }
