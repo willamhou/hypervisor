@@ -26,6 +26,64 @@ pub const PTIMER_IRQ: u32 = 30;
 pub struct GicV3SystemRegs;
 
 impl GicV3SystemRegs {
+    /// Read ICC_SRE_EL2 - System Register Enable (EL2)
+    /// Controls system register interface and guest access
+    #[inline]
+    pub fn read_sre_el2() -> u32 {
+        let sre: u64;
+        unsafe {
+            asm!(
+                "mrs {sre}, ICC_SRE_EL2",
+                sre = out(reg) sre,
+                options(nostack, nomem),
+            );
+        }
+        sre as u32
+    }
+
+    /// Write ICC_SRE_EL2
+    /// Bit 0 (SRE): Enable system register interface at EL2
+    /// Bit 3 (Enable): Enable lower EL access to ICC_* registers
+    #[inline]
+    pub fn write_sre_el2(value: u32) {
+        unsafe {
+            asm!(
+                "msr ICC_SRE_EL2, {value}",
+                value = in(reg) value as u64,
+                options(nostack, nomem),
+            );
+            asm!("isb", options(nostack, nomem));
+        }
+    }
+
+    /// Read ICC_SRE_EL1 - System Register Enable (EL1)
+    #[inline]
+    pub fn read_sre_el1() -> u32 {
+        let sre: u64;
+        unsafe {
+            asm!(
+                "mrs {sre}, ICC_SRE_EL1",
+                sre = out(reg) sre,
+                options(nostack, nomem),
+            );
+        }
+        sre as u32
+    }
+
+    /// Write ICC_SRE_EL1
+    /// Bit 0 (SRE): Enable system register interface at EL1
+    #[inline]
+    pub fn write_sre_el1(value: u32) {
+        unsafe {
+            asm!(
+                "msr ICC_SRE_EL1, {value}",
+                value = in(reg) value as u64,
+                options(nostack, nomem),
+            );
+            asm!("isb", options(nostack, nomem));
+        }
+    }
+
     /// Read ICC_IAR1_EL1 - Interrupt Acknowledge Register
     /// Returns the INTID of the highest priority pending interrupt
     #[inline]
@@ -535,22 +593,35 @@ pub fn is_gicv3_available() -> bool {
 /// Initialize GICv3 for hypervisor use
 pub fn init() {
     crate::uart_puts(b"[GIC] Checking GICv3/v4 availability...\n");
-    
+
     if !is_gicv3_available() {
         crate::uart_puts(b"[GIC] GICv3 not available, falling back to GICv2\n");
         // Fall back to GICv2 initialization
         super::gic::init();
         return;
     }
-    
+
     crate::uart_puts(b"[GIC] Initializing GICv3/v4 (system register interface)...\n");
-    
+
+    // Configure ICC_SRE_EL2 - CRITICAL for guest interrupt handling
+    // Bit 0 (SRE): Enable system register interface at EL2
+    // Bit 3 (Enable): Allow EL1 (guest) to access ICC_* system registers
+    // Without this, guest cannot read/write ICC_IAR1_EL1, ICC_EOIR1_EL1, etc.
+    let sre_el2: u32 = (1 << 0)  // SRE: Enable system register interface
+                     | (1 << 3); // Enable: Allow EL1 access to ICC_*
+    GicV3SystemRegs::write_sre_el2(sre_el2);
+    crate::uart_puts(b"[GIC] ICC_SRE_EL2 configured (Enable=1, SRE=1)\n");
+
+    // Also set ICC_SRE_EL1 to enable system register interface for guest
+    // This may be overwritten by guest, but set sensible defaults
+    GicV3SystemRegs::write_sre_el1(1); // SRE=1
+
     // Read VGIC type to report capabilities
     // Note: This requires EL2 virtualization extensions
     let vtr = GicV3VirtualInterface::read_vtr();
     let num_lrs = ((vtr & 0x1F) + 1) as u32;
     let num_priority_bits = ((vtr >> 29) & 0x7) + 1;
-    
+
     crate::uart_puts(b"[GIC] VGIC capabilities:\n");
     crate::uart_puts(b"  - List Registers: ");
     print_num(num_lrs);
@@ -558,13 +629,13 @@ pub fn init() {
     crate::uart_puts(b"  - Priority bits: ");
     print_num(num_priority_bits);
     crate::uart_puts(b"\n");
-    
+
     // Initialize virtual interrupt interface
     GicV3VirtualInterface::init();
-    
+
     // Enable interrupt delivery to this CPU
     GicV3SystemRegs::enable();
-    
+
     crate::uart_puts(b"[GIC] GICv3 initialization complete\n");
 }
 

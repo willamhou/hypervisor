@@ -133,18 +133,25 @@ pub extern "C" fn handle_exception(context: &mut VcpuContext) -> bool {
     use crate::arch::aarch64::regs::ExitReason as ER;
     static mut TOTAL_EXCEPTION_COUNT: u64 = 0;
     static mut ZEPHYR_GUEST_STARTED: bool = false;
+    static mut ZEPHYR_EXC_COUNT: u64 = 0;
     unsafe {
         TOTAL_EXCEPTION_COUNT += 1;
         // Check if this is Zephyr guest (PC > 0x48000000)
         let is_zephyr = context.pc >= 0x4800_0000 && context.pc < 0x5000_0000;
-        if is_zephyr && !ZEPHYR_GUEST_STARTED {
-            ZEPHYR_GUEST_STARTED = true;
-            uart_puts(b"[ZEPHYR] First exception from Zephyr guest\n");
-            // Reset counter for Zephyr
-            TOTAL_EXCEPTION_COUNT = 1;
+        if is_zephyr {
+            ZEPHYR_EXC_COUNT += 1;
+            if !ZEPHYR_GUEST_STARTED {
+                ZEPHYR_GUEST_STARTED = true;
+                uart_puts(b"\n[ZEPHYR] Guest started\n");
+                // Reset counter for Zephyr
+                TOTAL_EXCEPTION_COUNT = 1;
+            }
         }
-        // Print first 10 exceptions, or all Zephyr exceptions in first 20
-        let should_print = TOTAL_EXCEPTION_COUNT <= 10 || (is_zephyr && TOTAL_EXCEPTION_COUNT <= 20);
+        // Only print non-HVC exceptions for Zephyr (to avoid noise from Jailhouse console)
+        // For non-Zephyr, print first 10
+        let is_jailhouse_console = exit_reason == ER::HvcCall && is_zephyr;
+        let should_print = !is_jailhouse_console &&
+            (TOTAL_EXCEPTION_COUNT <= 10 || (is_zephyr && ZEPHYR_EXC_COUNT <= 5));
         if should_print {
             uart_puts(b"[EXC] #");
             print_hex(TOTAL_EXCEPTION_COUNT);
@@ -152,9 +159,16 @@ pub extern "C" fn handle_exception(context: &mut VcpuContext) -> bool {
             match exit_reason {
                 ER::WfiWfe => uart_puts(b"WFI"),
                 ER::HvcCall => uart_puts(b"HVC"),
-                ER::DataAbort => uart_puts(b"DAB"),
+                ER::DataAbort => {
+                    uart_puts(b"DAB FAR=0x");
+                    print_hex(far);
+                }
                 ER::TrapMsrMrs => uart_puts(b"MSR"),
-                _ => uart_puts(b"OTHER"),
+                ER::InstructionAbort => uart_puts(b"IAB"),
+                _ => {
+                    uart_puts(b"EC=0x");
+                    print_hex((esr >> 26) as u64);
+                }
             }
             uart_puts(b" PC=0x");
             print_hex(context.pc);
@@ -280,15 +294,34 @@ const PSCI_DENIED: u64 = 0xFFFFFFFD; // -3 as unsigned
 // PSCI version: v0.2
 const PSCI_VERSION_0_2: u64 = 0x00000002;
 
+// Jailhouse debug console constants
+// HVC #0x4a48 is "JH" in ASCII - Jailhouse hypercall signature
+const JAILHOUSE_HVC_IMMEDIATE: u32 = 0x4a48;
+const JAILHOUSE_HC_DEBUG_CONSOLE_PUTC: u64 = 8;
+
 /// Handle hypercalls from guest
 ///
-/// Supports both custom hypercalls and PSCI standard calls.
+/// Supports:
+/// - Custom hypercalls (x0 = 0, 1, ...)
+/// - PSCI standard calls (x0 has bit 31 set)
+/// - Jailhouse debug console (HVC #0x4a48)
+///
+/// # Arguments
+/// * `context` - vCPU context
+/// * `hvc_imm` - HVC immediate value from ESR_EL2[15:0]
 ///
 /// # Returns
 /// * `true` - Continue running guest
 /// * `false` - Exit to host
-fn handle_hypercall(context: &mut VcpuContext) -> bool {
+fn handle_hypercall_with_imm(context: &mut VcpuContext, hvc_imm: u32) -> bool {
     use crate::uart_puts;
+
+    // Check for Jailhouse debug console hypercall
+    if hvc_imm == JAILHOUSE_HVC_IMMEDIATE {
+        return handle_jailhouse_debug_console(context);
+    }
+
+    // Standard hypercall handling (HVC #0)
     let hypercall_num = context.gp_regs.x0;
 
     // Check if this is a PSCI call (bit 31 set indicates SMC/HVC standard call)
@@ -330,6 +363,47 @@ fn handle_hypercall(context: &mut VcpuContext) -> bool {
             false // Exit on error
         }
     }
+}
+
+/// Handle Jailhouse debug console hypercall
+///
+/// This implements the Jailhouse hypervisor's debug console interface:
+/// - HVC #0x4a48 with x0=8: Output character in x1 to console
+///
+/// This allows Zephyr with CONFIG_JAILHOUSE_DEBUG_CONSOLE=y to print to
+/// the hypervisor's UART without needing its own UART driver.
+fn handle_jailhouse_debug_console(context: &mut VcpuContext) -> bool {
+    let function = context.gp_regs.x0;
+
+    match function {
+        JAILHOUSE_HC_DEBUG_CONSOLE_PUTC => {
+            // Output character
+            let ch = context.gp_regs.x1 as u8;
+            unsafe {
+                let uart_base = 0x09000000usize;
+                core::arch::asm!(
+                    "str {val:w}, [{addr}]",
+                    addr = in(reg) uart_base,
+                    val = in(reg) ch as u32,
+                    options(nostack),
+                );
+            }
+            context.gp_regs.x0 = 0; // Success
+            true // Continue
+        }
+        _ => {
+            // Unknown Jailhouse function - just return success silently
+            context.gp_regs.x0 = 0;
+            true
+        }
+    }
+}
+
+/// Legacy wrapper for backward compatibility
+fn handle_hypercall(context: &mut VcpuContext) -> bool {
+    // Extract HVC immediate from ESR_EL2[15:0]
+    let hvc_imm = (context.sys_regs.esr_el2 & 0xFFFF) as u32;
+    handle_hypercall_with_imm(context, hvc_imm)
 }
 
 /// Handle PSCI (Power State Coordination Interface) calls
@@ -510,6 +584,23 @@ static mut WFI_CONSECUTIVE_COUNT: u32 = 0;
 static mut LAST_WFI_PC: u64 = 0;
 const MAX_CONSECUTIVE_WFI: u32 = 5000;
 
+/// Unmask IRQs in SPSR_EL2 so guest can receive the injected interrupt
+///
+/// When the guest traps to EL2 (e.g., WFI), its PSTATE is saved in SPSR_EL2.
+/// If the guest had IRQs masked (PSTATE.I=1), this bit is preserved in SPSR_EL2.
+/// When we inject an interrupt and want the guest to receive it on ERET,
+/// we must clear the I bit in SPSR_EL2.
+#[inline]
+fn unmask_guest_irq() {
+    unsafe {
+        let mut spsr: u64;
+        core::arch::asm!("mrs {}, spsr_el2", out(reg) spsr);
+        // Clear bit 7 (I - IRQ mask)
+        spsr &= !(1 << 7);
+        core::arch::asm!("msr spsr_el2, {}", in(reg) spsr);
+    }
+}
+
 /// Handle WFI by checking and injecting virtual timer interrupt
 ///
 /// When guest executes WFI, it's waiting for an interrupt.
@@ -551,8 +642,93 @@ fn handle_wfi_with_timer_injection(pc: u64) -> bool {
         print_hex(vbar);
         uart_puts(b"\n");
 
+        // Debug: Print guest's virtual timer state
+        let cntv_ctl: u64;
+        let cntv_cval: u64;
+        let cntvct: u64;
+        unsafe {
+            core::arch::asm!("mrs {}, cntv_ctl_el0", out(reg) cntv_ctl);
+            core::arch::asm!("mrs {}, cntv_cval_el0", out(reg) cntv_cval);
+            core::arch::asm!("mrs {}, cntvct_el0", out(reg) cntvct);
+        }
+        uart_puts(b"[WFI] Guest timer state:\n");
+        uart_puts(b"  CNTV_CTL_EL0 = 0x");
+        print_hex(cntv_ctl);
+        uart_puts(b" (ENABLE=");
+        if cntv_ctl & 1 != 0 { uart_puts(b"1"); } else { uart_puts(b"0"); }
+        uart_puts(b", IMASK=");
+        if cntv_ctl & 2 != 0 { uart_puts(b"1"); } else { uart_puts(b"0"); }
+        uart_puts(b", ISTATUS=");
+        if cntv_ctl & 4 != 0 { uart_puts(b"1-FIRED!)\n"); } else { uart_puts(b"0)\n"); }
+        uart_puts(b"  CNTV_CVAL = 0x");
+        print_hex(cntv_cval);
+        uart_puts(b"\n");
+        uart_puts(b"  CNTVCT = 0x");
+        print_hex(cntvct);
+        uart_puts(b"\n");
+
+        // Also check physical timer
+        let cntp_ctl: u64;
+        let cntp_cval: u64;
+        let cntpct: u64;
+        unsafe {
+            core::arch::asm!("mrs {}, cntp_ctl_el0", out(reg) cntp_ctl);
+            core::arch::asm!("mrs {}, cntp_cval_el0", out(reg) cntp_cval);
+            core::arch::asm!("mrs {}, cntpct_el0", out(reg) cntpct);
+        }
+        uart_puts(b"  CNTP_CTL_EL0 = 0x");
+        print_hex(cntp_ctl);
+        uart_puts(b" (ENABLE=");
+        if cntp_ctl & 1 != 0 { uart_puts(b"1"); } else { uart_puts(b"0"); }
+        uart_puts(b", IMASK=");
+        if cntp_ctl & 2 != 0 { uart_puts(b"1"); } else { uart_puts(b"0"); }
+        uart_puts(b", ISTATUS=");
+        if cntp_ctl & 4 != 0 { uart_puts(b"1-FIRED!)\n"); } else { uart_puts(b"0)\n"); }
+        uart_puts(b"  CNTP_CVAL = 0x");
+        print_hex(cntp_cval);
+        uart_puts(b"\n");
+        uart_puts(b"  CNTPCT = 0x");
+        print_hex(cntpct);
+        uart_puts(b"\n");
+
+        // Check if guest's timer compare value is unreasonably far in the future
+        // If CNTV_CVAL - CNTVCT > 1 second of ticks, fix it
+        let freq: u64 = 62_500_000; // 62.5 MHz
+        if cntv_ctl & 1 != 0 && cntv_cval > cntvct + freq {
+            // Guest timer compare is too far in the future
+            // Fix it by setting a value IN THE PAST so ISTATUS becomes 1 immediately
+            // This makes the timer appear "fired" to the guest
+            let new_cval = cntvct.saturating_sub(1); // Just past
+            unsafe {
+                core::arch::asm!("msr cntv_cval_el0, {}", in(reg) new_cval);
+            }
+            uart_puts(b"[WFI] Fixed timer: CNTV_CVAL set to past (0x");
+            print_hex(new_cval);
+            uart_puts(b"), should fire immediately\n");
+
+            // Verify ISTATUS is now 1
+            let ctl_after: u64;
+            unsafe {
+                core::arch::asm!("mrs {}, cntv_ctl_el0", out(reg) ctl_after);
+            }
+            uart_puts(b"[WFI] After fix: CNTV_CTL ISTATUS=");
+            if ctl_after & 4 != 0 { uart_puts(b"1-FIRED!\n"); } else { uart_puts(b"0-not fired\n"); }
+        }
+
         // Inject an interrupt on first WFI too - the guest needs it
         let _ = GicV3VirtualInterface::inject_interrupt(VTIMER_IRQ, 0xA0);
+        // CRITICAL: Unmask IRQ in SPSR_EL2 so guest receives the interrupt on ERET
+        unmask_guest_irq();
+
+        // Debug: verify SPSR was actually cleared
+        let spsr_after: u64;
+        unsafe { core::arch::asm!("mrs {}, spsr_el2", out(reg) spsr_after); }
+        uart_puts(b"[WFI] After unmask: SPSR_EL2=0x");
+        print_hex(spsr_after);
+        uart_puts(b" (I=");
+        if spsr_after & (1 << 7) != 0 { uart_puts(b"1-STILL MASKED!)\n"); }
+        else { uart_puts(b"0-unmasked)\n"); }
+
         return true;
     }
 
@@ -569,12 +745,13 @@ fn handle_wfi_with_timer_injection(pc: u64) -> bool {
     unsafe {
         WFI_CONSECUTIVE_COUNT += 1;
         if WFI_CONSECUTIVE_COUNT > MAX_CONSECUTIVE_WFI {
-            // Guest is stuck in WFI loop without making progress
-            uart_puts(b"[WFI] Stuck at same PC (count=");
+            // Guest has been idle for a while - this is normal for "Hello World" type apps
+            // that just print and exit to idle
+            uart_puts(b"[WFI] Guest idle (");
             print_hex(WFI_CONSECUTIVE_COUNT as u64);
-            uart_puts(b", max=");
-            print_hex(MAX_CONSECUTIVE_WFI as u64);
-            uart_puts(b"), exiting\n");
+            uart_puts(b" consecutive WFIs at same PC)\n");
+            uart_puts(b"[WFI] This is normal for simple apps that just print and idle.\n");
+            uart_puts(b"[WFI] Exiting guest after prolonged idle.\n");
             return false;
         }
     }
@@ -593,6 +770,8 @@ fn handle_wfi_with_timer_injection(pc: u64) -> bool {
 
         // Inject virtual timer interrupt (IRQ 27) to guest via GICv3 List Register
         let _ = GicV3VirtualInterface::inject_interrupt(VTIMER_IRQ, 0xA0);
+        // CRITICAL: Unmask IRQ in SPSR_EL2 so guest receives the interrupt on ERET
+        unmask_guest_irq();
         return true;
     }
 
@@ -600,6 +779,8 @@ fn handle_wfi_with_timer_injection(pc: u64) -> bool {
     if GicV3VirtualInterface::pending_count() > 0 {
         // Reset counter - there's work to do
         unsafe { WFI_CONSECUTIVE_COUNT = 0; }
+        // CRITICAL: Unmask IRQ in SPSR_EL2 so guest receives the pending interrupt on ERET
+        unmask_guest_irq();
         return true;
     }
 
@@ -616,6 +797,9 @@ fn handle_wfi_with_timer_injection(pc: u64) -> bool {
         if count == 0 {
             debug_print_gic_state();
         }
+
+        // CRITICAL: Unmask IRQ in SPSR_EL2 so guest receives the interrupt on ERET
+        unmask_guest_irq();
     }
 
     // Allow guest to continue

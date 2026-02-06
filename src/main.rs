@@ -107,9 +107,14 @@ pub extern "C" fn rust_main() -> ! {
                 uart_puts_local(b"[INIT] Guest exited normally\n");
             }
             Err(e) => {
-                uart_puts_local(b"[INIT] Guest error: ");
-                uart_puts_local(e.as_bytes());
-                uart_puts_local(b"\n");
+                if e == "WFI" {
+                    // WFI exit is normal for simple apps that just print and idle
+                    uart_puts_local(b"[INIT] Guest completed and is idle\n");
+                } else {
+                    uart_puts_local(b"[INIT] Guest error: ");
+                    uart_puts_local(e.as_bytes());
+                    uart_puts_local(b"\n");
+                }
             }
         }
     }
