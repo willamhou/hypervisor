@@ -24,15 +24,78 @@ impl GuestConfig {
     ///
     /// - Load address: 0x4800_0000 (offset to avoid DTB at 0x40000000)
     /// - Memory size: 128MB
-    /// - Entry point: 0x4800_0000 (for minimal test) or 0x4800_10bc (for Zephyr)
+    /// - Entry point: Read from ELF header at runtime
     ///
     /// Note: Zephyr is built with hypervisor_guest.overlay to link at 0x48000000.
-    pub const fn zephyr_default() -> Self {
+    pub fn zephyr_default() -> Self {
+        let load_addr: u64 = 0x4800_0000;
+
+        // Read entry point from ELF header
+        // ELF64 header: e_entry is at offset 0x18 (24 bytes)
+        let entry_point = unsafe {
+            let elf_header = load_addr as *const u8;
+            // Check ELF magic: 0x7F 'E' 'L' 'F'
+            let magic = core::slice::from_raw_parts(elf_header, 4);
+
+            // Debug: print first 8 bytes at load address
+            uart_puts(b"[GUEST] First 8 bytes at load addr: ");
+            for i in 0..8 {
+                let byte = *elf_header.add(i);
+                let hex_chars = b"0123456789abcdef";
+                uart_puts(&[hex_chars[(byte >> 4) as usize], hex_chars[(byte & 0xf) as usize], b' ']);
+            }
+            uart_puts(b"\n");
+
+            if magic == [0x7F, b'E', b'L', b'F'] {
+                // Valid ELF, read e_entry at offset 0x18
+                let e_entry_ptr = (load_addr + 0x18) as *const u64;
+                let entry = core::ptr::read_volatile(e_entry_ptr);
+                uart_puts(b"[GUEST] ELF detected, e_entry = 0x");
+                uart_put_hex(entry);
+                uart_puts(b"\n");
+                entry
+            } else {
+                // Not an ELF - QEMU loaded raw segments
+                // Check if first instruction is a branch (B imm26)
+                // B instruction encoding: 000101 | imm26
+                // 0x14xxxxxx = unconditional branch
+                uart_puts(b"[GUEST] No ELF magic - checking for branch instruction\n");
+
+                let first_instr = core::ptr::read_volatile(load_addr as *const u32);
+                uart_puts(b"[GUEST] First instruction: 0x");
+                uart_put_hex(first_instr as u64);
+                uart_puts(b"\n");
+
+                if (first_instr >> 26) == 0b000101 {
+                    // B imm26 - unconditional branch
+                    // imm26 is signed, in units of 4 bytes
+                    let imm26 = first_instr & 0x03FF_FFFF;
+                    // Sign extend from 26 bits
+                    let offset = if imm26 & 0x0200_0000 != 0 {
+                        // Negative offset
+                        ((imm26 | 0xFC00_0000) as i32) * 4
+                    } else {
+                        (imm26 as i32) * 4
+                    };
+                    let target = (load_addr as i64 + offset as i64) as u64;
+                    uart_puts(b"[GUEST] Branch to offset ");
+                    uart_put_hex(offset as u64);
+                    uart_puts(b", target = 0x");
+                    uart_put_hex(target);
+                    uart_puts(b"\n");
+                    target
+                } else {
+                    // Not a branch, use load address
+                    uart_puts(b"[GUEST] Using load address as entry\n");
+                    load_addr
+                }
+            }
+        };
+
         Self {
-            load_addr: 0x4800_0000,
+            load_addr,
             mem_size: 128 * 1024 * 1024, // 128MB
-            // Zephyr's actual entry point
-            entry_point: 0x4800_10bc,
+            entry_point,
         }
     }
 }
