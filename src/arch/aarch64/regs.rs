@@ -238,9 +238,14 @@ pub struct VcpuContext {
     
     /// Stack pointer for this vCPU context
     pub sp: u64,
-    
+
     /// Program counter - where to resume execution
     pub pc: u64,
+
+    /// Saved Program Status Register (EL2) - guest PSTATE on trap
+    /// Saved on exception entry, restored on ERET.
+    /// Handlers can modify this (e.g., clear I bit to unmask guest IRQ).
+    pub spsr_el2: u64,
 }
 
 impl Default for VcpuContext {
@@ -250,6 +255,7 @@ impl Default for VcpuContext {
             sys_regs: SystemRegs::default(),
             sp: 0,
             pc: 0,
+            spsr_el2: 0x3c5, // EL1h + DAIF masked
         }
     }
 }

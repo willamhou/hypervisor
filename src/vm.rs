@@ -228,23 +228,25 @@ impl Vm {
         unsafe {
             MAPPER.map_region(start_aligned, size_aligned, MemoryAttributes::NORMAL);
 
+            // NOTE: Do NOT map low memory at 0x0.
+            // If the guest crashes at EL1 before setting VBAR_EL1, the exception
+            // goes to address 0x200 (VBAR_EL1=0 + sync offset). Leaving this
+            // unmapped causes a Stage-2 fault that traps to EL2, making the
+            // crash visible to the hypervisor for debugging.
+
             // Map MMIO device regions (DEVICE memory type)
-            // NOTE: UART is NOT mapped - accesses will trap for virtualization
-            // This allows the hypervisor to emulate UART I/O
 
-            // GIC Distributor: 0x08000000 - 0x08010000 (64KB)
-            let gicd_base = 0x08000000u64;
-            let gicd_size = 2 * 1024 * 1024;  // 2MB block
-            MAPPER.map_region(gicd_base, gicd_size, MemoryAttributes::DEVICE);
+            // GIC region: 0x08000000 - 0x0A000000 (32MB, covers distributor + redistributor)
+            // DTB specifies redistributor at 0x080A0000 with size 0xF60000,
+            // extending up to 0x09000000. Map the entire region in 2MB blocks.
+            let gic_base = 0x08000000u64;
+            let gic_size = 8 * 2 * 1024 * 1024;  // 16MB = 8 x 2MB blocks (covers 0x08000000-0x09000000)
+            MAPPER.map_region(gic_base, gic_size, MemoryAttributes::DEVICE);
 
-            // GIC Redistributor: 0x080A0000 - 0x08100000 for GICv3
-            // Note: Redistributor is at different address than Distributor
-            let gicr_base = 0x080A0000u64 & !(2 * 1024 * 1024 - 1);  // Align to 2MB
-            let gicr_size = 2 * 1024 * 1024;  // 2MB block
-            MAPPER.map_region(gicr_base, gicr_size, MemoryAttributes::DEVICE);
-
-            // NOTE: UART is NOT mapped - Zephyr uses Jailhouse console (HVC) instead
-            // UART virtualization is deferred for now
+            // Map UART for passthrough: 0x09000000
+            let uart_base = 0x09000000u64;
+            let uart_size = 2 * 1024 * 1024;  // 2MB block
+            MAPPER.map_region(uart_base, uart_size, MemoryAttributes::DEVICE);
 
             // Initialize Stage-2 translation
             init_stage2(&MAPPER);

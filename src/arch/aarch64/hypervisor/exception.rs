@@ -44,19 +44,35 @@ pub fn init() {
         );
         
         // Configure HCR_EL2 (Hypervisor Configuration Register)
-        // Bit 31 (RW) = 1: EL1 is AArch64
-        // Bit 27 (TGE) = 0: Guest OS runs at EL1
-        // Bit 12 (TWI) = 1: Trap WFI to EL2
-        // Bit 13 (TWE) = 1: Trap WFE to EL2
-        // Bit 3 (AMO) = 1: Route SError to EL2
-        // Bit 4 (IMO) = 1: Route IRQ to EL2
-        // Bit 5 (FMO) = 1: Route FIQ to EL2
-        let hcr: u64 = (1 << 31) | // RW
-                       (1 << 12) | // TWI
-                       (1 << 13) | // TWE
-                       (1 << 3)  | // AMO
-                       (1 << 4)  | // IMO
-                       (1 << 5);   // FMO
+        //
+        // Bit assignments (from ARM Architecture Reference Manual):
+        //   [0]  VM    - Virtualization enable (set later in init_stage2)
+        //   [1]  SWIO  - Set/Way Invalidation Override
+        //   [3]  FMO   - Route physical FIQ to EL2
+        //   [4]  IMO   - Route physical IRQ to EL2
+        //   [5]  AMO   - Route physical SError/abort to EL2
+        //   [9]  FB    - Force Broadcast TLB/cache maintenance
+        //   [10] BSU   - Barrier Shareability Upgrade (01 = Inner Shareable)
+        //   [13] TWI   - Trap WFI to EL2
+        //   [14] TWE   - Trap WFE to EL2
+        //   [31] RW    - EL1 is AArch64
+        //   [40] APK   - Don't trap PAC key register accesses from EL1
+        //   [41] API   - Don't trap PAC instructions from EL1
+        //
+        // NOTE: Do NOT set bit 12 (DC = Default Cacheability).
+        // DC=1 changes cache attributes when guest MMU is off, which can
+        // cause stale page table data during the MMU-on transition.
+        let hcr: u64 = (1u64 << 31) | // RW: EL1 is AArch64
+                       (1u64 << 1)  | // SWIO: Set/Way Invalidation Override
+                       (1u64 << 3)  | // FMO: Route physical FIQ to EL2
+                       (1u64 << 4)  | // IMO: Route physical IRQ to EL2
+                       (1u64 << 5)  | // AMO: Route physical SError to EL2
+                       (1u64 << 9)  | // FB: Force Broadcast TLB/cache maintenance
+                       (1u64 << 10) | // BSU[0]: Barrier Shareability Upgrade = IS
+                       (1u64 << 13) | // TWI: Trap WFI to EL2
+                       (1u64 << 14) | // TWE: Trap WFE to EL2
+                       (1u64 << 40) | // APK: Don't trap PAC key register accesses
+                       (1u64 << 41);  // API: Don't trap PAC instructions
         
         core::arch::asm!(
             "msr hcr_el2, {hcr}",
@@ -81,7 +97,18 @@ pub fn init() {
 
 // Exception loop prevention: track consecutive exceptions
 static mut EXCEPTION_COUNT: u32 = 0;
+static mut TOTAL_EXCEPTION_COUNT: u64 = 0;
 const MAX_CONSECUTIVE_EXCEPTIONS: u32 = 100;
+
+/// Reset all exception counters (call before entering a new guest)
+pub fn reset_exception_counters() {
+    unsafe {
+        EXCEPTION_COUNT = 0;
+        TOTAL_EXCEPTION_COUNT = 0;
+        WFI_CONSECUTIVE_COUNT = 0;
+        LAST_WFI_PC = 0;
+    }
+}
 
 #[no_mangle]
 pub extern "C" fn handle_exception(context: &mut VcpuContext) -> bool {
@@ -129,55 +156,14 @@ pub extern "C" fn handle_exception(context: &mut VcpuContext) -> bool {
     // Get exit reason
     let exit_reason = context.exit_reason();
 
-    // Count exception types for debugging
-    use crate::arch::aarch64::regs::ExitReason as ER;
-    static mut TOTAL_EXCEPTION_COUNT: u64 = 0;
-    static mut ZEPHYR_GUEST_STARTED: bool = false;
-    static mut ZEPHYR_EXC_COUNT: u64 = 0;
+    // Count exceptions for debugging
     unsafe {
         TOTAL_EXCEPTION_COUNT += 1;
-        // Check if this is Zephyr guest (PC > 0x48000000)
-        let is_zephyr = context.pc >= 0x4800_0000 && context.pc < 0x5000_0000;
-        if is_zephyr {
-            ZEPHYR_EXC_COUNT += 1;
-            if !ZEPHYR_GUEST_STARTED {
-                ZEPHYR_GUEST_STARTED = true;
-                uart_puts(b"\n[ZEPHYR] Guest started\n");
-                // Reset counter for Zephyr
-                TOTAL_EXCEPTION_COUNT = 1;
-            }
-        }
-        // Only print non-HVC exceptions for Zephyr (to avoid noise from Jailhouse console)
-        // For non-Zephyr, print first 10
-        let is_jailhouse_console = exit_reason == ER::HvcCall && is_zephyr;
-        let should_print = !is_jailhouse_console &&
-            (TOTAL_EXCEPTION_COUNT <= 10 || (is_zephyr && ZEPHYR_EXC_COUNT <= 5));
-        if should_print {
-            uart_puts(b"[EXC] #");
-            print_hex(TOTAL_EXCEPTION_COUNT);
-            uart_puts(b" type=");
-            match exit_reason {
-                ER::WfiWfe => uart_puts(b"WFI"),
-                ER::HvcCall => uart_puts(b"HVC"),
-                ER::DataAbort => {
-                    uart_puts(b"DAB FAR=0x");
-                    print_hex(far);
-                }
-                ER::TrapMsrMrs => uart_puts(b"MSR"),
-                ER::InstructionAbort => uart_puts(b"IAB"),
-                _ => {
-                    uart_puts(b"EC=0x");
-                    print_hex((esr >> 26) as u64);
-                }
-            }
-            uart_puts(b" PC=0x");
-            print_hex(context.pc);
-            uart_puts(b"\n");
-        }
     }
 
     // For now, just handle basic cases
     use crate::arch::aarch64::regs::ExitReason;
+    use crate::arch::aarch64::peripherals::gicv3::GicV3VirtualInterface;
     use crate::uart_puts;
 
     match exit_reason {
@@ -187,7 +173,7 @@ pub extern "C" fn handle_exception(context: &mut VcpuContext) -> bool {
 
             // WFI/WFE: Guest is waiting for interrupt
             // Check if virtual timer is pending and inject it to guest
-            if handle_wfi_with_timer_injection(context.pc) {
+            if handle_wfi_with_timer_injection(context) {
                 // Advance PC past the WFI instruction
                 context.pc += 4;
                 true // Continue with injected interrupt
@@ -208,16 +194,178 @@ pub extern "C" fn handle_exception(context: &mut VcpuContext) -> bool {
         }
         
         ExitReason::TrapMsrMrs => {
-            uart_puts(b"[VCPU] MSR/MRS trap\n");
-            // For now, skip the instruction
+            // Reset exception counter on MSR/MRS handling
+            unsafe { EXCEPTION_COUNT = 0; }
+            handle_msr_mrs_trap(context, esr);
             context.pc += 4;
             true // Continue
         }
         
         ExitReason::InstructionAbort => {
-            uart_puts(b"[VCPU] Instruction abort at 0x");
+            uart_puts(b"[VCPU] Instruction abort at FAR=0x");
             print_hex(context.sys_regs.far_el2);
+            uart_puts(b" PC=0x");
+            print_hex(context.pc);
             uart_puts(b"\n");
+
+            // Read EL1 registers to understand what caused the ORIGINAL EL1 exception
+            // (Before the guest tried to jump to VBAR_EL1+offset which caused this Stage-2 fault)
+            let elr_el1: u64;
+            let esr_el1: u64;
+            let spsr_el1: u64;
+            let sctlr_el1: u64;
+            let sp_el1: u64;
+            let far_el1: u64;
+            let tcr_el1: u64;
+            let ttbr0_el1: u64;
+            let ttbr1_el1: u64;
+            let vbar_el1: u64;
+            unsafe {
+                core::arch::asm!("mrs {}, elr_el1", out(reg) elr_el1);
+                core::arch::asm!("mrs {}, esr_el1", out(reg) esr_el1);
+                core::arch::asm!("mrs {}, spsr_el1", out(reg) spsr_el1);
+                core::arch::asm!("mrs {}, sctlr_el1", out(reg) sctlr_el1);
+                core::arch::asm!("mrs {}, sp_el1", out(reg) sp_el1);
+                core::arch::asm!("mrs {}, far_el1", out(reg) far_el1);
+                core::arch::asm!("mrs {}, tcr_el1", out(reg) tcr_el1);
+                core::arch::asm!("mrs {}, ttbr0_el1", out(reg) ttbr0_el1);
+                core::arch::asm!("mrs {}, ttbr1_el1", out(reg) ttbr1_el1);
+                core::arch::asm!("mrs {}, vbar_el1", out(reg) vbar_el1);
+            }
+            uart_puts(b"[VCPU] EL1 state at crash:\n");
+            uart_puts(b"  ELR_EL1  = 0x");
+            print_hex(elr_el1);
+            uart_puts(b" (instruction that caused EL1 exception)\n");
+            uart_puts(b"  ESR_EL1  = 0x");
+            print_hex(esr_el1);
+            let el1_ec = (esr_el1 >> 26) & 0x3F;
+            uart_puts(b" (EC=0x");
+            print_hex(el1_ec);
+            uart_puts(b")\n");
+            uart_puts(b"  SPSR_EL1 = 0x");
+            print_hex(spsr_el1);
+            uart_puts(b"\n");
+            uart_puts(b"  SCTLR_EL1= 0x");
+            print_hex(sctlr_el1);
+            uart_puts(b" (M=");
+            if sctlr_el1 & 1 != 0 { uart_puts(b"1"); } else { uart_puts(b"0"); }
+            uart_puts(b")\n");
+            uart_puts(b"  SP_EL1   = 0x");
+            print_hex(sp_el1);
+            uart_puts(b"\n");
+            uart_puts(b"  FAR_EL1  = 0x");
+            print_hex(far_el1);
+            uart_puts(b" (faulting address)\n");
+            uart_puts(b"  TCR_EL1  = 0x");
+            print_hex(tcr_el1);
+            uart_puts(b"\n");
+            uart_puts(b"  TTBR0_EL1= 0x");
+            print_hex(ttbr0_el1);
+            uart_puts(b"\n");
+            uart_puts(b"  TTBR1_EL1= 0x");
+            print_hex(ttbr1_el1);
+            uart_puts(b"\n");
+            uart_puts(b"  VBAR_EL1 = 0x");
+            print_hex(vbar_el1);
+            uart_puts(b"\n");
+
+            // Also read ESR_EL2 ISS for more details on the Stage-2 fault
+            let iss = esr & 0x1FFFFFF;
+            uart_puts(b"  ESR_EL2 ISS = 0x");
+            print_hex(iss as u64);
+            uart_puts(b"\n");
+
+            // Dump VTCR_EL2, VTTBR_EL2, and HCR_EL2
+            let vtcr_el2: u64;
+            let vttbr_el2: u64;
+            let hcr_el2: u64;
+            let id_mmfr0: u64;
+            unsafe {
+                core::arch::asm!("mrs {}, vtcr_el2", out(reg) vtcr_el2);
+                core::arch::asm!("mrs {}, vttbr_el2", out(reg) vttbr_el2);
+                core::arch::asm!("mrs {}, hcr_el2", out(reg) hcr_el2);
+                core::arch::asm!("mrs {}, id_aa64mmfr0_el1", out(reg) id_mmfr0);
+            }
+            uart_puts(b"  VTCR_EL2 = 0x");
+            print_hex(vtcr_el2);
+            let vtcr_t0sz = vtcr_el2 & 0x3F;
+            let vtcr_sl0 = (vtcr_el2 >> 6) & 0x3;
+            let vtcr_ps = (vtcr_el2 >> 16) & 0x7;
+            uart_puts(b" (T0SZ=");
+            print_hex(vtcr_t0sz);
+            uart_puts(b" SL0=");
+            print_hex(vtcr_sl0);
+            uart_puts(b" PS=");
+            print_hex(vtcr_ps);
+            uart_puts(b")\n");
+            uart_puts(b"  VTTBR_EL2= 0x");
+            print_hex(vttbr_el2);
+            uart_puts(b"\n");
+            uart_puts(b"  HCR_EL2  = 0x");
+            print_hex(hcr_el2);
+            uart_puts(b" (VM=");
+            if hcr_el2 & 1 != 0 { uart_puts(b"1)\n"); } else { uart_puts(b"0)\n"); }
+            uart_puts(b"  ID_AA64MMFR0_EL1 = 0x");
+            print_hex(id_mmfr0);
+            uart_puts(b"\n");
+
+            // Dump Stage-2 L0 table entries to verify
+            let s2_l0_base = vttbr_el2 & !0xFFF;
+            uart_puts(b"  S2 L0[0] = 0x");
+            let s2_l0_0 = unsafe { core::ptr::read_volatile(s2_l0_base as *const u64) };
+            print_hex(s2_l0_0);
+            uart_puts(b"\n");
+            if s2_l0_0 & 0x3 == 0x3 {
+                let s2_l1_base = s2_l0_0 & 0x0000_FFFF_FFFF_F000;
+                uart_puts(b"  S2 L1[0] = 0x");
+                let s2_l1_0 = unsafe { core::ptr::read_volatile(s2_l1_base as *const u64) };
+                print_hex(s2_l1_0);
+                uart_puts(b"\n");
+                uart_puts(b"  S2 L1[1] = 0x");
+                let s2_l1_1 = unsafe { core::ptr::read_volatile((s2_l1_base + 8) as *const u64) };
+                print_hex(s2_l1_1);
+                uart_puts(b"\n");
+            }
+
+            // Dump the kernel L0 page table entry that caused the fault
+            if far_el1 >= 0xFFFF_0000_0000_0000 {
+                // TTBR1 translation - walk the page table
+                let l0_base = ttbr1_el1 & !0xFFF;
+                let l0_index = ((far_el1 >> 39) & 0x1FF) as usize;
+                let l0_entry_addr = l0_base + (l0_index as u64) * 8;
+                let l0_entry = unsafe { core::ptr::read_volatile(l0_entry_addr as *const u64) };
+                uart_puts(b"  TTBR1 L0 base = 0x");
+                print_hex(l0_base);
+                uart_puts(b"\n");
+                uart_puts(b"  L0[");
+                print_hex(l0_index as u64);
+                uart_puts(b"] @ 0x");
+                print_hex(l0_entry_addr);
+                uart_puts(b" = 0x");
+                print_hex(l0_entry);
+                let l0_valid = l0_entry & 1;
+                let l0_type = (l0_entry >> 1) & 1;
+                uart_puts(b" (valid=");
+                print_hex(l0_valid);
+                uart_puts(b" type=");
+                print_hex(l0_type);
+                uart_puts(b")\n");
+                // If L0 entry is valid table, dump the address it points to
+                if l0_entry & 0x3 == 0x3 {
+                    let l1_base = l0_entry & 0x0000_FFFF_FFFF_F000;
+                    let l1_index = ((far_el1 >> 30) & 0x1FF) as usize;
+                    let l1_entry_addr = l1_base + (l1_index as u64) * 8;
+                    let l1_entry = unsafe { core::ptr::read_volatile(l1_entry_addr as *const u64) };
+                    uart_puts(b"  L1[");
+                    print_hex(l1_index as u64);
+                    uart_puts(b"] @ 0x");
+                    print_hex(l1_entry_addr);
+                    uart_puts(b" = 0x");
+                    print_hex(l1_entry);
+                    uart_puts(b"\n");
+                }
+            }
+
             // This is a fatal error
             false // Exit
         }
@@ -258,17 +406,261 @@ pub extern "C" fn handle_exception(context: &mut VcpuContext) -> bool {
             }
         }
         
-        ExitReason::Unknown | ExitReason::Other(_) => {
-            // Don't try to handle as IRQ - unknown exceptions should exit
-            // This prevents infinite loops from unhandled exceptions
+        ExitReason::Other(ec) => {
+            // Handle specific ECs that aren't fatal
+            match ec {
+                0x07 => {
+                    // Trapped SIMD/FP access - skip instruction
+                    // (Should not happen after CPTR_EL2 fix)
+                    uart_puts(b"[VCPU] FP/SIMD trap at PC=0x");
+                    print_hex(context.pc);
+                    uart_puts(b"\n");
+                    context.pc += 4;
+                    true
+                }
+                0x09 => {
+                    // SVE/SME access trap (CPTR_EL2.TZ or TSM)
+                    // After CPTR_EL2 fix this shouldn't occur, but handle gracefully
+                    uart_puts(b"[VCPU] SVE/SME trap at PC=0x");
+                    print_hex(context.pc);
+                    uart_puts(b"\n");
+                    context.pc += 4;
+                    true
+                }
+                0x19 => {
+                    // SVE trapped by CPTR_EL2.TZ when ZEN != 0b11
+                    uart_puts(b"[VCPU] SVE trap (EC=0x19) at PC=0x");
+                    print_hex(context.pc);
+                    uart_puts(b"\n");
+                    context.pc += 4;
+                    true
+                }
+                _ => {
+                    // Unknown/unhandled exception - fatal
+                    uart_puts(b"[VCPU] Unknown exception EC=0x");
+                    print_hex(ec);
+                    uart_puts(b" ESR=0x");
+                    print_hex(esr);
+                    uart_puts(b" PC=0x");
+                    print_hex(context.pc);
+                    uart_puts(b"\n");
+                    false // Exit
+                }
+            }
+        }
+
+        ExitReason::Unknown => {
             uart_puts(b"[VCPU] Unknown exception, ESR=0x");
             print_hex(esr);
             uart_puts(b" PC=0x");
             print_hex(context.pc);
             uart_puts(b"\n");
-            // This is a fatal error
             false // Exit
         }
+    }
+}
+
+/// IRQ exception handler called from assembly (irq_exception_handler)
+///
+/// This handles physical IRQs that trap from the guest to EL2
+/// (e.g., virtual timer interrupt). Unlike sync exceptions, ESR_EL2
+/// is NOT valid - we acknowledge via ICC_IAR1_EL1.
+///
+/// # Returns
+/// * `true` - Continue running guest
+/// * `false` - Exit to host
+#[no_mangle]
+pub extern "C" fn handle_irq_exception(context: &mut VcpuContext) -> bool {
+    use crate::arch::aarch64::peripherals::gicv3::{GicV3SystemRegs, GicV3VirtualInterface, VTIMER_IRQ};
+    use crate::arch::aarch64::peripherals::timer;
+    use crate::uart_puts;
+
+    // Reset sync exception counter (guest is making progress)
+    unsafe { EXCEPTION_COUNT = 0; }
+
+    // Acknowledge the physical interrupt
+    let intid = GicV3SystemRegs::read_iar1();
+
+    // Check for spurious interrupt (INTID >= 1020)
+    if intid >= 1020 {
+        return true;
+    }
+
+    match intid {
+        27 => {
+            // Virtual timer interrupt (PPI 27)
+            // Mask the timer to stop continuous firing
+            timer::mask_guest_vtimer();
+
+            // Inject virtual interrupt to guest with HW=1.
+            // HW=1 links virtual and physical interrupt: guest's virtual EOI
+            // automatically deactivates the physical interrupt (pINTID=27).
+            let _inject_result = GicV3VirtualInterface::inject_hw_interrupt(VTIMER_IRQ, VTIMER_IRQ, 0xA0);
+
+            // DO NOT modify SPSR_EL2 (guest's saved PSTATE).
+            // The virtual IRQ is pending in the LR. When we ERET back, the guest
+            // resumes with its original PSTATE. If the guest had interrupts disabled
+            // (PSTATE.I=1, e.g. holding a spinlock), the virtual IRQ stays pending
+            // until the guest re-enables interrupts - preventing deadlock.
+        }
+        _ => {
+            uart_puts(b"[IRQ] Unhandled INTID=");
+            print_hex(intid as u64);
+            uart_puts(b"\n");
+        }
+    }
+
+    // EOImode=1: EOIR only does priority drop (not deactivation).
+    // This is required for HW=1 interrupts (timer) where guest's virtual
+    // EOI handles physical deactivation.
+    GicV3SystemRegs::write_eoir1(intid);
+
+    // For non-HW interrupts, explicitly deactivate the physical interrupt
+    // since there's no HW link to do it automatically.
+    // INTID 27 (timer) uses HW=1, so guest virtual EOI handles deactivation.
+    if intid != 27 {
+        GicV3SystemRegs::write_dir(intid);
+    }
+
+    true // Always continue guest after IRQ
+}
+
+/// Handle MSR/MRS trap (EC=0x18)
+///
+/// Decodes the ISS to identify the trapped system register and emulates
+/// the access. For MRS (reads): writes the register value to the destination
+/// register. For MSR (writes): reads the value from the source register
+/// and writes to the system register.
+///
+/// ISS encoding (from KVM/ARM):
+///   [21:20] Op0, [19:17] Op2, [16:14] Op1, [13:10] CRn, [9:5] Rt, [4:1] CRm, [0] Direction
+fn handle_msr_mrs_trap(context: &mut VcpuContext, esr: u64) {
+    use crate::uart_puts;
+
+    let iss = (esr & 0x1FFFFFF) as u32;
+    let op0 = (iss >> 20) & 0x3;
+    let op2 = (iss >> 17) & 0x7;
+    let op1 = (iss >> 14) & 0x7;
+    let crn = (iss >> 10) & 0xF;
+    let rt  = ((iss >> 5) & 0x1F) as u8;
+    let crm = (iss >> 1) & 0xF;
+    let is_read = (iss & 1) == 1;
+
+    // Log first 20 MSR/MRS traps with register encoding
+    static mut MSR_TRAP_COUNT: u32 = 0;
+    unsafe {
+        MSR_TRAP_COUNT += 1;
+        if MSR_TRAP_COUNT <= 3 {
+            if is_read {
+                uart_puts(b"[MSR] MRS x");
+            } else {
+                uart_puts(b"[MSR] MSR x");
+            }
+            // Print register number
+            if rt >= 10 {
+                uart_puts(&[b'0' + (rt / 10), b'0' + (rt % 10)]);
+            } else {
+                uart_puts(&[b'0' + rt]);
+            }
+            uart_puts(b", S");
+            uart_puts(&[b'0' + op0 as u8]);
+            uart_puts(b"_");
+            uart_puts(&[b'0' + op1 as u8]);
+            uart_puts(b"_C");
+            if crn >= 10 {
+                uart_puts(&[b'0' + (crn / 10) as u8, b'0' + (crn % 10) as u8]);
+            } else {
+                uart_puts(&[b'0' + crn as u8]);
+            }
+            uart_puts(b"_C");
+            if crm >= 10 {
+                uart_puts(&[b'0' + (crm / 10) as u8, b'0' + (crm % 10) as u8]);
+            } else {
+                uart_puts(&[b'0' + crm as u8]);
+            }
+            uart_puts(b"_");
+            uart_puts(&[b'0' + op2 as u8]);
+            uart_puts(b" PC=0x");
+            print_hex(context.pc);
+            uart_puts(b"\n");
+        }
+    }
+
+    if is_read {
+        // MRS: Read system register, write value to Rt
+        let value = emulate_mrs(op0, op1, crn, crm, op2);
+        if rt < 31 {
+            context.gp_regs.set_reg(rt, value);
+        }
+        // rt=31 means xzr, discard result
+    } else {
+        // MSR: Read value from Rt, write to system register
+        let value = if rt < 31 {
+            context.gp_regs.get_reg(rt)
+        } else {
+            0 // xzr
+        };
+        emulate_msr(op0, op1, crn, crm, op2, value);
+    }
+}
+
+/// Emulate MRS (system register read) for trapped registers
+///
+/// Returns the value that should be placed in the destination register.
+fn emulate_mrs(op0: u32, op1: u32, crn: u32, crm: u32, op2: u32) -> u64 {
+    match (op0, op1, crn, crm, op2) {
+        // Debug registers (Op0=2) - return safe defaults
+        (2, 0, 0, 2, 2) => {
+            // MDSCR_EL1 - Debug Status and Control
+            unsafe {
+                let val: u64;
+                core::arch::asm!("mrs {}, mdscr_el1", out(reg) val);
+                val
+            }
+        }
+        (2, 0, 1, 1, 4) => {
+            // OSLSR_EL1 - OS Lock Status (report unlocked)
+            1 << 3 // OSLM=1 (OS Lock implemented), OSLK=0 (unlocked)
+        }
+        (2, 0, 1, 3, 4) => {
+            // OSDLR_EL1 - OS Double Lock Register (report unlocked)
+            0
+        }
+        // PMU registers (Op0=3, Op1=3, CRn=9) - return 0 (no PMU)
+        (3, 3, 9, _, _) => 0,
+        // PMU registers (Op0=3, Op1=0, CRn=9) - return 0
+        (3, 0, 9, _, _) => 0,
+        // Any other trapped register: Read-As-Zero
+        _ => 0,
+    }
+}
+
+/// Emulate MSR (system register write) for trapped registers
+///
+/// Writes the value to the system register if we know how, otherwise ignores.
+fn emulate_msr(op0: u32, op1: u32, crn: u32, crm: u32, op2: u32, value: u64) {
+    match (op0, op1, crn, crm, op2) {
+        // Debug registers
+        (2, 0, 0, 2, 2) => {
+            // MDSCR_EL1 - Debug Status and Control
+            unsafe {
+                core::arch::asm!("msr mdscr_el1, {}", in(reg) value);
+            }
+        }
+        (2, 0, 1, 0, 4) => {
+            // OSLAR_EL1 - OS Lock Access (write-only)
+            unsafe {
+                core::arch::asm!("msr oslar_el1, {}", in(reg) value);
+            }
+        }
+        (2, 0, 1, 3, 4) => {
+            // OSDLR_EL1 - OS Double Lock
+            // Ignore (don't actually lock)
+        }
+        // PMU registers - ignore writes
+        (3, 3, 9, _, _) | (3, 0, 9, _, _) => {}
+        // Any other trapped register: Write-Ignored
+        _ => {}
     }
 }
 
@@ -565,15 +957,27 @@ fn handle_psci(context: &mut VcpuContext, function_id: u64) -> bool {
 fn handle_mmio_abort(context: &mut VcpuContext, addr: u64) -> bool {
     use crate::arch::aarch64::hypervisor::decode::MmioAccess;
     use crate::uart_puts;
-    
-    // Get the faulting instruction
-    let insn = unsafe {
-        core::ptr::read_volatile(context.pc as *const u32)
-    };
-    
+
     // Get ISS from ESR_EL2
     let iss = (context.sys_regs.esr_el2 & 0x1FFFFFF) as u32;
-    
+    let isv = (iss >> 24) & 1;
+
+    // Try ISS-based decode first (works even when guest MMU is on)
+    // Only read instruction from context.pc if ISV=0 AND pc is a plausible physical address
+    // (when guest MMU is on, context.pc is a virtual address we can't read from EL2)
+    let insn = if isv == 1 {
+        0 // ISS decode doesn't need the instruction
+    } else if context.pc < 0x8000_0000_0000 {
+        // PC looks like a physical address, safe to read
+        unsafe { core::ptr::read_volatile(context.pc as *const u32) }
+    } else {
+        // PC is a virtual address (guest MMU is on), can't read instruction
+        uart_puts(b"[MMIO] Can't decode: guest VA PC=0x");
+        print_hex(context.pc);
+        uart_puts(b" ISV=0\n");
+        return false;
+    };
+
     // Decode the instruction
     let access = match MmioAccess::decode(insn, iss) {
         Some(a) => a,
@@ -616,283 +1020,73 @@ fn handle_mmio_abort(context: &mut VcpuContext, addr: u64) -> bool {
 /// WFI counter - track consecutive WFIs to detect infinite loops
 static mut WFI_CONSECUTIVE_COUNT: u32 = 0;
 static mut LAST_WFI_PC: u64 = 0;
-const MAX_CONSECUTIVE_WFI: u32 = 5000;
-
-/// Unmask IRQs in SPSR_EL2 so guest can receive the injected interrupt
-///
-/// When the guest traps to EL2 (e.g., WFI), its PSTATE is saved in SPSR_EL2.
-/// If the guest had IRQs masked (PSTATE.I=1), this bit is preserved in SPSR_EL2.
-/// When we inject an interrupt and want the guest to receive it on ERET,
-/// we must clear the I bit in SPSR_EL2.
-#[inline]
-fn unmask_guest_irq() {
-    unsafe {
-        let mut spsr: u64;
-        core::arch::asm!("mrs {}, spsr_el2", out(reg) spsr);
-        // Clear bit 7 (I - IRQ mask)
-        spsr &= !(1 << 7);
-        core::arch::asm!("msr spsr_el2, {}", in(reg) spsr);
-    }
-}
+const MAX_CONSECUTIVE_WFI: u32 = 500_000;
 
 /// Handle WFI by checking and injecting virtual timer interrupt
 ///
 /// When guest executes WFI, it's waiting for an interrupt.
 /// We check if the virtual timer has fired and inject it via GICv3 List Registers.
 ///
-/// Strategy:
-/// 1. If timer is pending, inject it and continue
-/// 2. If no timer pending, inject one anyway (the guest needs a tick)
-/// 3. If guest keeps calling WFI excessively, eventually exit
-///
 /// # Returns
 /// * `true` - Guest should continue (interrupt injected)
 /// * `false` - Guest should exit (stuck in WFI loop)
-fn handle_wfi_with_timer_injection(pc: u64) -> bool {
+fn handle_wfi_with_timer_injection(context: &mut VcpuContext) -> bool {
     use crate::arch::aarch64::peripherals::timer;
     use crate::arch::aarch64::peripherals::gicv3::{GicV3VirtualInterface, VTIMER_IRQ};
     use crate::uart_puts;
 
+    let pc = context.pc;
     let count = unsafe { WFI_CONSECUTIVE_COUNT };
     let last_pc = unsafe { LAST_WFI_PC };
 
     // Check if PC changed - that means guest is making progress
     if pc != last_pc {
-        // Reset counter on progress
         unsafe {
             WFI_CONSECUTIVE_COUNT = 0;
             LAST_WFI_PC = pc;
         }
-        uart_puts(b"[WFI] New location PC=0x");
-        print_hex(pc);
-        uart_puts(b"\n");
 
-        // Print VBAR_EL1 on first WFI to check if guest exception vectors are set up
-        let vbar: u64;
-        unsafe {
-            core::arch::asm!("mrs {}, vbar_el1", out(reg) vbar);
-        }
-        uart_puts(b"[WFI] Guest VBAR_EL1 = 0x");
-        print_hex(vbar);
-        uart_puts(b"\n");
-
-        // Debug: Print guest's virtual timer state
-        let cntv_ctl: u64;
-        let cntv_cval: u64;
-        let cntvct: u64;
-        unsafe {
-            core::arch::asm!("mrs {}, cntv_ctl_el0", out(reg) cntv_ctl);
-            core::arch::asm!("mrs {}, cntv_cval_el0", out(reg) cntv_cval);
-            core::arch::asm!("mrs {}, cntvct_el0", out(reg) cntvct);
-        }
-        uart_puts(b"[WFI] Guest timer state:\n");
-        uart_puts(b"  CNTV_CTL_EL0 = 0x");
-        print_hex(cntv_ctl);
-        uart_puts(b" (ENABLE=");
-        if cntv_ctl & 1 != 0 { uart_puts(b"1"); } else { uart_puts(b"0"); }
-        uart_puts(b", IMASK=");
-        if cntv_ctl & 2 != 0 { uart_puts(b"1"); } else { uart_puts(b"0"); }
-        uart_puts(b", ISTATUS=");
-        if cntv_ctl & 4 != 0 { uart_puts(b"1-FIRED!)\n"); } else { uart_puts(b"0)\n"); }
-        uart_puts(b"  CNTV_CVAL = 0x");
-        print_hex(cntv_cval);
-        uart_puts(b"\n");
-        uart_puts(b"  CNTVCT = 0x");
-        print_hex(cntvct);
-        uart_puts(b"\n");
-
-        // Also check physical timer
-        let cntp_ctl: u64;
-        let cntp_cval: u64;
-        let cntpct: u64;
-        unsafe {
-            core::arch::asm!("mrs {}, cntp_ctl_el0", out(reg) cntp_ctl);
-            core::arch::asm!("mrs {}, cntp_cval_el0", out(reg) cntp_cval);
-            core::arch::asm!("mrs {}, cntpct_el0", out(reg) cntpct);
-        }
-        uart_puts(b"  CNTP_CTL_EL0 = 0x");
-        print_hex(cntp_ctl);
-        uart_puts(b" (ENABLE=");
-        if cntp_ctl & 1 != 0 { uart_puts(b"1"); } else { uart_puts(b"0"); }
-        uart_puts(b", IMASK=");
-        if cntp_ctl & 2 != 0 { uart_puts(b"1"); } else { uart_puts(b"0"); }
-        uart_puts(b", ISTATUS=");
-        if cntp_ctl & 4 != 0 { uart_puts(b"1-FIRED!)\n"); } else { uart_puts(b"0)\n"); }
-        uart_puts(b"  CNTP_CVAL = 0x");
-        print_hex(cntp_cval);
-        uart_puts(b"\n");
-        uart_puts(b"  CNTPCT = 0x");
-        print_hex(cntpct);
-        uart_puts(b"\n");
-
-        // Check if guest's timer compare value is unreasonably far in the future
-        // If CNTV_CVAL - CNTVCT > 1 second of ticks, fix it
-        let freq: u64 = 62_500_000; // 62.5 MHz
-        if cntv_ctl & 1 != 0 && cntv_cval > cntvct + freq {
-            // Guest timer compare is too far in the future
-            // Fix it by setting a value IN THE PAST so ISTATUS becomes 1 immediately
-            // This makes the timer appear "fired" to the guest
-            let new_cval = cntvct.saturating_sub(1); // Just past
-            unsafe {
-                core::arch::asm!("msr cntv_cval_el0, {}", in(reg) new_cval);
-            }
-            uart_puts(b"[WFI] Fixed timer: CNTV_CVAL set to past (0x");
-            print_hex(new_cval);
-            uart_puts(b"), should fire immediately\n");
-
-            // Verify ISTATUS is now 1
-            let ctl_after: u64;
-            unsafe {
-                core::arch::asm!("mrs {}, cntv_ctl_el0", out(reg) ctl_after);
-            }
-            uart_puts(b"[WFI] After fix: CNTV_CTL ISTATUS=");
-            if ctl_after & 4 != 0 { uart_puts(b"1-FIRED!\n"); } else { uart_puts(b"0-not fired\n"); }
-        }
-
-        // Inject an interrupt on first WFI too - the guest needs it
+        // Inject an interrupt on first WFI at new location
         let _ = GicV3VirtualInterface::inject_interrupt(VTIMER_IRQ, 0xA0);
-        // CRITICAL: Unmask IRQ in SPSR_EL2 so guest receives the interrupt on ERET
-        unmask_guest_irq();
-
-        // Debug: verify SPSR was actually cleared
-        let spsr_after: u64;
-        unsafe { core::arch::asm!("mrs {}, spsr_el2", out(reg) spsr_after); }
-        uart_puts(b"[WFI] After unmask: SPSR_EL2=0x");
-        print_hex(spsr_after);
-        uart_puts(b" (I=");
-        if spsr_after & (1 << 7) != 0 { uart_puts(b"1-STILL MASKED!)\n"); }
-        else { uart_puts(b"0-unmasked)\n"); }
-
+        // Don't modify SPSR_EL2 - respect guest's PSTATE.I
         return true;
-    }
-
-    // Debug output for first few WFIs at same location
-    if count < 3 {
-        uart_puts(b"[WFI] #");
-        print_hex(count as u64);
-        uart_puts(b" at PC=0x");
-        print_hex(pc);
-        uart_puts(b"\n");
     }
 
     // Increment WFI counter
     unsafe {
         WFI_CONSECUTIVE_COUNT += 1;
         if WFI_CONSECUTIVE_COUNT > MAX_CONSECUTIVE_WFI {
-            // Guest has been idle for a while - this is normal for "Hello World" type apps
-            // that just print and exit to idle
             uart_puts(b"[WFI] Guest idle (");
             print_hex(WFI_CONSECUTIVE_COUNT as u64);
-            uart_puts(b" consecutive WFIs at same PC)\n");
-            uart_puts(b"[WFI] This is normal for simple apps that just print and idle.\n");
-            uart_puts(b"[WFI] Exiting guest after prolonged idle.\n");
+            uart_puts(b" WFIs at same PC), exiting\n");
             return false;
         }
     }
 
     // Check if virtual timer is pending
     if timer::is_guest_vtimer_pending() {
-        // Reset WFI counter on successful timer handling
         unsafe { WFI_CONSECUTIVE_COUNT = 0; }
-
-        if count < 10 {
-            uart_puts(b"[WFI] Timer pending, injecting IRQ 27\n");
-        }
-
-        // Mask the timer to prevent continuous firing
         timer::mask_guest_vtimer();
-
-        // Inject virtual timer interrupt (IRQ 27) to guest via GICv3 List Register
         let _ = GicV3VirtualInterface::inject_interrupt(VTIMER_IRQ, 0xA0);
-        // CRITICAL: Unmask IRQ in SPSR_EL2 so guest receives the interrupt on ERET
-        unmask_guest_irq();
+        // Don't modify SPSR_EL2 - respect guest's PSTATE.I
         return true;
     }
 
-    // No timer pending - check if any interrupt is pending in List Registers
+    // Check if any virtual interrupt is pending in List Registers
     if GicV3VirtualInterface::pending_count() > 0 {
-        // Reset counter - there's work to do
         unsafe { WFI_CONSECUTIVE_COUNT = 0; }
-        // CRITICAL: Unmask IRQ in SPSR_EL2 so guest receives the pending interrupt on ERET
-        unmask_guest_irq();
+        // Don't modify SPSR_EL2 - respect guest's PSTATE.I
         return true;
     }
 
-    // No interrupts pending at all
-    // Inject a timer interrupt anyway - the guest needs a tick to make progress
-    // This simulates a periodic timer tick that RTOSes need for scheduling
-    if count % 100 == 0 && count < 1000 {
-        if count < 10 {
-            uart_puts(b"[WFI] No timer, injecting periodic tick\n");
-        }
+    // No interrupts pending - inject periodic tick to help guest make progress
+    let current_count = unsafe { WFI_CONSECUTIVE_COUNT };
+    if current_count % 100 == 0 {
         let _ = GicV3VirtualInterface::inject_interrupt(VTIMER_IRQ, 0xA0);
-
-        // Debug: print GIC virtual interface state after injection
-        if count == 0 {
-            debug_print_gic_state();
-        }
-
-        // CRITICAL: Unmask IRQ in SPSR_EL2 so guest receives the interrupt on ERET
-        unmask_guest_irq();
+        // Don't modify SPSR_EL2 - respect guest's PSTATE.I
     }
 
-    // Allow guest to continue
     true
-}
-
-/// Debug: Print GIC virtual interface state
-fn debug_print_gic_state() {
-    use crate::uart_puts;
-    use crate::arch::aarch64::peripherals::gicv3::GicV3VirtualInterface;
-
-    uart_puts(b"[DEBUG] GIC state:\n");
-
-    // Read ICH_HCR_EL2
-    let hcr = GicV3VirtualInterface::read_hcr();
-    uart_puts(b"  ICH_HCR_EL2 = 0x");
-    print_hex(hcr as u64);
-    uart_puts(b" (En=");
-    if hcr & 1 != 0 { uart_puts(b"1)\n"); } else { uart_puts(b"0)\n"); }
-
-    // Read ICH_VMCR_EL2
-    let vmcr = GicV3VirtualInterface::read_vmcr();
-    uart_puts(b"  ICH_VMCR_EL2 = 0x");
-    print_hex(vmcr as u64);
-    uart_puts(b"\n");
-    uart_puts(b"    VPMR (bits 31:24) = 0x");
-    print_hex(((vmcr >> 24) & 0xFF) as u64);
-    uart_puts(b"\n");
-    uart_puts(b"    VENG1 (bit 1) = ");
-    if vmcr & 2 != 0 { uart_puts(b"1\n"); } else { uart_puts(b"0\n"); }
-
-    // Read List Register 0
-    let lr0 = GicV3VirtualInterface::read_lr(0);
-    uart_puts(b"  ICH_LR0 = 0x");
-    print_hex(lr0);
-    uart_puts(b"\n");
-    let state = (lr0 >> 62) & 0x3;
-    uart_puts(b"    State = ");
-    match state {
-        0 => uart_puts(b"Invalid\n"),
-        1 => uart_puts(b"Pending\n"),
-        2 => uart_puts(b"Active\n"),
-        3 => uart_puts(b"Pending+Active\n"),
-        _ => uart_puts(b"Unknown\n"),
-    }
-    let intid = (lr0 & 0xFFFF_FFFF) as u32;
-    uart_puts(b"    INTID = ");
-    print_hex(intid as u64);
-    uart_puts(b"\n");
-
-    // Read SPSR_EL2 to check if guest IRQs are masked
-    let spsr: u64;
-    unsafe {
-        core::arch::asm!("mrs {}, spsr_el2", out(reg) spsr);
-    }
-    uart_puts(b"  SPSR_EL2 = 0x");
-    print_hex(spsr);
-    uart_puts(b" (I=");
-    if spsr & (1 << 7) != 0 { uart_puts(b"1-masked)\n"); } else { uart_puts(b"0-unmasked)\n"); }
 }
 
 /// Handle IRQ interrupts

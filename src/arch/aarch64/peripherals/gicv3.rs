@@ -100,12 +100,28 @@ impl GicV3SystemRegs {
     }
 
     /// Write ICC_EOIR1_EL1 - End Of Interrupt Register
-    /// Signals completion of interrupt processing
+    /// Signals completion of interrupt processing.
+    /// With EOImode=0: does both priority drop and deactivation.
+    /// With EOImode=1: only does priority drop (use write_dir for deactivation).
     #[inline]
     pub fn write_eoir1(intid: u32) {
         unsafe {
             asm!(
                 "msr ICC_EOIR1_EL1, {intid}",
+                intid = in(reg) intid as u64,
+                options(nostack, nomem),
+            );
+        }
+    }
+
+    /// Write ICC_DIR_EL1 - Deactivate Interrupt Register
+    /// Used when EOImode=1 to explicitly deactivate a physical interrupt
+    /// after priority drop via write_eoir1.
+    #[inline]
+    pub fn write_dir(intid: u32) {
+        unsafe {
+            asm!(
+                "msr ICC_DIR_EL1, {intid}",
                 intid = in(reg) intid as u64,
                 options(nostack, nomem),
             );
@@ -416,6 +432,62 @@ impl GicV3VirtualInterface {
         Err("No free list register for interrupt injection")
     }
 
+    /// Inject a hardware-linked virtual interrupt (HW=1)
+    ///
+    /// When HW=1, the guest's virtual EOI automatically deactivates the
+    /// physical interrupt identified by `pintid`. This is the standard
+    /// approach for pass-through interrupts like the virtual timer.
+    ///
+    /// Requires EOImode=1 at EL2 so that the hypervisor's EOIR only does
+    /// priority drop, leaving physical deactivation to the guest's virtual EOI.
+    ///
+    /// # Arguments
+    /// * `intid` - Virtual interrupt ID to inject
+    /// * `pintid` - Physical interrupt ID linked to this virtual interrupt
+    /// * `priority` - Interrupt priority (0 = highest)
+    pub fn inject_hw_interrupt(intid: u32, pintid: u32, priority: u8) -> Result<(), &'static str> {
+        let vtr = Self::read_vtr();
+        let num_lrs = ((vtr & 0x1F) + 1) as u32;
+
+        // First, clean up any stale Active LR for this intid
+        // (handles recovery from stuck state where guest never EOI'd)
+        for i in 0..num_lrs {
+            let lr = Self::read_lr(i);
+            let lr_intid = (lr & 0xFFFF_FFFF) as u32;
+            let state = (lr >> 62) & 0x3;
+            if lr_intid == intid && state == Self::LR_STATE_ACTIVE {
+                Self::write_lr(i, 0);
+            }
+        }
+
+        // Find a free LR and inject
+        for i in 0..num_lrs {
+            let lr = Self::read_lr(i);
+            let state = (lr >> 62) & 0x3;
+
+            if state == 0 {
+                // Build LR with HW=1:
+                // [63:62] State = Pending (01)
+                // [61]    HW = 1
+                // [60]    Group = 1 (Group1)
+                // [55:48] Priority
+                // [41:32] pINTID (physical interrupt ID)
+                // [31:0]  vINTID (virtual interrupt ID)
+                let lr_value = (1u64 << 62)                    // State = Pending
+                              | (1u64 << 61)                    // HW = 1
+                              | (1u64 << 60)                    // Group1
+                              | ((priority as u64) << 48)       // Priority
+                              | ((pintid as u64 & 0x3FF) << 32) // pINTID [41:32]
+                              | (intid as u64);                 // vINTID
+
+                Self::write_lr(i, lr_value);
+                return Ok(());
+            }
+        }
+
+        Err("No free list register for interrupt injection")
+    }
+
     /// Clear a virtual interrupt from list registers
     pub fn clear_interrupt(intid: u32) {
         let vtr = Self::read_vtr();
@@ -632,6 +704,13 @@ pub fn init() {
 
     // Initialize virtual interrupt interface
     GicV3VirtualInterface::init();
+
+    // Set EOImode=1 so EOIR only does priority drop (not deactivation).
+    // Physical deactivation for HW=1 interrupts happens via guest virtual EOI.
+    // For HW=0 interrupts, we explicitly write ICC_DIR_EL1 to deactivate.
+    let ctlr = GicV3SystemRegs::read_ctlr();
+    GicV3SystemRegs::write_ctlr(ctlr | (1 << 1)); // Bit 1 = EOImode
+    crate::uart_puts(b"[GIC] ICC_CTLR_EL1.EOImode=1 (split priority drop/deactivation)\n");
 
     // Enable interrupt delivery to this CPU
     GicV3SystemRegs::enable();

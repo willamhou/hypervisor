@@ -38,7 +38,7 @@ run: build
 # Guest ELF path (set via environment variable)
 GUEST_ELF ?=
 
-# Run hypervisor with guest ELF
+# Run hypervisor with guest ELF (Zephyr)
 run-guest:
 ifndef GUEST_ELF
 	$(error GUEST_ELF is not set. Usage: make run-guest GUEST_ELF=/path/to/zephyr.elf)
@@ -51,6 +51,22 @@ endif
 	@echo "Press Ctrl+A then X to exit QEMU"
 	$(QEMU) $(QEMU_FLAGS) \
 	    -device loader,file=$(GUEST_ELF),addr=0x48000000
+
+# Linux guest paths
+LINUX_IMAGE ?= guest/linux/Image
+LINUX_DTB ?= guest/linux/guest.dtb
+
+# Run hypervisor with Linux kernel
+run-linux:
+	@echo "Building hypervisor with Linux guest support..."
+	cargo build --target aarch64-unknown-none --features linux_guest
+	@echo "Creating raw binary..."
+	aarch64-linux-gnu-objcopy -O binary $(BINARY) $(BINARY_BIN)
+	@echo "Starting QEMU with Linux kernel..."
+	@echo "Press Ctrl+A then X to exit QEMU"
+	$(QEMU) $(QEMU_FLAGS) \
+	    -device loader,file=$(LINUX_IMAGE),addr=0x48000000 \
+	    -device loader,file=$(LINUX_DTB),addr=0x47000000
 
 # Run with GDB server (for debugging)
 debug: build
@@ -77,12 +93,13 @@ fmt:
 # Help
 help:
 	@echo "Available targets:"
-	@echo "  all     - Build the hypervisor (default)"
-	@echo "  build   - Build the hypervisor"
-	@echo "  run     - Build and run in QEMU"
-	@echo "  run-guest - Build and run with guest ELF (GUEST_ELF=/path/to/elf)"
-	@echo "  debug   - Build and run in QEMU with GDB server"
-	@echo "  clean   - Clean build artifacts"
-	@echo "  check   - Check code without building"
-	@echo "  clippy  - Run clippy linter"
-	@echo "  fmt     - Format code"
+	@echo "  all       - Build the hypervisor (default)"
+	@echo "  build     - Build the hypervisor"
+	@echo "  run       - Build and run in QEMU"
+	@echo "  run-guest - Build and run with Zephyr guest (GUEST_ELF=/path/to/elf)"
+	@echo "  run-linux - Build and run with Linux kernel guest"
+	@echo "  debug     - Build and run in QEMU with GDB server"
+	@echo "  clean     - Clean build artifacts"
+	@echo "  check     - Check code without building"
+	@echo "  clippy    - Run clippy linter"
+	@echo "  fmt       - Format code"

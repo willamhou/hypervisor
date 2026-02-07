@@ -37,6 +37,16 @@
 .endm
 
 /*
+ * Macro for IRQ vector entry (branches to irq_exception_handler)
+ */
+.macro vector_entry_irq label
+.align 7
+\label:
+    b       irq_exception_handler
+    .skip   (. - \label - 4), 0
+.endm
+
+/*
  * Exception Vector Table
  * This must be 2KB aligned (0x800 alignment)
  */
@@ -57,7 +67,7 @@ exception_vector_table:
     
     // Lower EL (AArch64) - This is where guest exceptions come from
     vector_entry sync_lower_el_aarch64
-    vector_entry irq_lower_el_aarch64
+    vector_entry_irq irq_lower_el_aarch64
     vector_entry fiq_lower_el_aarch64
     vector_entry serror_lower_el_aarch64
     
@@ -141,7 +151,11 @@ exception_handler:
     
     mrs     x2, elr_el2
     str     x2, [x0, #392]       // pc
-    
+
+    // Save SPSR_EL2 (guest PSTATE) to context
+    mrs     x2, spsr_el2
+    str     x2, [x0, #400]       // spsr_el2
+
     // Call Rust exception handler
     // x0 already contains context pointer
     bl      handle_exception
@@ -186,13 +200,13 @@ exception_handler:
     ldr     x1, [x0, #392]       // pc (offset 392)
     msr     elr_el2, x1
     
-    // Restore SPSR_EL2 to enter guest at EL1
-    mov     x1, #0x5
+    // Restore SPSR_EL2 from context (may have been modified by handler)
+    ldr     x1, [x0, #400]       // spsr_el2
     msr     spsr_el2, x1
-    
+
     // Restore x0, x1 last
     ldp     x0, x1, [x0, #0]
-    
+
     // Enter guest with ERET
     eret
 
@@ -252,6 +266,120 @@ exception_no_context:
     b       exception_no_context
 
 /*
+ * IRQ Exception Handler (for interrupts from Lower EL)
+ *
+ * When a physical IRQ fires while the guest is running (e.g., virtual timer),
+ * with IMO=1 in HCR_EL2, the IRQ traps here. Unlike sync exceptions,
+ * ESR_EL2 is NOT valid for IRQs - we must acknowledge via ICC_IAR1_EL1.
+ */
+irq_exception_handler:
+    // Save guest registers to stack temporarily
+    stp     x0, x1, [sp, #-16]!
+    stp     x2, x3, [sp, #-16]!
+
+    // Load the context pointer
+    adrp    x0, current_vcpu_context
+    add     x0, x0, :lo12:current_vcpu_context
+    ldr     x0, [x0]
+
+    // Check if context pointer is valid
+    cbz     x0, exception_no_context
+
+    // Save general purpose registers to VcpuContext
+    ldp     x2, x3, [sp], #16
+    stp     x2, x3, [x0, #16]   // x2, x3
+
+    ldp     x2, x3, [sp], #16
+    stp     x2, x3, [x0, #0]    // x0, x1
+
+    stp     x4, x5, [x0, #32]
+    stp     x6, x7, [x0, #48]
+    stp     x8, x9, [x0, #64]
+    stp     x10, x11, [x0, #80]
+    stp     x12, x13, [x0, #96]
+    stp     x14, x15, [x0, #112]
+    stp     x16, x17, [x0, #128]
+    stp     x18, x19, [x0, #144]
+    stp     x20, x21, [x0, #160]
+    stp     x22, x23, [x0, #176]
+    stp     x24, x25, [x0, #192]
+    stp     x26, x27, [x0, #208]
+    stp     x28, x29, [x0, #224]
+    str     x30, [x0, #240]      // x30 (LR)
+
+    // Save system registers
+    mrs     x2, sp_el1
+    str     x2, [x0, #248]       // sp_el1
+
+    mrs     x2, elr_el1
+    str     x2, [x0, #256]       // elr_el1
+
+    mrs     x2, spsr_el1
+    str     x2, [x0, #264]       // spsr_el1
+
+    // Save SP and PC
+    mov     x2, sp
+    str     x2, [x0, #384]       // sp
+
+    mrs     x2, elr_el2
+    str     x2, [x0, #392]       // pc
+
+    // Save SPSR_EL2 (guest PSTATE) to context
+    mrs     x2, spsr_el2
+    str     x2, [x0, #400]       // spsr_el2
+
+    // Call Rust IRQ handler
+    bl      handle_irq_exception
+
+    // Check return value: true (1) = continue, false (0) = exit
+    cbz     w0, guest_exit
+
+    // Restore context and re-enter guest
+    adrp    x0, current_vcpu_context
+    add     x0, x0, :lo12:current_vcpu_context
+    ldr     x0, [x0]
+
+    ldp     x2, x3, [x0, #16]
+    ldp     x4, x5, [x0, #32]
+    ldp     x6, x7, [x0, #48]
+    ldp     x8, x9, [x0, #64]
+    ldp     x10, x11, [x0, #80]
+    ldp     x12, x13, [x0, #96]
+    ldp     x14, x15, [x0, #112]
+    ldp     x16, x17, [x0, #128]
+    ldp     x18, x19, [x0, #144]
+    ldp     x20, x21, [x0, #160]
+    ldp     x22, x23, [x0, #176]
+    ldp     x24, x25, [x0, #192]
+    ldp     x26, x27, [x0, #208]
+    ldp     x28, x29, [x0, #224]
+    ldr     x30, [x0, #240]
+
+    // Restore system registers
+    ldr     x1, [x0, #248]       // sp_el1
+    msr     sp_el1, x1
+
+    ldr     x1, [x0, #256]       // elr_el1
+    msr     elr_el1, x1
+
+    ldr     x1, [x0, #264]       // spsr_el1
+    msr     spsr_el1, x1
+
+    // Restore PC
+    ldr     x1, [x0, #392]       // pc
+    msr     elr_el2, x1
+
+    // Restore SPSR_EL2 from context (handler may have cleared I bit)
+    ldr     x1, [x0, #400]       // spsr_el2
+    msr     spsr_el2, x1
+
+    // Restore x0, x1 last
+    ldp     x0, x1, [x0, #0]
+
+    // Return to guest
+    eret
+
+/*
  * Enter Guest
  * 
  * extern "C" fn enter_guest(context: *mut VcpuContext) -> u64;
@@ -308,17 +436,16 @@ enter_guest:
     ldr     x1, [x0, #392]       // pc (offset 392)
     msr     elr_el2, x1
     
-    // Restore SPSR_EL2 to enter guest at EL1
-    // SPSR_EL2[3:0] = 0b0101 (EL1h)
-    mov     x1, #0x5
+    // Restore SPSR_EL2 from context (default 0x3c5 = DAIF masked + EL1h)
+    ldr     x1, [x0, #400]       // spsr_el2
     msr     spsr_el2, x1
-    
+
     // Restore x0, x1 last
     ldp     x0, x1, [x0, #0]
-    
+
     // Enter guest with ERET
     eret
-    
+
     // When guest exits (exception), we return here
     // Restore host context
     ldp     x19, x20, [sp], #16

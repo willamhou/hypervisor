@@ -1,17 +1,18 @@
 //! ARM64 Memory Management Unit (MMU) and Stage-2 Translation
-//! 
+//!
 //! This module implements Stage-2 page tables for guest physical to host
 //! physical address translation.
-//! 
+//!
 //! ARM64 Stage-2 Translation:
 //! - IPA (Intermediate Physical Address) = Guest Physical Address
 //! - PA (Physical Address) = Host Physical Address
 //! - Translation: IPA -> PA via Stage-2 page tables
-//! 
-//! Page Table Levels (for 4KB granule, 40-bit IPA):
-//! - Level 1: 1GB blocks
-//! - Level 2: 2MB blocks
-//! - Level 3: 4KB pages
+//!
+//! Page Table Levels (for 4KB granule, 48-bit IPA):
+//! - Level 0: 512GB regions (entry covers bits [47:39])
+//! - Level 1: 1GB blocks (entry covers bits [38:30])
+//! - Level 2: 2MB blocks (entry covers bits [29:21])
+//! - Level 3: 4KB pages (entry covers bits [20:12])
 
 /// Page size (4KB)
 pub const PAGE_SIZE: usize = 4096;
@@ -168,31 +169,33 @@ impl Stage2Config {
     /// Create Stage-2 configuration
     ///
     /// # Arguments
-    /// * `page_table_addr` - Physical address of level 1 page table
+    /// * `page_table_addr` - Physical address of the initial lookup level page table
     pub fn new(page_table_addr: u64) -> Self {
         // VTCR_EL2 configuration for 4KB granule:
-        // - T0SZ = 25 (39-bit IPA space = 512GB, matches SL0=1)
-        // - SL0 = 1 (Start at level 1, covers up to 512GB)
+        // - T0SZ = 16 (48-bit IPA space = 256TB)
+        // - SL0 = 2 (Start at level 0 for 48-bit IPA)
         // - IRGN0 = 0b01 (Inner write-back cacheable)
         // - ORGN0 = 0b01 (Outer write-back cacheable)
         // - SH0 = 0b11 (Inner shareable)
         // - TG0 = 0b00 (4KB granule)
         // - PS = 0b101 (48-bit PA space)
         //
-        // Note: For SL0=1 (Level 1 start), T0SZ must be >= 25 for 4KB granule.
-        // IPA range: bits [38:0] = 512GB, enough for guest at 0x4800_0000.
-        let vtcr = (25 << 0)      // T0SZ[5:0] = 25 (512GB IPA)
-            | (1 << 6)            // SL0[1:0] = 1 (start at L1)
+        // 48-bit IPA is required because the Linux kernel configures
+        // TCR_EL1.IPS = 48-bit. With Stage-2 active, hardware enforces
+        // that IPAs from Stage-1 walks fit within VTCR_EL2's IPA range.
+        // A 39-bit IPA (T0SZ=25) causes "Address size fault, level 0".
+        let vtcr = (16 << 0)      // T0SZ[5:0] = 16 (48-bit IPA)
+            | (2 << 6)            // SL0[1:0] = 2 (start at L0)
             | (0b01 << 8)         // IRGN0[1:0]
             | (0b01 << 10)        // ORGN0[1:0]
             | (0b11 << 12)        // SH0[1:0]
             | (0b00 << 14)        // TG0[1:0]
             | (0b101 << 16);      // PS[2:0] = 0b101 (48-bit PA space)
-        
+
         // VTTBR_EL2: Page table base address
         // Bits [47:1] contain the page table address (must be aligned)
         let vttbr = page_table_addr & 0x0000_FFFF_FFFF_FFFE;
-        
+
         Self { vttbr, vtcr }
     }
     
@@ -219,17 +222,23 @@ impl Stage2Config {
 }
 
 /// Simple identity mapper for guest memory
-/// 
+///
 /// This creates a 1:1 mapping where Guest PA == Host PA
 /// for a specified memory region.
+///
+/// Page table hierarchy: L0 → L1 → L2 (2MB blocks)
+/// Required for 48-bit IPA (T0SZ=16, SL0=2).
 pub struct IdentityMapper {
-    /// Level 1 page table (covers 512GB)
+    /// Level 0 page table (each entry covers 512GB)
+    l0_table: PageTable,
+
+    /// Level 1 page table (each entry covers 1GB)
     l1_table: PageTable,
-    
-    /// Level 2 page tables (we'll allocate as needed)
-    /// For simplicity, we pre-allocate a few
+
+    /// Level 2 page tables (each entry covers 2MB)
+    /// Pre-allocated; allocated on demand as L1 entries are created
     l2_tables: [PageTable; 4],
-    
+
     /// Number of L2 tables allocated
     l2_count: usize,
 }
@@ -238,6 +247,7 @@ impl IdentityMapper {
     /// Create a new identity mapper
     pub const fn new() -> Self {
         Self {
+            l0_table: PageTable::new(),
             l1_table: PageTable::new(),
             l2_tables: [
                 PageTable::new(),
@@ -252,6 +262,10 @@ impl IdentityMapper {
     /// Reset the mapper to clear all existing mappings
     /// This must be called before setting up mappings for a new VM
     pub fn reset(&mut self) {
+        // Clear L0 table
+        for i in 0..512 {
+            self.l0_table.entries[i] = S2PageTableEntry(0);
+        }
         // Clear L1 table
         for i in 0..512 {
             self.l1_table.entries[i] = S2PageTableEntry(0);
@@ -284,9 +298,17 @@ impl IdentityMapper {
     
     /// Map a single 2MB block
     fn map_2mb_block(&mut self, addr: u64, attrs: MemoryAttributes) {
-        // Calculate indices
+        // Calculate indices for L0 → L1 → L2 three-level walk
+        let l0_index = ((addr >> 39) & 0x1FF) as usize; // Bits [47:39]
         let l1_index = ((addr >> 30) & 0x1FF) as usize; // Bits [38:30]
         let l2_index = ((addr >> 21) & 0x1FF) as usize; // Bits [29:21]
+
+        // Ensure L0 entry points to L1 table
+        // (we only have one L1 table, so all addresses must have l0_index == 0)
+        if !self.l0_table.entry(l0_index).is_valid() {
+            let l1_addr = self.l1_table.addr();
+            self.l0_table.set_entry(l0_index, S2PageTableEntry::table(l1_addr));
+        }
 
         // Check if L1 entry exists, allocate L2 table if needed
         let l2_table_idx = if !self.l1_table.entry(l1_index).is_valid() {
@@ -327,12 +349,12 @@ impl IdentityMapper {
     
     /// Get the configuration for this mapper
     pub fn config(&self) -> Stage2Config {
-        Stage2Config::new(self.l1_table.addr())
+        Stage2Config::new(self.l0_table.addr())
     }
-    
-    /// Get L1 table address
-    pub fn l1_addr(&self) -> u64 {
-        self.l1_table.addr()
+
+    /// Get L0 table address (initial lookup level)
+    pub fn l0_addr(&self) -> u64 {
+        self.l0_table.addr()
     }
 }
 
@@ -352,7 +374,11 @@ pub enum MemoryAttribute {
 /// This creates a 1:1 mapping where Guest PA == Host PA
 /// for a specified memory region, but uses dynamic allocation
 /// instead of static arrays.
+///
+/// Page table hierarchy: L0 → L1 → L2 (2MB blocks)
 pub struct DynamicIdentityMapper {
+    /// Level 0 page table address (initial lookup level)
+    l0_table: u64,
     /// Level 1 page table address (dynamically allocated)
     l1_table: u64,
     /// Level 2 page table addresses
@@ -364,15 +390,22 @@ pub struct DynamicIdentityMapper {
 impl DynamicIdentityMapper {
     /// Create a new dynamic identity mapper
     pub fn new() -> Self {
+        let l0 = crate::mm::heap::alloc_page()
+            .expect("Failed to allocate L0 table");
         let l1 = crate::mm::heap::alloc_page()
             .expect("Failed to allocate L1 table");
 
-        // Zero-initialize the page table
+        // Zero-initialize the page tables
         unsafe {
+            core::ptr::write_bytes(l0 as *mut u8, 0, 4096);
             core::ptr::write_bytes(l1 as *mut u8, 0, 4096);
+            // Link L0[0] → L1 (all our addresses are < 512GB so l0_index=0)
+            let l0_ptr = l0 as *mut u64;
+            *l0_ptr = l1 | 0x3; // Valid + Table descriptor
         }
 
         Self {
+            l0_table: l0,
             l1_table: l1,
             l2_tables: [0; 4],
             l2_count: 0,
@@ -469,14 +502,14 @@ impl DynamicIdentityMapper {
         (pa & !0x1F_FFFF) | attr_bits | 0x1 // Block descriptor
     }
 
-    /// Get VTTBR value (L1 table address)
+    /// Get VTTBR value (L0 table address)
     pub fn vttbr(&self) -> u64 {
-        self.l1_table
+        self.l0_table
     }
 
     /// Get the configuration for this mapper
     pub fn config(&self) -> Stage2Config {
-        Stage2Config::new(self.l1_table)
+        Stage2Config::new(self.l0_table)
     }
 }
 

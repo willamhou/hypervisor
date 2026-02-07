@@ -22,6 +22,7 @@ lto = false  # Disable LTO to prevent code elimination
 [features]
 default = []
 guest = []
+linux_guest = []
 
 [profile.release]
 panic = "abort"
