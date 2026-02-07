@@ -1,232 +1,243 @@
 # ARM64 Hypervisor
 
-一个使用 Rust 编写的教育性 ARM64 Type-1 Hypervisor 实现。
+A bare-metal Type-1 hypervisor for ARM64 (AArch64) written in Rust. Runs at EL2 and manages guest VMs at EL1, targeting QEMU virt machine. Successfully boots Linux 6.12 (Debian arm64).
 
-## 特性
+## Project Goals
 
-- ✅ **vCPU 管理**: 完整的虚拟 CPU 抽象和上下文切换
-- ✅ **Stage-2 内存管理**: Guest 物理地址到 Host 物理地址的转换
-- ✅ **中断处理**: GIC 支持和 ARM Generic Timer
-- ✅ **虚拟中断注入**: HCR_EL2.VI 机制，完整的 Guest 异常处理
-- ✅ **设备模拟**: Trap-and-Emulate 架构，支持 UART 和 GICD
-- ✅ **Hypercall 接口**: Guest 与 Hypervisor 通信机制
-- ✅ **WFI 支持**: Wait-For-Interrupt 指令处理
+- Build a production-style ARM64 Type-1 hypervisor from scratch for educational and research purposes
+- Full hardware-assisted virtualization: Stage-2 MMU, GICv3 virtual interface, HW timer injection
+- Boot real operating systems (Linux, Zephyr) as guest VMs
+- Prepare architecture for future ARM security extensions: FF-A, Secure EL2 (TEE), RME/CCA
 
-## 当前状态
+## Features
 
-**版本**: v0.4.0 (Sprint 1.6 完成)
-**进度**: Milestone 1 已完成 + 中断完善
-**测试**: 7/7 (100% 通过)
-**代码量**: ~4450 行
+- **vCPU Management**: Complete virtual CPU abstraction with state machine, context save/restore, multi-vCPU scheduling
+- **Stage-2 Memory**: Dynamic page table allocation (bump allocator + heap), 2MB block identity mapping, NORMAL/DEVICE attributes
+- **GICv3 Virtual Interface**: List Register-based interrupt injection with HW=1 linking, EOImode=1 for correct deactivation
+- **Timer Virtualization**: Virtual timer (PPI 27) with physical-virtual HW linking, automatic EOI via guest virtual EOI
+- **Device Emulation**: Trap-and-emulate MMIO framework with PL011 UART and GIC Distributor
+- **GIC Passthrough**: Guest direct access to GICD/GICR, virtual ICC registers via ICH_HCR_EL2
+- **Linux Guest Boot**: Boots Linux 6.12 (Debian arm64) with full kernel initialization
+- **Architecture Traits**: Portable trait abstractions for future RISC-V support
 
-### 最新更新（2026-01-26）
+## Current Status
 
-Sprint 1.6 实现了完整的虚拟中断处理流程：
-- Guest 异常向量表（2KB，16个向量）
-- IRQ Handler 实现（上下文保存/恢复，EOI）
-- WFI 指令支持（检测、跳过、恢复）
-- 多次中断注入测试（3 次循环验证）
+**Progress**: Milestone 1 complete, Milestone 2 (Sprint 2.1-2.4) complete, code refactored
+**Tests**: 15 test files, all passing
+**Code**: ~7,000 lines (src + tests)
 
-## 快速开始
+### Milestone Overview
 
-### 前置要求
+```
+M0: Project Setup          ████████████████████ 100%
+M1: MVP Virtualization     ████████████████████ 100%
+M2: Enhanced Features      ████████████████████ 100%
+    2.1 GICv3 Virtual IF   ████████████████████ 100%
+    2.2 Dynamic Memory     ████████████████████ 100%
+    2.3 Multi-vCPU         ████████████████████ 100%
+    2.4 API Documentation  ████████████████████ 100%
+M3: FF-A                   ░░░░░░░░░░░░░░░░░░░░   0%
+M4: Secure EL2 / TEE      ░░░░░░░░░░░░░░░░░░░░   0%
+M5: RME & CCA             ░░░░░░░░░░░░░░░░░░░░   0%
+```
 
-- Rust nightly (支持 no_std 和 ARM64 target)
-- QEMU (qemu-system-aarch64)
-- ARM64 交叉编译工具链 (aarch64-linux-gnu-*)
+### Latest Updates
+
+- **Code Refactoring**: Extracted ~200 magic numbers into named constants (`defs.rs`, `platform.rs`), removed dead code, converted `static mut` to atomics, added architecture-portable traits
+- **Linux Boot**: Linux 6.12 (Debian arm64) boots fully under the hypervisor with HW=1 timer virtualization (reaches "VFS: Unable to mount root fs" — expected without rootfs)
+- **GICv3**: List Register-based interrupt injection, HW bit linking for timer auto-deactivation
+- **Multi-vCPU**: Round-robin scheduler, up to 8 vCPUs per VM
+
+## Quick Start
+
+### Prerequisites
+
+- Rust nightly (with `aarch64-unknown-none` target)
+- QEMU (`qemu-system-aarch64`)
+- ARM64 cross-toolchain (`aarch64-linux-gnu-*`)
 
 ```bash
-# 安装 Rust target
 rustup target add aarch64-unknown-none
-
-# 安装 QEMU (Ubuntu/Debian)
-sudo apt install qemu-system-arm
-
-# 安装交叉编译工具链
-sudo apt install gcc-aarch64-linux-gnu
+sudo apt install qemu-system-arm gcc-aarch64-linux-gnu
 ```
 
-### 编译
+### Build & Run
 
 ```bash
-make
+make              # Build hypervisor
+make run          # Build and run tests in QEMU (exit: Ctrl+A then X)
+make run-linux    # Boot Linux guest (requires kernel Image + DTB)
+make debug        # Run with GDB server on port 1234
+make clippy       # Run linter
+make fmt          # Format code
 ```
 
-### 运行
+### Debugging
 
 ```bash
-make run
-```
-
-退出 QEMU: 按 `Ctrl+A` 然后按 `X`
-
-### 调试
-
-```bash
-# 在一个终端启动 GDB server
+# Terminal 1
 make debug
 
-# 在另一个终端连接 GDB
+# Terminal 2
 gdb-multiarch target/aarch64-unknown-none/debug/hypervisor
 (gdb) target remote :1234
 (gdb) b rust_main
 (gdb) c
 ```
 
-## 项目结构
+## Architecture
+
+### Privilege Model
 
 ```
-hypervisor/
-├── arch/aarch64/          # 汇编启动和异常处理代码
-│   ├── boot.S            # 启动代码
-│   └── exception.S       # 异常向量表和上下文切换
-│
-├── src/                   # Rust 源代码
-│   ├── arch/aarch64/     # ARM64 架构特定代码
-│   │   ├── hypervisor/   # EL2 特定实现
-│   │   │   ├── exception.rs  # 异常处理
-│   │   │   └── decode.rs     # 指令解码
-│   │   ├── mm/           # 内存管理
-│   │   │   └── mmu.rs    # Stage-2 页表
-│   │   ├── peripherals/  # 外设驱动
-│   │   │   ├── gic.rs    # GIC 支持
-│   │   │   └── timer.rs  # ARM Generic Timer
-│   │   └── regs.rs       # 寄存器定义
-│   │
-│   ├── devices/          # 设备模拟
-│   │   ├── pl011/        # UART (PL011)
-│   │   └── gic/          # GIC Distributor
-│   │
-│   ├── vcpu.rs           # vCPU 抽象
-│   ├── vm.rs             # VM 管理
-│   ├── global.rs         # 全局状态
-│   ├── uart.rs           # UART 驱动
-│   ├── lib.rs            # 库入口
-│   └── main.rs           # 主程序
-│
-├── tests/                # 测试代码
-│   ├── test_guest.rs     # Guest 执行测试
-│   ├── test_timer.rs     # Timer 中断测试
-│   └── test_mmio.rs      # MMIO 设备模拟测试
-│
-├── Cargo.toml            # Rust 项目配置
-├── Makefile              # 构建脚本
-├── aarch64-qemu.ld       # 链接脚本
-├── PROGRESS.md           # 开发进度文档
-└── README.md             # 本文件
+┌─────────────────────────────────────────────┐
+│  Guest OS (Linux / Zephyr)       EL1        │
+│  ─ Uses virtual ICC registers               │
+│  ─ Stage-2 translated memory               │
+├─────────────────────────────────────────────┤
+│  Hypervisor                      EL2        │
+│  ─ Exception handling & MMIO emulation      │
+│  ─ GICv3 List Register management           │
+│  ─ Stage-2 page table control               │
+├─────────────────────────────────────────────┤
+│  Hardware (QEMU virt)                       │
+│  ─ GICv3, PL011, Generic Timer             │
+└─────────────────────────────────────────────┘
 ```
 
-## 技术详情
-
-### 虚拟化模型
-
-- **Type**: Type-1 (裸机 Hypervisor)
-- **Privilege Level**: EL2 (Hypervisor mode)
-- **Guest Level**: EL1 (Guest kernel mode)
-- **Translation**: Stage-2 (IPA → PA)
-
-### 内存管理
-
-- **IPA Space**: 40-bit (1TB)
-- **PA Space**: 48-bit (256TB)
-- **Page Size**: 4KB granule
-- **Mapping**: 2MB block mapping
-- **Attributes**: NORMAL (cached), DEVICE (uncached), READONLY
-
-### 中断处理
-
-- **GIC Version**: GICv2
-- **IRQ Routing**: HCR_EL2.IMO = 1 (route to EL2)
-- **FIQ Routing**: HCR_EL2.FMO = 1 (route to EL2)
-- **Timer**: ARM Generic Timer (Virtual Timer, PPI 27)
-
-### 设备模拟
-
-- **方法**: Trap-and-Emulate
-- **MMIO 检测**: Data Abort (ESR_EL2.EC = 0x24/0x25)
-- **指令解码**: ISS (Instruction Specific Syndrome)
-- **支持设备**:
-  - PL011 UART (0x09000000)
-  - GIC Distributor (0x08000000)
-
-## 开发进度
-
-查看 [PROGRESS.md](PROGRESS.md) 了解详细的开发进度和技术笔记。
-
-### 已完成
-
-- ✅ Sprint 1.1: vCPU Framework
-- ✅ Sprint 1.2: Memory Management  
-- ✅ Sprint 1.3: Interrupt Handling
-- ✅ Sprint 1.4: Device Emulation
-- ✅ 目录结构重组 (Phase 1-3)
-
-### 进行中
-
-- 🔄 Phase 4: 文档完善
-- 🔄 MMIO 测试调试
-
-### 计划中
-
-- Multi-vCPU support
-- Guest interrupt injection
-- Dynamic memory allocator
-- More device emulation
-
-## 测试
-
-项目包含多个测试，在 `make run` 时自动运行：
-
-1. **Guest Execution Test**: 测试基本的 guest 执行和 hypercall
-2. **Timer Interrupt Test**: 测试 ARM Generic Timer 中断检测
-3. **MMIO Device Test**: 测试设备模拟框架（调试中）
-
-测试输出示例：
+### Exception Handling Flow
 
 ```
+Guest @ EL1
+  │ trap (HVC / Data Abort / WFI / IRQ)
+  ▼
+Exception Vector (exception.S) ── save context
+  │
+  ▼
+handle_exception() ── decode ESR_EL2
+  ├── WFI → check pending timer, inject if ready
+  ├── HVC → handle hypercall, advance PC
+  ├── Data Abort → decode instruction → MMIO emulation
+  └── IRQ → acknowledge, inject via List Register
+  │
+  ▼
+Restore context → ERET back to guest
+```
+
+### Key Components
+
+| Module | Path | Description |
+|--------|------|-------------|
+| vCPU | `src/vcpu.rs` | Virtual CPU with state machine and interrupt state |
+| VM | `src/vm.rs` | VM management, Stage-2 setup, up to 8 vCPUs |
+| Scheduler | `src/scheduler.rs` | Round-robin vCPU scheduler |
+| Exception Handler | `src/arch/aarch64/hypervisor/exception.rs` | ESR_EL2 decode, MMIO routing |
+| Instruction Decoder | `src/arch/aarch64/hypervisor/decode.rs` | Load/store decode for MMIO |
+| Stage-2 MMU | `src/arch/aarch64/mm/mmu.rs` | Page tables, dynamic allocation |
+| GICv3 | `src/arch/aarch64/peripherals/gicv3.rs` | List Registers, virtual interface |
+| Timer | `src/arch/aarch64/peripherals/timer.rs` | Virtual timer, CNTHCTL config |
+| Device Manager | `src/devices/mod.rs` | MMIO device routing |
+| PL011 UART | `src/devices/pl011/` | UART emulation |
+| GIC Distributor | `src/devices/gic/` | GICD emulation |
+| Arch Constants | `src/arch/aarch64/defs.rs` | ARM64 named constants |
+| Board Constants | `src/platform.rs` | QEMU virt platform constants |
+| Arch Traits | `src/arch/traits.rs` | Portable trait definitions |
+| Guest Loader | `src/guest_loader.rs` | Linux/Zephyr boot configuration |
+
+### Memory Layout
+
+- **IPA Space**: 48-bit, 4KB granule, 2MB block mapping
+- **Stage-2**: Identity mapping (GPA == HPA)
+- **Guest RAM**: 0x40000000 (base), 0x48000000 (kernel load address)
+- **GIC**: 0x08000000 (GICD), 0x080A0000 (GICR) — passthrough
+- **UART**: 0x09000000 (PL011) — emulated
+- **Heap**: 0x41000000, 16MB bump allocator
+
+### Interrupt Handling
+
+- **GICv3 List Registers**: Hardware-assisted virtual interrupt injection
+- **HW=1 injection**: Links virtual INTID to physical INTID; guest EOI auto-deactivates physical interrupt
+- **EOImode=1**: Priority drop on EOIR, deactivation via DIR (software) or HW bit (hardware)
+- **Timer**: Virtual Timer PPI 27, masked at EL2 after injection, re-armed by guest
+
+## Testing
+
+All tests run automatically on `make run`. 15 test files covering:
+
+| Test | Description |
+|------|-------------|
+| `test_allocator` | Bump allocator page allocation |
+| `test_heap` | Heap initialization and global allocator |
+| `test_dynamic_pagetable` | Dynamic Stage-2 page table creation |
+| `test_multi_vcpu` | Multi-vCPU creation and management |
+| `test_scheduler` | Round-robin scheduler logic |
+| `test_vm_scheduler` | VM-integrated scheduling |
+| `test_gicv3_virt` | GICv3 virtual interface and List Registers |
+| `test_guest` | Basic guest execution and hypercall |
+| `test_timer` | Timer interrupt detection at EL2 |
+| `test_mmio` | MMIO device emulation |
+| `test_complete_interrupt` | End-to-end interrupt flow with GICv3 LRs |
+| `test_guest_irq` | Guest interrupt handling |
+| `test_guest_interrupt` | Guest interrupt injection |
+| `test_guest_loader` | Guest loader configuration |
+| `test_simple_guest` | Simple guest boot and exit |
+
+```
+$ make run
+...
+[TEST] Allocator Test PASSED
+[TEST] Heap Test PASSED
+[TEST] Dynamic Page Table Test PASSED
+[TEST] Multi-vCPU Test PASSED
+[TEST] Scheduler Test PASSED
+[TEST] VM Scheduler Test PASSED
+[TEST] GICv3 Virtualization Test PASSED
+[TEST] Guest Execution Test PASSED
+[TEST] Timer Interrupt Test PASSED
+[TEST] MMIO Device Test PASSED
+[TEST] Complete Interrupt Test PASSED
+[TEST] Guest Loader Test PASSED
+[TEST] Simple Guest Test PASSED
+
 ========================================
-  ARM64 Hypervisor - Sprint 1.4
-  Device Emulation Test
+All Sprints Complete (2.1-2.4)
 ========================================
-
-[INIT] Initializing at EL2...
-[INIT] Current EL: EL2
-
-[TEST] Starting guest execution test...
-[GUEST] G!
-[VCPU] Guest requested exit
-[TEST] Guest exited successfully
 ```
 
-## 参考资料
+## Roadmap
 
-- [ARM Architecture Reference Manual](https://developer.arm.com/documentation/) - ARMv8-A 架构手册
-- [Hafnium](https://github.com/TF-Hafnium/hafnium) - TensorFlow 的参考 Hypervisor
-- [KVM/ARM](https://www.kernel.org/doc/html/latest/virt/kvm/arm/index.html) - Linux KVM ARM 实现
-- [Rust Embedded Book](https://docs.rust-embedded.org/book/) - Embedded Rust 编程
+### Completed
 
-## 贡献
+- M0: Project setup, QEMU boot, UART output
+- M1: vCPU framework, Stage-2 MMU, exception handling, device emulation, interrupt injection
+- M2: GICv3 virtual interface, dynamic memory, multi-vCPU scheduler, API documentation
+- Linux 6.12 guest boot with HW=1 timer virtualization
+- Code refactoring: named constants, dead code removal, architecture traits
 
-这是一个教育性项目，欢迎：
+### Planned
 
-- Bug 报告
-- 功能建议
-- 代码改进
-- 文档完善
+- **M3 — FF-A**: Firmware Framework for Armv8-A — hypervisor endpoint, direct messaging, memory sharing
+- **M4 — Secure EL2**: TEE support, S-EL2 implementation, OP-TEE integration
+- **M5 — RME & CCA**: Realm Management Extension, Confidential Compute Architecture
 
-## 许可证
+See [DEVELOPMENT_PLAN.md](DEVELOPMENT_PLAN.md) for the full roadmap.
 
-[待定]
+## Contributing
 
-## 致谢
+See [CONTRIBUTING.md](CONTRIBUTING.md) for development setup, code style, and contribution guidelines.
 
-- Rust 社区的 embedded-rs 生态
-- QEMU 项目
-- ARM 文档团队
-- Hafnium 项目的架构灵感
+## References
+
+- [ARM Architecture Reference Manual (ARMv8-A)](https://developer.arm.com/documentation/ddi0487/latest)
+- [ARM GIC Architecture Specification](https://developer.arm.com/documentation/ihi0069/latest)
+- [ARM FF-A Specification](https://developer.arm.com/documentation/den0077/latest)
+- [Hafnium](https://github.com/TF-Hafnium/hafnium) — Reference hypervisor
+- [KVM/ARM](https://www.kernel.org/doc/html/latest/virt/kvm/arm/index.html) — Linux KVM ARM implementation
+
+## License
+
+MIT
 
 ---
 
-**作者**: [你的名字]  
-**创建时间**: 2026-01  
-**最后更新**: 2026-01-26
+**Author**: [willamhou](https://github.com/willamhou)
