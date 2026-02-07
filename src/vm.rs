@@ -2,95 +2,18 @@
 //!
 //! This module provides the [`Vm`] type which represents a complete virtual machine
 //! containing one or more vCPUs, Stage-2 memory mapping, and emulated devices.
-//!
-//! # Architecture
-//!
-//! ```text
-//! ┌──────────────────────────────────────────────────────────┐
-//! │                          Vm                              │
-//! ├──────────────────────────────────────────────────────────┤
-//! │  id: usize                    - VM identifier            │
-//! │  state: VmState               - Ready/Running/Paused/... │
-//! ├──────────────────────────────────────────────────────────┤
-//! │  vcpus[0..MAX_VCPUS]          - Virtual processors       │
-//! │  ┌────────┐ ┌────────┐ ┌────────┐                        │
-//! │  │ vCPU 0 │ │ vCPU 1 │ │  ...   │                        │
-//! │  └────────┘ └────────┘ └────────┘                        │
-//! ├──────────────────────────────────────────────────────────┤
-//! │  scheduler: Scheduler         - Round-robin vCPU sched   │
-//! ├──────────────────────────────────────────────────────────┤
-//! │  Stage-2 Page Tables          - IPA → PA translation     │
-//! │  ┌─────────────────────────────────────────────────┐     │
-//! │  │ Guest Memory (Normal)  │  MMIO (Device)         │     │
-//! │  │ 0x4000_0000-0x4020_0000│  0x0900_0000 (UART)    │     │
-//! │  └─────────────────────────────────────────────────┘     │
-//! ├──────────────────────────────────────────────────────────┤
-//! │  devices: DeviceManager       - MMIO trap-and-emulate    │
-//! └──────────────────────────────────────────────────────────┘
-//! ```
-//!
-//! # Example: Creating and Running a VM
-//!
-//! ```rust,ignore
-//! use hypervisor::vm::Vm;
-//!
-//! // Create a new VM
-//! let mut vm = Vm::new(0);
-//!
-//! // Initialize memory mapping
-//! vm.init_memory(0x4000_0000, 0x200000);
-//!
-//! // Create vCPUs
-//! {
-//!     let vcpu0 = vm.create_vcpu(0).unwrap();
-//!     vcpu0.context_mut().pc = guest_entry;
-//! }
-//! vm.create_vcpu(1).unwrap();
-//!
-//! // Run scheduler loop
-//! while let Some(vcpu_id) = vm.schedule() {
-//!     match vm.run_current() {
-//!         Ok(()) => {
-//!             // Guest exited normally
-//!             vm.mark_current_done();
-//!         }
-//!         Err("WFI") => {
-//!             // Guest waiting for interrupt
-//!             vm.block_current();
-//!         }
-//!         Err(e) => {
-//!             // Handle error
-//!             break;
-//!         }
-//!     }
-//! }
-//! ```
-//!
-//! # Memory Model
-//!
-//! The VM uses ARM Stage-2 translation to provide memory isolation:
-//!
-//! - **IPA (Intermediate Physical Address)**: Guest-visible physical addresses
-//! - **PA (Physical Address)**: Host physical addresses
-//! - **Identity Mapping**: IPA == PA for simplicity
-//!
-//! Guest memory accesses to unmapped MMIO regions cause Stage-2 faults,
-//! which are trapped to the hypervisor for device emulation.
 
 use crate::vcpu::Vcpu;
 use crate::arch::aarch64::{MemoryAttributes, init_stage2};
+use crate::arch::aarch64::defs::*;
 use crate::devices::DeviceManager;
 use crate::scheduler::Scheduler;
+use crate::platform;
 
 /// Maximum number of vCPUs per VM
-///
-/// This limit is chosen to balance memory usage (each vCPU requires
-/// context storage) with practical multi-core guest support.
 pub const MAX_VCPUS: usize = 8;
 
 /// Virtual Machine lifecycle state
-///
-/// Tracks the overall state of the VM for lifecycle management.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum VmState {
     /// VM created but no vCPUs or memory configured
@@ -110,21 +33,6 @@ pub enum VmState {
 }
 
 /// Virtual Machine
-///
-/// A `Vm` represents a complete isolated execution environment containing:
-///
-/// - **vCPUs**: Up to [`MAX_VCPUS`] virtual processors
-/// - **Memory**: Stage-2 page tables for guest physical address translation
-/// - **Devices**: Emulated MMIO devices (UART, GIC, etc.)
-/// - **Scheduler**: Round-robin vCPU scheduling
-///
-/// # Lifecycle
-///
-/// 1. Create VM with `Vm::new(id)`
-/// 2. Initialize memory with `init_memory(start, size)`
-/// 3. Create vCPUs with `create_vcpu(id)`
-/// 4. Run scheduler loop with `schedule()` + `run_current()`
-/// 5. Stop with `stop()` when done
 pub struct Vm {
     /// Unique identifier for this VM
     id: usize,
@@ -141,20 +49,12 @@ pub struct Vm {
     /// Whether memory is initialized
     memory_initialized: bool,
 
-    /// Device manager for MMIO emulation
-    /// Note: Currently accessed via global::DEVICES for exception handler access
-    #[allow(dead_code)]
-    devices: DeviceManager,
-
     /// Scheduler for multi-vCPU execution
     scheduler: Scheduler,
 }
 
 impl Vm {
     /// Create a new VM
-    ///
-    /// # Arguments
-    /// * `id` - Unique identifier for this VM
     pub fn new(id: usize) -> Self {
         const INIT: Option<Vcpu> = None;
         let devices = DeviceManager::new();
@@ -168,44 +68,38 @@ impl Vm {
             vcpus: [INIT; MAX_VCPUS],
             vcpu_count: 0,
             memory_initialized: false,
-            devices: DeviceManager::new(), // Dummy, real one is in global
             scheduler: Scheduler::new(),
         }
     }
-    
+
     /// Get VM ID
     pub fn id(&self) -> usize {
         self.id
     }
-    
+
     /// Get current state
     pub fn state(&self) -> VmState {
         self.state
     }
-    
+
     /// Get number of vCPUs
     pub fn vcpu_count(&self) -> usize {
         self.vcpu_count
     }
-    
+
     /// Initialize memory for the VM
-    /// 
-    /// Sets up identity mapping for guest memory regions.
-    /// 
-    /// # Arguments
-    /// * `guest_mem_start` - Start of guest memory region
-    /// * `guest_mem_size` - Size of guest memory region
     pub fn init_memory(&mut self, guest_mem_start: u64, guest_mem_size: u64) {
         use crate::uart_puts;
+        use crate::uart_put_hex;
         use crate::arch::aarch64::mm::IdentityMapper;
-        
+
         if self.memory_initialized {
             uart_puts(b"[VM] Memory already initialized\n");
             return;
         }
-        
+
         uart_puts(b"[VM] Initializing memory mapping...\n");
-        
+
         // Use a global static mapper (to avoid large stack allocation)
         static mut MAPPER: IdentityMapper = IdentityMapper::new();
 
@@ -216,54 +110,35 @@ impl Vm {
 
         // Map guest memory region (identity mapping)
         // Round to 2MB boundaries
-        let start_aligned = guest_mem_start & !(2 * 1024 * 1024 - 1);
-        let size_aligned = ((guest_mem_size + 2 * 1024 * 1024 - 1) / (2 * 1024 * 1024)) * (2 * 1024 * 1024);
-        
+        let start_aligned = guest_mem_start & !BLOCK_MASK_2MB;
+        let size_aligned = ((guest_mem_size + BLOCK_SIZE_2MB - 1) / BLOCK_SIZE_2MB) * BLOCK_SIZE_2MB;
+
         uart_puts(b"[VM] Mapping region: 0x");
-        print_hex(start_aligned);
+        uart_put_hex(start_aligned);
         uart_puts(b" - 0x");
-        print_hex(start_aligned + size_aligned);
+        uart_put_hex(start_aligned + size_aligned);
         uart_puts(b"\n");
-        
+
         unsafe {
             MAPPER.map_region(start_aligned, size_aligned, MemoryAttributes::NORMAL);
 
-            // NOTE: Do NOT map low memory at 0x0.
-            // If the guest crashes at EL1 before setting VBAR_EL1, the exception
-            // goes to address 0x200 (VBAR_EL1=0 + sync offset). Leaving this
-            // unmapped causes a Stage-2 fault that traps to EL2, making the
-            // crash visible to the hypervisor for debugging.
-
             // Map MMIO device regions (DEVICE memory type)
 
-            // GIC region: 0x08000000 - 0x0A000000 (32MB, covers distributor + redistributor)
-            // DTB specifies redistributor at 0x080A0000 with size 0xF60000,
-            // extending up to 0x09000000. Map the entire region in 2MB blocks.
-            let gic_base = 0x08000000u64;
-            let gic_size = 8 * 2 * 1024 * 1024;  // 16MB = 8 x 2MB blocks (covers 0x08000000-0x09000000)
-            MAPPER.map_region(gic_base, gic_size, MemoryAttributes::DEVICE);
+            // GIC region: covers distributor + redistributor
+            MAPPER.map_region(platform::GIC_REGION_BASE, platform::GIC_REGION_SIZE, MemoryAttributes::DEVICE);
 
-            // Map UART for passthrough: 0x09000000
-            let uart_base = 0x09000000u64;
-            let uart_size = 2 * 1024 * 1024;  // 2MB block
-            MAPPER.map_region(uart_base, uart_size, MemoryAttributes::DEVICE);
+            // Map UART for passthrough
+            MAPPER.map_region(platform::UART_BASE as u64, BLOCK_SIZE_2MB, MemoryAttributes::DEVICE);
 
             // Initialize Stage-2 translation
             init_stage2(&MAPPER);
         }
-        
+
         self.memory_initialized = true;
         uart_puts(b"[VM] Memory mapping complete\n");
     }
-    
+
     /// Create a vCPU with specified ID
-    ///
-    /// # Arguments
-    /// * `vcpu_id` - Unique ID for the vCPU (0 to MAX_VCPUS-1)
-    ///
-    /// # Returns
-    /// * `Ok(&mut Vcpu)` - Reference to the created vCPU
-    /// * `Err(msg)` - Failed to create vCPU
     pub fn create_vcpu(&mut self, vcpu_id: usize) -> Result<&mut Vcpu, &'static str> {
         if vcpu_id >= MAX_VCPUS {
             return Err("vCPU ID out of range");
@@ -285,14 +160,6 @@ impl Vm {
     }
 
     /// Add a vCPU to this VM
-    ///
-    /// # Arguments
-    /// * `entry_point` - Guest code entry point
-    /// * `stack_pointer` - Guest stack pointer
-    ///
-    /// # Returns
-    /// * `Ok(vcpu_id)` - Successfully added vCPU with given ID
-    /// * `Err(msg)` - Failed to add vCPU
     pub fn add_vcpu(&mut self, entry_point: u64, stack_pointer: u64)
         -> Result<usize, &'static str> {
         if self.vcpu_count >= MAX_VCPUS {
@@ -311,7 +178,7 @@ impl Vm {
 
         Ok(vcpu_id)
     }
-    
+
     /// Get a reference to a vCPU
     pub fn vcpu(&self, vcpu_id: usize) -> Option<&Vcpu> {
         if vcpu_id < self.vcpu_count {
@@ -320,7 +187,7 @@ impl Vm {
             None
         }
     }
-    
+
     /// Get a mutable reference to a vCPU
     pub fn vcpu_mut(&mut self, vcpu_id: usize) -> Option<&mut Vcpu> {
         if vcpu_id < self.vcpu_count {
@@ -329,59 +196,53 @@ impl Vm {
             None
         }
     }
-    
+
     /// Run the VM (single vCPU for now)
-    /// 
-    /// This will run vCPU 0 until it exits.
-    /// In a real implementation, this would schedule all vCPUs.
     pub fn run(&mut self) -> Result<(), &'static str> {
         if self.state != VmState::Ready {
             return Err("VM is not in Ready state");
         }
-        
+
         if self.vcpu_count == 0 {
             return Err("No vCPUs configured");
         }
-        
+
         self.state = VmState::Running;
-        
-        // For now, just run vCPU 0
-        // In a real implementation, we would have a proper scheduler
+
         if let Some(vcpu) = self.vcpu_mut(0) {
             let result = vcpu.run();
-            
+
             self.state = VmState::Ready;
-            
+
             result
         } else {
             self.state = VmState::Ready;
             Err("vCPU 0 not found")
         }
     }
-    
+
     /// Pause the VM
     pub fn pause(&mut self) -> Result<(), &'static str> {
         if self.state != VmState::Running {
             return Err("VM is not running");
         }
-        
+
         self.state = VmState::Paused;
         Ok(())
     }
-    
+
     /// Resume the VM
     pub fn resume(&mut self) -> Result<(), &'static str> {
         if self.state != VmState::Paused {
             return Err("VM is not paused");
         }
-        
+
         self.state = VmState::Running;
         Ok(())
     }
-    
+
     /// Stop the VM
     pub fn stop(&mut self) {
-        // Stop all vCPUs
         for vcpu in self.vcpus.iter_mut().flatten() {
             vcpu.stop();
         }
@@ -392,18 +253,11 @@ impl Vm {
     // ========== Scheduler Integration ==========
 
     /// Schedule the next vCPU to run
-    ///
-    /// Returns the vCPU ID that should run next, or None if no vCPU is ready.
     pub fn schedule(&mut self) -> Option<usize> {
         self.scheduler.pick_next()
     }
 
     /// Run the currently scheduled vCPU
-    ///
-    /// # Returns
-    /// * `Ok(())` - Guest exited normally
-    /// * `Err("WFI")` - Guest executed WFI
-    /// * `Err(msg)` - Error occurred
     pub fn run_current(&mut self) -> Result<(), &'static str> {
         let vcpu_id = self.scheduler.current().ok_or("No current vCPU")?;
         let vcpu = self.vcpus[vcpu_id].as_mut().ok_or("vCPU not found")?;
@@ -446,18 +300,4 @@ impl core::fmt::Debug for Vm {
             .field("vcpu_count", &self.vcpu_count)
             .finish()
     }
-}
-
-/// Helper function to print hex value
-fn print_hex(value: u64) {
-    use crate::uart_puts;
-    const HEX_CHARS: &[u8; 16] = b"0123456789abcdef";
-    let mut buffer = [0u8; 16];
-    
-    for i in 0..16 {
-        let nibble = ((value >> ((15 - i) * 4)) & 0xF) as usize;
-        buffer[i] = HEX_CHARS[nibble];
-    }
-    
-    uart_puts(&buffer);
 }

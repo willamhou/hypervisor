@@ -1,12 +1,14 @@
 //! ARM64 Register Definitions
-//! 
+//!
 //! This module defines the register context that needs to be saved/restored
 //! when entering/exiting a virtual machine.
 
 use core::fmt;
+use super::defs::*;
+use crate::arch::traits::{VcpuContextOps, ExceptionInfo};
 
 /// General Purpose Registers (x0-x30)
-/// 
+///
 /// In ARM64, we have 31 general purpose registers:
 /// - x0-x30: General purpose registers
 /// - x29: Frame Pointer (FP)
@@ -61,7 +63,7 @@ impl Default for GeneralPurposeRegs {
 
 impl GeneralPurposeRegs {
     /// Get value of a general purpose register
-    /// 
+    ///
     /// # Arguments
     /// * `reg` - Register number (0-30, x31/SP not accessible)
     pub fn get_reg(&self, reg: u8) -> u64 {
@@ -100,9 +102,9 @@ impl GeneralPurposeRegs {
             _ => 0, // Invalid register
         }
     }
-    
+
     /// Set value of a general purpose register
-    /// 
+    ///
     /// # Arguments
     /// * `reg` - Register number (0-30, x31/SP not accessible)
     /// * `value` - Value to set
@@ -145,7 +147,7 @@ impl GeneralPurposeRegs {
 }
 
 /// System Registers
-/// 
+///
 /// These are the key system registers that need to be managed when
 /// running a guest VM. They control the VM's execution state.
 #[repr(C)]
@@ -153,48 +155,48 @@ impl GeneralPurposeRegs {
 pub struct SystemRegs {
     /// Stack Pointer (EL1)
     pub sp_el1: u64,
-    
+
     /// Exception Link Register (EL1) - Return address for exceptions
     pub elr_el1: u64,
-    
+
     /// Saved Program Status Register (EL1) - CPU state (flags, mode, etc.)
     pub spsr_el1: u64,
-    
+
     /// System Control Register (EL1) - Controls MMU, caches, etc.
     pub sctlr_el1: u64,
-    
+
     /// Translation Table Base Register 0 (EL1) - Page table base
     pub ttbr0_el1: u64,
-    
+
     /// Translation Table Base Register 1 (EL1) - Kernel page table base
     pub ttbr1_el1: u64,
-    
+
     /// Translation Control Register (EL1) - Controls translation/MMU
     pub tcr_el1: u64,
-    
+
     /// Memory Attribute Indirection Register (EL1)
     pub mair_el1: u64,
-    
+
     /// Vector Base Address Register (EL1) - Exception vector table base
     pub vbar_el1: u64,
-    
+
     /// Context ID Register (EL1) - Process/ASID identifier
     pub contextidr_el1: u64,
-    
+
     /// Thread ID Registers
     pub tpidr_el1: u64,     // OS thread ID
     pub tpidrro_el0: u64,   // User read-only thread ID
     pub tpidr_el0: u64,     // User read-write thread ID
-    
+
     /// Exception Syndrome Register (EL2) - Why did we exit?
     pub esr_el2: u64,
-    
+
     /// Fault Address Register (EL2) - What address caused the fault?
     pub far_el2: u64,
-    
+
     /// Hypervisor Configuration Register
     pub hcr_el2: u64,
-    
+
     /// Counter-timer Virtual Offset
     pub cntvoff_el2: u64,
 }
@@ -224,7 +226,7 @@ impl Default for SystemRegs {
 }
 
 /// Complete vCPU Register Context
-/// 
+///
 /// This structure contains all the registers that need to be saved/restored
 /// when switching between host and guest execution.
 #[repr(C)]
@@ -232,10 +234,10 @@ impl Default for SystemRegs {
 pub struct VcpuContext {
     /// General purpose registers
     pub gp_regs: GeneralPurposeRegs,
-    
+
     /// System registers
     pub sys_regs: SystemRegs,
-    
+
     /// Stack pointer for this vCPU context
     pub sp: u64,
 
@@ -255,7 +257,7 @@ impl Default for VcpuContext {
             sys_regs: SystemRegs::default(),
             sp: 0,
             pc: 0,
-            spsr_el2: 0x3c5, // EL1h + DAIF masked
+            spsr_el2: SPSR_EL1H_DAIF_MASKED,
         }
     }
 }
@@ -267,18 +269,18 @@ impl VcpuContext {
         ctx.pc = entry_point;
         ctx.sp = stack_pointer;
         ctx.sys_regs.sp_el1 = stack_pointer;
-        
+
         // Set SPSR to EL1h (EL1 with SP_EL1)
         // Bits [3:0] = 0b0101 (EL1h)
         // Bit [6] = 0 (FIQ not masked)
         // Bit [7] = 0 (IRQ not masked)
         // Bit [8] = 0 (SError not masked)
         // Bit [9] = 0 (Debug exceptions not masked)
-        ctx.sys_regs.spsr_el1 = 0b0101;
-        
+        ctx.sys_regs.spsr_el1 = SPSR_EL1H;
+
         ctx
     }
-    
+
     /// Get a general purpose register value
     pub fn get_gpr(&self, reg: u8) -> u64 {
         self.gp_regs.get_reg(reg)
@@ -291,43 +293,43 @@ impl VcpuContext {
 
     /// Get the exit reason from ESR_EL2
     pub fn exit_reason(&self) -> ExitReason {
-        let ec = (self.sys_regs.esr_el2 >> 26) & 0x3F;
-        
+        let ec = (self.sys_regs.esr_el2 >> ESR_EC_SHIFT) & ESR_EC_MASK;
+
         match ec {
-            0x00 => ExitReason::Unknown,
-            0x01 => ExitReason::WfiWfe,
-            0x16 => ExitReason::HvcCall,
-            0x18 => ExitReason::TrapMsrMrs,
-            0x20 | 0x21 => ExitReason::InstructionAbort,  // 0x20=Lower EL, 0x21=Same EL
-            0x24 | 0x25 => ExitReason::DataAbort,         // 0x24=Lower EL, 0x25=Same EL
+            EC_UNKNOWN => ExitReason::Unknown,
+            EC_WFI_WFE => ExitReason::WfiWfe,
+            EC_HVC64 => ExitReason::HvcCall,
+            EC_MSR_MRS => ExitReason::TrapMsrMrs,
+            EC_IABT_LOWER | EC_IABT_SAME => ExitReason::InstructionAbort,
+            EC_DABT_LOWER | EC_DABT_SAME => ExitReason::DataAbort,
             _ => ExitReason::Other(ec),
         }
     }
 }
 
 /// VM Exit Reason
-/// 
+///
 /// Represents why the VM exited and trapped to the hypervisor.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ExitReason {
     /// Unknown/undefined reason
     Unknown,
-    
+
     /// WFI (Wait For Interrupt) or WFE (Wait For Event)
     WfiWfe,
-    
+
     /// HVC (Hypervisor Call) instruction
     HvcCall,
-    
+
     /// Trapped MSR/MRS (system register access)
     TrapMsrMrs,
-    
+
     /// Instruction abort (instruction fetch fault)
     InstructionAbort,
-    
+
     /// Data abort (data access fault)
     DataAbort,
-    
+
     /// Other reason with exception class code
     Other(u64),
 }
@@ -343,5 +345,65 @@ impl fmt::Display for ExitReason {
             ExitReason::DataAbort => write!(f, "Data Abort"),
             ExitReason::Other(ec) => write!(f, "Other (EC=0x{:x})", ec),
         }
+    }
+}
+
+// ── Trait implementations ────────────────────────────────────────────
+
+impl VcpuContextOps for VcpuContext {
+    fn new(entry: u64, sp: u64) -> Self {
+        VcpuContext::new(entry, sp)
+    }
+
+    fn pc(&self) -> u64 {
+        self.pc
+    }
+
+    fn set_pc(&mut self, val: u64) {
+        self.pc = val;
+    }
+
+    fn sp(&self) -> u64 {
+        self.sp
+    }
+
+    fn set_sp(&mut self, val: u64) {
+        self.sp = val;
+    }
+
+    fn get_reg(&self, n: u8) -> u64 {
+        self.gp_regs.get_reg(n)
+    }
+
+    fn set_reg(&mut self, n: u8, val: u64) {
+        self.gp_regs.set_reg(n, val);
+    }
+
+    fn advance_pc(&mut self) {
+        self.pc += AARCH64_INSN_SIZE;
+    }
+}
+
+impl ExceptionInfo for ExitReason {
+    fn is_wfi(&self) -> bool {
+        matches!(self, ExitReason::WfiWfe)
+    }
+
+    fn is_hypercall(&self) -> bool {
+        matches!(self, ExitReason::HvcCall)
+    }
+
+    fn is_data_abort(&self) -> bool {
+        matches!(self, ExitReason::DataAbort)
+    }
+
+    fn is_instruction_abort(&self) -> bool {
+        matches!(self, ExitReason::InstructionAbort)
+    }
+
+    fn fault_address(&self) -> Option<u64> {
+        // Fault address is in FAR_EL2, not in ExitReason itself.
+        // Callers read it from VcpuContext.sys_regs.far_el2.
+        None
     }
 }

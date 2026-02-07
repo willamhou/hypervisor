@@ -2,9 +2,7 @@
 
 use super::BumpAllocator;
 use core::cell::UnsafeCell;
-
-const HEAP_START: u64 = 0x4100_0000;
-const HEAP_SIZE: u64 = 0x100_0000; // 16MB
+use crate::platform;
 
 struct GlobalHeap {
     allocator: UnsafeCell<Option<BumpAllocator>>,
@@ -18,7 +16,7 @@ static HEAP: GlobalHeap = GlobalHeap {
 
 /// Initialize the global heap. Must be called before any allocation.
 pub unsafe fn init() {
-    let alloc = BumpAllocator::new(HEAP_START, HEAP_SIZE);
+    let alloc = BumpAllocator::new(platform::HEAP_START, platform::HEAP_SIZE);
     *HEAP.allocator.get() = Some(alloc);
 }
 

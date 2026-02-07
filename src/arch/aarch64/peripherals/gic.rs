@@ -12,12 +12,7 @@
 /// - SPI (32-1019): Shared Peripheral Interrupts
 
 use core::ptr::{read_volatile, write_volatile};
-
-/// GIC Distributor (GICD) base address for QEMU virt machine
-const GICD_BASE: u64 = 0x0800_0000;
-
-/// GIC CPU Interface (GICC) base address for QEMU virt machine
-const GICC_BASE: u64 = 0x0801_0000;
+use crate::platform;
 
 /// GICD Register offsets
 const GICD_CTLR: u64 = 0x000;        // Distributor Control Register
@@ -154,8 +149,8 @@ impl GicCpuInterface {
 }
 
 /// Global GIC instances
-pub static GICD: GicDistributor = GicDistributor::new(GICD_BASE);
-pub static GICC: GicCpuInterface = GicCpuInterface::new(GICC_BASE);
+pub static GICD: GicDistributor = GicDistributor::new(platform::GICD_BASE);
+pub static GICC: GicCpuInterface = GicCpuInterface::new(platform::GICC_BASE);
 
 /// Initialize the GIC
 pub fn init() {

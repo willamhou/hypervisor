@@ -8,6 +8,7 @@
 //! - Memory management (Stage-2 translation)
 //! - Peripheral access (GIC, Timer)
 
+pub mod defs;
 pub mod regs;
 pub mod hypervisor;
 pub mod mm;

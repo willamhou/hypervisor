@@ -1,13 +1,14 @@
 /// ARM Generic Timer support
-/// 
+///
 /// ARM provides several timers:
 /// - Physical Timer (EL1): Accessed via CNTPCT_EL0, CNTP_*
 /// - Virtual Timer (EL1): Accessed via CNTVCT_EL0, CNTV_*
 /// - Hypervisor Timer (EL2): Accessed via CNTHCTL_EL2
-/// 
+///
 /// For guest VMs, we use the Virtual Timer which generates PPI 27.
 
 use core::arch::asm;
+use super::super::defs::*;
 
 /// Timer control register bits
 const TIMER_ENABLE: u64 = 1 << 0;    // Enable timer
@@ -83,18 +84,13 @@ pub fn set_tval(tval: u32) {
 
 /// Configure hypervisor control of timers
 pub fn init_hypervisor_timer() {
-    // Read CNTHCTL_EL2
     let mut cnthctl: u64;
     unsafe {
         asm!("mrs {}, cnthctl_el2", out(reg) cnthctl);
     }
 
-    // EL1PCTEN (bit 0): EL0/EL1 can access physical counter
-    // EL1PCEN (bit 1): EL0/EL1 can access physical timer
-    // EVNTEN (bit 2): Enable event stream
-    // EVNTDIR (bit 3): Event stream direction
-    // EVNTI (bits 7:4): Event stream divider
-    cnthctl |= (1 << 0) | (1 << 1);  // Allow EL1 access to physical counter/timer
+    // Allow EL1 access to physical counter and timer
+    cnthctl |= CNTHCTL_EL1PCTEN | CNTHCTL_EL1PCEN;
 
     unsafe {
         asm!("msr cnthctl_el2, {}", in(reg) cnthctl);
@@ -102,27 +98,21 @@ pub fn init_hypervisor_timer() {
 }
 
 /// Configure timer access for guest VM
-///
-/// This allows the guest to access its virtual timer (CNTV_*)
-/// which is essential for RTOS scheduling.
 pub fn init_guest_timer() {
     let mut cnthctl: u64;
     unsafe {
         asm!("mrs {}, cnthctl_el2", out(reg) cnthctl);
     }
 
-    // EL1PCTEN (bit 0): EL0/EL1 can access physical counter (CNTPCT_EL0)
-    // EL1PCEN (bit 1): EL0/EL1 can access physical timer
-    // Note: Virtual timer (CNTV_*) is always accessible from EL1
-    // but we need to ensure physical counter is readable for time calculations
-    cnthctl |= (1 << 0);  // Allow EL1 access to physical counter
+    // Allow EL1 access to physical counter
+    cnthctl |= CNTHCTL_EL1PCTEN;
 
     unsafe {
         asm!("msr cnthctl_el2, {}", in(reg) cnthctl);
         asm!("isb");
     }
 
-    // Set virtual timer offset to 0 (guest sees same time as hypervisor)
+    // Set virtual timer offset to 0
     unsafe {
         asm!("msr cntvoff_el2, xzr");
         asm!("isb");
@@ -130,14 +120,11 @@ pub fn init_guest_timer() {
 }
 
 /// Check if the guest's virtual timer is enabled and pending
-///
-/// Returns true if the guest's virtual timer has fired
 pub fn is_guest_vtimer_pending() -> bool {
     let ctl: u64;
     unsafe {
         asm!("mrs {}, cntv_ctl_el0", out(reg) ctl);
     }
-    // Timer is pending if: ENABLE=1 and ISTATUS=1 and IMASK=0
     let enabled = (ctl & TIMER_ENABLE) != 0;
     let pending = (ctl & TIMER_ISTATUS) != 0;
     let masked = (ctl & TIMER_IMASK) != 0;
@@ -145,15 +132,12 @@ pub fn is_guest_vtimer_pending() -> bool {
 }
 
 /// Mask the guest's virtual timer interrupt
-///
-/// This prevents the timer from continuously firing while we handle it.
-/// The guest will unmask it when it's ready for another interrupt.
 pub fn mask_guest_vtimer() {
     let mut ctl: u64;
     unsafe {
         asm!("mrs {}, cntv_ctl_el0", out(reg) ctl);
     }
-    ctl |= TIMER_IMASK;  // Set IMASK bit
+    ctl |= TIMER_IMASK;
     unsafe {
         asm!("msr cntv_ctl_el0, {}", in(reg) ctl);
         asm!("isb");
@@ -162,13 +146,8 @@ pub fn mask_guest_vtimer() {
 
 /// Enable the virtual timer with a timeout in ticks
 pub fn enable_timer(ticks: u32) {
-    // Disable timer first
     set_ctl(0);
-    
-    // Set timeout
     set_tval(ticks);
-    
-    // Enable timer with interrupts unmasked
     set_ctl(TIMER_ENABLE);
 }
 
@@ -188,15 +167,15 @@ pub fn print_timer_info() {
     let freq = get_frequency();
     let count = get_counter();
     let ctl = get_ctl();
-    
+
     crate::uart_puts(b"[TIMER] Frequency: ");
     crate::uart_put_u64(freq);
     crate::uart_puts(b" Hz\n");
-    
+
     crate::uart_puts(b"[TIMER] Counter: ");
     crate::uart_put_u64(count);
     crate::uart_puts(b"\n");
-    
+
     crate::uart_puts(b"[TIMER] Control: 0x");
     crate::uart_put_hex(ctl);
     crate::uart_puts(b"\n");

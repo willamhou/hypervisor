@@ -6,20 +6,17 @@
 /// - Affinity routing for SMP support
 /// - Virtualization support with virtual CPU interface
 ///
-/// GICv4 adds:
-/// - Direct injection of virtual LPIs
-/// - Doorbell interrupts
-///
 /// For EL2 hypervisor usage, we primarily use:
 /// - ICC_*_EL2 system registers for interrupt control
 /// - ICH_*_EL2 system registers for virtual interrupt injection
 
 use core::arch::asm;
+use super::super::defs::*;
 
 /// Virtual Timer interrupt (PPI 27)
 pub const VTIMER_IRQ: u32 = 27;
 
-/// Physical Timer interrupt (PPI 30) 
+/// Physical Timer interrupt (PPI 30)
 pub const PTIMER_IRQ: u32 = 30;
 
 /// GICv3 System Register Interface
@@ -27,7 +24,6 @@ pub struct GicV3SystemRegs;
 
 impl GicV3SystemRegs {
     /// Read ICC_SRE_EL2 - System Register Enable (EL2)
-    /// Controls system register interface and guest access
     #[inline]
     pub fn read_sre_el2() -> u32 {
         let sre: u64;
@@ -100,7 +96,6 @@ impl GicV3SystemRegs {
     }
 
     /// Write ICC_EOIR1_EL1 - End Of Interrupt Register
-    /// Signals completion of interrupt processing.
     /// With EOImode=0: does both priority drop and deactivation.
     /// With EOImode=1: only does priority drop (use write_dir for deactivation).
     #[inline]
@@ -115,8 +110,7 @@ impl GicV3SystemRegs {
     }
 
     /// Write ICC_DIR_EL1 - Deactivate Interrupt Register
-    /// Used when EOImode=1 to explicitly deactivate a physical interrupt
-    /// after priority drop via write_eoir1.
+    /// Used when EOImode=1 to explicitly deactivate a physical interrupt.
     #[inline]
     pub fn write_dir(intid: u32) {
         unsafe {
@@ -155,7 +149,6 @@ impl GicV3SystemRegs {
     }
 
     /// Read ICC_PMR_EL1 - Priority Mask Register
-    /// Only interrupts with higher priority than this value are signaled
     #[inline]
     pub fn read_pmr() -> u32 {
         let pmr: u64;
@@ -170,7 +163,6 @@ impl GicV3SystemRegs {
     }
 
     /// Write ICC_PMR_EL1
-    /// Set to 0xFF to allow all interrupts
     #[inline]
     pub fn write_pmr(priority: u32) {
         unsafe {
@@ -239,11 +231,11 @@ impl GicV3SystemRegs {
     /// Enable interrupt delivery to the CPU
     pub fn enable() {
         // Set priority mask to lowest priority (allow all interrupts)
-        Self::write_pmr(0xFF);
-        
+        Self::write_pmr(ICC_PMR_ALLOW_ALL);
+
         // Enable Group 1 interrupts
         Self::write_igrpen1(true);
-        
+
         // Ensure changes are visible
         unsafe {
             asm!("isb", options(nostack, nomem));
@@ -280,7 +272,6 @@ impl GicV3VirtualInterface {
 
 impl GicV3VirtualInterface {
     /// Read ICH_HCR_EL2 - Hypervisor Control Register
-    /// Controls virtual interrupt behavior
     #[inline]
     pub fn read_hcr() -> u32 {
         let hcr: u64;
@@ -308,7 +299,6 @@ impl GicV3VirtualInterface {
     }
 
     /// Read ICH_VMCR_EL2 - Virtual Machine Control Register
-    /// Controls virtual CPU interface seen by guest
     #[inline]
     pub fn read_vmcr() -> u32 {
         let vmcr: u64;
@@ -322,12 +312,7 @@ impl GicV3VirtualInterface {
         vmcr as u32
     }
 
-    /// Write ICH_VMCR_EL2 - Virtual Machine Control Register
-    ///
-    /// Bits [31:24]: VPMR (Virtual Priority Mask)
-    /// Bits [20:18]: VBPR1 (Virtual Binary Point for Group 1)
-    /// Bit 1: VENG1 (Virtual Group 1 interrupt enable)
-    /// Bit 0: VENG0 (Virtual Group 0 interrupt enable)
+    /// Write ICH_VMCR_EL2
     #[inline]
     pub fn write_vmcr(value: u32) {
         unsafe {
@@ -340,7 +325,6 @@ impl GicV3VirtualInterface {
     }
 
     /// Read ICH_VTR_EL2 - VGIC Type Register
-    /// Reports the number of list registers and priority bits
     #[inline]
     pub fn read_vtr() -> u32 {
         let vtr: u64;
@@ -355,7 +339,6 @@ impl GicV3VirtualInterface {
     }
 
     /// Read ICH_LR<n>_EL2 - List Register
-    /// Contains virtual interrupt state
     #[inline]
     pub fn read_lr(n: u32) -> u64 {
         let lr: u64;
@@ -372,13 +355,6 @@ impl GicV3VirtualInterface {
     }
 
     /// Write ICH_LR<n>_EL2 - List Register
-    /// 
-    /// List Register format:
-    /// Bits [63:62]: State (00=Invalid, 01=Pending, 10=Active, 11=Pending+Active)
-    /// Bit  [61]:    HW (0=software, 1=hardware)
-    /// Bit  [60]:    Group (0=Group0, 1=Group1)
-    /// Bits [59:56]: Priority
-    /// Bits [31:0]:  vINTID (virtual interrupt ID)
     #[inline]
     pub fn write_lr(n: u32, value: u64) {
         unsafe {
@@ -394,67 +370,43 @@ impl GicV3VirtualInterface {
     }
 
     /// Inject a virtual interrupt into the guest
-    /// 
-    /// # Arguments
-    /// * `intid` - Interrupt ID to inject
-    /// * `priority` - Interrupt priority (0 = highest)
-    /// 
-    /// # Returns
-    /// * `Ok(())` - Interrupt injected successfully
-    /// * `Err(msg)` - No free list register available
     pub fn inject_interrupt(intid: u32, priority: u8) -> Result<(), &'static str> {
         // Find a free list register
         let vtr = Self::read_vtr();
-        let num_lrs = ((vtr & 0x1F) + 1) as u32; // Bits [4:0] = ListRegs - 1
-        
+        let num_lrs = ((vtr & VTR_LISTREGS_MASK) + 1) as u32;
+
         for i in 0..num_lrs {
             let lr = Self::read_lr(i);
-            let state = (lr >> 62) & 0x3;
-            
+            let state = (lr >> LR_STATE_SHIFT) & LR_STATE_MASK;
+
             // If state is 00 (Invalid), this LR is free
             if state == 0 {
-                // Build LR value:
-                // State = 01 (Pending)
-                // HW = 0 (software interrupt)
-                // Group = 1 (Group1)
-                // Priority in bits [55:48] (8 bits)
-                // vINTID in bits [31:0]
-                let lr_value = (1u64 << 62)                    // State = Pending
-                              | (1u64 << 60)                    // Group1
-                              | ((priority as u64) << 48)       // Priority
-                              | (intid as u64);                 // vINTID
-                
+                let lr_value = (Self::LR_STATE_PENDING << LR_STATE_SHIFT)
+                              | LR_GROUP1_BIT
+                              | ((priority as u64) << LR_PRIORITY_SHIFT)
+                              | (intid as u64);
+
                 Self::write_lr(i, lr_value);
                 return Ok(());
             }
         }
-        
+
         Err("No free list register for interrupt injection")
     }
 
     /// Inject a hardware-linked virtual interrupt (HW=1)
     ///
     /// When HW=1, the guest's virtual EOI automatically deactivates the
-    /// physical interrupt identified by `pintid`. This is the standard
-    /// approach for pass-through interrupts like the virtual timer.
-    ///
-    /// Requires EOImode=1 at EL2 so that the hypervisor's EOIR only does
-    /// priority drop, leaving physical deactivation to the guest's virtual EOI.
-    ///
-    /// # Arguments
-    /// * `intid` - Virtual interrupt ID to inject
-    /// * `pintid` - Physical interrupt ID linked to this virtual interrupt
-    /// * `priority` - Interrupt priority (0 = highest)
+    /// physical interrupt identified by `pintid`.
     pub fn inject_hw_interrupt(intid: u32, pintid: u32, priority: u8) -> Result<(), &'static str> {
         let vtr = Self::read_vtr();
-        let num_lrs = ((vtr & 0x1F) + 1) as u32;
+        let num_lrs = ((vtr & VTR_LISTREGS_MASK) + 1) as u32;
 
         // First, clean up any stale Active LR for this intid
-        // (handles recovery from stuck state where guest never EOI'd)
         for i in 0..num_lrs {
             let lr = Self::read_lr(i);
-            let lr_intid = (lr & 0xFFFF_FFFF) as u32;
-            let state = (lr >> 62) & 0x3;
+            let lr_intid = (lr & LR_VINTID_MASK) as u32;
+            let state = (lr >> LR_STATE_SHIFT) & LR_STATE_MASK;
             if lr_intid == intid && state == Self::LR_STATE_ACTIVE {
                 Self::write_lr(i, 0);
             }
@@ -463,22 +415,15 @@ impl GicV3VirtualInterface {
         // Find a free LR and inject
         for i in 0..num_lrs {
             let lr = Self::read_lr(i);
-            let state = (lr >> 62) & 0x3;
+            let state = (lr >> LR_STATE_SHIFT) & LR_STATE_MASK;
 
             if state == 0 {
-                // Build LR with HW=1:
-                // [63:62] State = Pending (01)
-                // [61]    HW = 1
-                // [60]    Group = 1 (Group1)
-                // [55:48] Priority
-                // [41:32] pINTID (physical interrupt ID)
-                // [31:0]  vINTID (virtual interrupt ID)
-                let lr_value = (1u64 << 62)                    // State = Pending
-                              | (1u64 << 61)                    // HW = 1
-                              | (1u64 << 60)                    // Group1
-                              | ((priority as u64) << 48)       // Priority
-                              | ((pintid as u64 & 0x3FF) << 32) // pINTID [41:32]
-                              | (intid as u64);                 // vINTID
+                let lr_value = (Self::LR_STATE_PENDING << LR_STATE_SHIFT)
+                              | LR_HW_BIT
+                              | LR_GROUP1_BIT
+                              | ((priority as u64) << LR_PRIORITY_SHIFT)
+                              | (((pintid as u64) & LR_PINTID_MASK) << LR_PINTID_SHIFT)
+                              | (intid as u64);
 
                 Self::write_lr(i, lr_value);
                 return Ok(());
@@ -491,12 +436,12 @@ impl GicV3VirtualInterface {
     /// Clear a virtual interrupt from list registers
     pub fn clear_interrupt(intid: u32) {
         let vtr = Self::read_vtr();
-        let num_lrs = ((vtr & 0x1F) + 1) as u32;
-        
+        let num_lrs = ((vtr & VTR_LISTREGS_MASK) + 1) as u32;
+
         for i in 0..num_lrs {
             let lr = Self::read_lr(i);
-            let lr_intid = (lr & 0xFFFF_FFFF) as u32;
-            
+            let lr_intid = (lr & LR_VINTID_MASK) as u32;
+
             if lr_intid == intid {
                 // Set state to Invalid (00)
                 Self::write_lr(i, 0);
@@ -508,21 +453,18 @@ impl GicV3VirtualInterface {
     /// Initialize virtual interrupt interface
     pub fn init() {
         // Enable virtual interrupts
-        // Bit 0 (En): Enable
         Self::write_hcr(1);
 
         // Configure ICH_VMCR_EL2 for guest virtual CPU interface
-        // This is CRITICAL for the guest to receive virtual interrupts!
         // Bits [31:24]: VPMR = 0xFF (allow all priorities)
-        // Bits [20:18]: VBPR1 = 0 (no preemption grouping)
         // Bit 1: VENG1 = 1 (enable Group 1 interrupts for guest)
-        let vmcr: u32 = (0xFF << 24) | // VPMR: allow all interrupt priorities
-                        (1 << 1);       // VENG1: enable virtual Group 1 interrupts
+        let vmcr: u32 = ((ICC_PMR_ALLOW_ALL as u32) << 24) // VPMR
+                        | (1 << 1);                          // VENG1
         Self::write_vmcr(vmcr);
 
         // Clear all list registers
         let vtr = Self::read_vtr();
-        let num_lrs = ((vtr & 0x1F) + 1) as u32;
+        let num_lrs = ((vtr & VTR_LISTREGS_MASK) + 1) as u32;
 
         for i in 0..num_lrs {
             Self::write_lr(i, 0);
@@ -536,49 +478,36 @@ impl GicV3VirtualInterface {
     /// Get number of available list registers
     pub fn num_list_registers() -> u32 {
         let vtr = Self::read_vtr();
-        ((vtr & 0x1F) + 1) as u32
+        ((vtr & VTR_LISTREGS_MASK) + 1) as u32
     }
 
     /// Build a List Register value
-    ///
-    /// # Arguments
-    /// * `intid` - Virtual interrupt ID (0-1023)
-    /// * `priority` - Interrupt priority (0-255, lower = higher priority)
-    ///
-    /// # Returns
-    /// A properly formatted LR value with state=Pending, group=Group1
     pub fn build_lr(intid: u32, priority: u8) -> u64 {
-        (Self::LR_STATE_PENDING << 62)  // State = Pending
-            | (1u64 << 60)               // Group1
-            | ((priority as u64) << 48)  // Priority
-            | (intid as u64)             // vINTID
+        (Self::LR_STATE_PENDING << LR_STATE_SHIFT)
+            | LR_GROUP1_BIT
+            | ((priority as u64) << LR_PRIORITY_SHIFT)
+            | (intid as u64)
     }
 
     /// Extract the state field from a List Register value
-    ///
-    /// # Returns
-    /// State value (0=Invalid, 1=Pending, 2=Active, 3=Pending+Active)
     #[inline]
     pub fn get_lr_state(lr: u64) -> u64 {
-        (lr >> 62) & 0x3
+        (lr >> LR_STATE_SHIFT) & LR_STATE_MASK
     }
 
     /// Extract the INTID field from a List Register value
     #[inline]
     pub fn get_lr_intid(lr: u64) -> u32 {
-        (lr & 0xFFFF_FFFF) as u32
+        (lr & LR_VINTID_MASK) as u32
     }
 
     /// Extract the priority field from a List Register value
     #[inline]
     pub fn get_lr_priority(lr: u64) -> u8 {
-        ((lr >> 48) & 0xFF) as u8
+        ((lr >> LR_PRIORITY_SHIFT) & 0xFF) as u8
     }
 
     /// Find a free (invalid state) List Register
-    ///
-    /// # Returns
-    /// Index of the first free LR, or None if all are in use
     pub fn find_free_lr() -> Option<usize> {
         let num_lrs = Self::num_list_registers() as usize;
 
@@ -592,8 +521,6 @@ impl GicV3VirtualInterface {
     }
 
     /// Get count of pending interrupts in List Registers
-    ///
-    /// Counts LRs that are in Pending or Pending+Active state.
     pub fn pending_count() -> usize {
         let num_lrs = Self::num_list_registers() as usize;
         let mut count = 0;
@@ -609,24 +536,11 @@ impl GicV3VirtualInterface {
     }
 
     /// Check if GICv3 system register interface is available
-    ///
-    /// Reads ID_AA64PFR0_EL1 to check GIC version.
-    ///
-    /// # Returns
-    /// true if GICv3 or higher is available
     pub fn is_available() -> bool {
         is_gicv3_available()
     }
 
     /// Check ARMv8.4+ features for enhanced virtualization
-    ///
-    /// ARMv8.4 adds:
-    /// - Nested virtualization (NV, NV2)
-    /// - Enhanced VMID (16-bit)
-    /// - Data gathering hint
-    ///
-    /// # Returns
-    /// true if ARMv8.4+ features are available
     pub fn has_armv8_4_features() -> bool {
         let mmfr2: u64;
         unsafe {
@@ -638,16 +552,13 @@ impl GicV3VirtualInterface {
         }
 
         // Bits [27:24] = NV support (nested virtualization)
-        // 0001 = NV, NV2 supported (ARMv8.4)
         let nv = (mmfr2 >> 24) & 0xF;
         nv >= 1
     }
 }
 
 /// Check if GICv3 is available
-/// Returns true if GICv3 system registers are accessible
 pub fn is_gicv3_available() -> bool {
-    // Try to read ID_AA64PFR0_EL1 to check GIC system register interface
     let pfr0: u64;
     unsafe {
         asm!(
@@ -656,7 +567,7 @@ pub fn is_gicv3_available() -> bool {
             options(nostack, nomem),
         );
     }
-    
+
     // Bits [27:24] = GIC (0000 = None, 0001 = GICv3/v4 via system registers)
     let gic_version = (pfr0 >> 24) & 0xF;
     gic_version >= 1
@@ -668,7 +579,6 @@ pub fn init() {
 
     if !is_gicv3_available() {
         crate::uart_puts(b"[GIC] GICv3 not available, falling back to GICv2\n");
-        // Fall back to GICv2 initialization
         super::gic::init();
         return;
     }
@@ -676,22 +586,16 @@ pub fn init() {
     crate::uart_puts(b"[GIC] Initializing GICv3/v4 (system register interface)...\n");
 
     // Configure ICC_SRE_EL2 - CRITICAL for guest interrupt handling
-    // Bit 0 (SRE): Enable system register interface at EL2
-    // Bit 3 (Enable): Allow EL1 (guest) to access ICC_* system registers
-    // Without this, guest cannot read/write ICC_IAR1_EL1, ICC_EOIR1_EL1, etc.
-    let sre_el2: u32 = (1 << 0)  // SRE: Enable system register interface
-                     | (1 << 3); // Enable: Allow EL1 access to ICC_*
+    let sre_el2: u32 = ICC_SRE_SRE | ICC_SRE_ENABLE;
     GicV3SystemRegs::write_sre_el2(sre_el2);
     crate::uart_puts(b"[GIC] ICC_SRE_EL2 configured (Enable=1, SRE=1)\n");
 
     // Also set ICC_SRE_EL1 to enable system register interface for guest
-    // This may be overwritten by guest, but set sensible defaults
-    GicV3SystemRegs::write_sre_el1(1); // SRE=1
+    GicV3SystemRegs::write_sre_el1(ICC_SRE_SRE);
 
     // Read VGIC type to report capabilities
-    // Note: This requires EL2 virtualization extensions
     let vtr = GicV3VirtualInterface::read_vtr();
-    let num_lrs = ((vtr & 0x1F) + 1) as u32;
+    let num_lrs = ((vtr & VTR_LISTREGS_MASK) + 1) as u32;
     let num_priority_bits = ((vtr >> 29) & 0x7) + 1;
 
     crate::uart_puts(b"[GIC] VGIC capabilities:\n");
@@ -706,10 +610,8 @@ pub fn init() {
     GicV3VirtualInterface::init();
 
     // Set EOImode=1 so EOIR only does priority drop (not deactivation).
-    // Physical deactivation for HW=1 interrupts happens via guest virtual EOI.
-    // For HW=0 interrupts, we explicitly write ICC_DIR_EL1 to deactivate.
     let ctlr = GicV3SystemRegs::read_ctlr();
-    GicV3SystemRegs::write_ctlr(ctlr | (1 << 1)); // Bit 1 = EOImode
+    GicV3SystemRegs::write_ctlr(ctlr | ICC_CTLR_EOIMODE);
     crate::uart_puts(b"[GIC] ICC_CTLR_EL1.EOImode=1 (split priority drop/deactivation)\n");
 
     // Enable interrupt delivery to this CPU
@@ -733,21 +635,20 @@ mod tests {
 
     #[test]
     fn test_lr_format() {
-        // Test list register encoding
         let intid = 27u32;
-        let priority = 0xA0u8;
-        
-        let lr_value = (1u64 << 62)                    // State = Pending
-                      | (1u64 << 60)                    // Group1
-                      | ((priority as u64) << 48)       // Priority
-                      | (intid as u64);                 // vINTID
-        
+        let priority = IRQ_DEFAULT_PRIORITY;
+
+        let lr_value = (GicV3VirtualInterface::LR_STATE_PENDING << LR_STATE_SHIFT)
+                      | LR_GROUP1_BIT
+                      | ((priority as u64) << LR_PRIORITY_SHIFT)
+                      | (intid as u64);
+
         // Extract fields
-        let state = (lr_value >> 62) & 0x3;
+        let state = (lr_value >> LR_STATE_SHIFT) & LR_STATE_MASK;
         let group = (lr_value >> 60) & 0x1;
-        let prio = ((lr_value >> 48) & 0xFF) as u8;
-        let intid_out = (lr_value & 0xFFFF_FFFF) as u32;
-        
+        let prio = ((lr_value >> LR_PRIORITY_SHIFT) & 0xFF) as u8;
+        let intid_out = (lr_value & LR_VINTID_MASK) as u32;
+
         assert_eq!(state, 1); // Pending
         assert_eq!(group, 1); // Group1
         assert_eq!(prio, priority);

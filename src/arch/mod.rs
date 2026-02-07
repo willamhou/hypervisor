@@ -1,6 +1,9 @@
 //! Architecture-specific code
-//! 
-//! This module contains ARM64/AArch64 specific implementations
+//!
+//! This module contains architecture-specific implementations and
+//! portable trait definitions for hypervisor hardware abstraction.
+
+pub mod traits;
 
 #[cfg(target_arch = "aarch64")]
 pub mod aarch64;
