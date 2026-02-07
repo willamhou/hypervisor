@@ -208,7 +208,12 @@ impl Vm {
         
         // Use a global static mapper (to avoid large stack allocation)
         static mut MAPPER: IdentityMapper = IdentityMapper::new();
-        
+
+        // Reset the mapper to clear any stale mappings from previous VM runs
+        unsafe {
+            MAPPER.reset();
+        }
+
         // Map guest memory region (identity mapping)
         // Round to 2MB boundaries
         let start_aligned = guest_mem_start & !(2 * 1024 * 1024 - 1);

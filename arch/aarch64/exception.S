@@ -80,7 +80,7 @@ exception_handler:
     // We need to save the guest context
     // The context pointer should be in a known location
     // For now, we'll use a global variable (not ideal for SMP)
-    
+
     // Save guest registers to stack temporarily
     stp     x0, x1, [sp, #-16]!
     stp     x2, x3, [sp, #-16]!

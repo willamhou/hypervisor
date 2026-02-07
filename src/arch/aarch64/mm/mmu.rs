@@ -248,6 +248,22 @@ impl IdentityMapper {
             l2_count: 0,
         }
     }
+
+    /// Reset the mapper to clear all existing mappings
+    /// This must be called before setting up mappings for a new VM
+    pub fn reset(&mut self) {
+        // Clear L1 table
+        for i in 0..512 {
+            self.l1_table.entries[i] = S2PageTableEntry(0);
+        }
+        // Clear L2 tables
+        for l2 in &mut self.l2_tables {
+            for i in 0..512 {
+                l2.entries[i] = S2PageTableEntry(0);
+            }
+        }
+        self.l2_count = 0;
+    }
     
     /// Map a memory region with identity mapping
     /// 
@@ -496,4 +512,14 @@ pub fn init_stage2(mapper: &IdentityMapper) {
     
     // Install page tables
     config.install();
+
+    // Invalidate all Stage-2 TLB entries to ensure fresh translations
+    unsafe {
+        core::arch::asm!(
+            "tlbi vmalls12e1is",  // Invalidate all Stage-1 and Stage-2 for current VMID
+            "dsb sy",             // Data synchronization barrier
+            "isb",                // Instruction synchronization barrier
+            options(nostack, nomem),
+        );
+    }
 }
