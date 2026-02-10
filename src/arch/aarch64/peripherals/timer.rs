@@ -156,6 +156,29 @@ pub fn disable_timer() {
     set_ctl(0);
 }
 
+/// Arm the EL2 hypervisor physical timer (CNTHP) for preemption.
+///
+/// This timer is independent of the guest virtual timer and fires INTID 26.
+/// Used as a preemption watchdog to guarantee context switches even when
+/// the guest timer is masked (e.g., during multi_cpu_stop with IRQs disabled).
+pub fn arm_preemption_timer() {
+    // 10ms at counter frequency
+    let ticks = get_frequency() / 100;
+    unsafe {
+        asm!("msr cnthp_tval_el2, {}", in(reg) ticks, options(nostack, nomem));
+        asm!("msr cnthp_ctl_el2, {}", in(reg) 1u64, options(nostack, nomem)); // ENABLE=1, IMASK=0
+        asm!("isb", options(nostack, nomem));
+    }
+}
+
+/// Disarm the EL2 hypervisor physical timer.
+pub fn disarm_preemption_timer() {
+    unsafe {
+        asm!("msr cnthp_ctl_el2, {}", in(reg) 0u64, options(nostack, nomem)); // ENABLE=0
+        asm!("isb", options(nostack, nomem));
+    }
+}
+
 /// Check if timer interrupt is pending
 pub fn is_pending() -> bool {
     let ctl = get_ctl();

@@ -235,18 +235,25 @@ guest_exit:
     mov     x0, #0
     ret
 
+guest_exit_irq:
+    // IRQ-triggered exit (e.g., preemptive timer).
+    // ESR_EL2 is NOT valid for IRQs, so skip the EC check.
+    // PC is already correctly saved in VcpuContext - do not advance it.
+    ldp     x19, x20, [sp], #16
+    ldp     x21, x22, [sp], #16
+    ldp     x23, x24, [sp], #16
+    ldp     x25, x26, [sp], #16
+    ldp     x27, x28, [sp], #16
+    ldp     x29, x30, [sp], #16
+
+    // Return 0 (normal exit) to enter_guest's caller
+    mov     x0, #0
+    ret
+
 guest_exit_wfi:
-    // WFI exit - advance PC past WFI instruction before returning
-    // Load the context pointer
-    adrp    x0, current_vcpu_context
-    add     x0, x0, :lo12:current_vcpu_context
-    ldr     x0, [x0]
-    
-    // Load PC, add 4, and store back
-    ldr     x1, [x0, #392]       // pc (offset 392)
-    add     x1, x1, #4           // Skip WFI instruction
-    str     x1, [x0, #392]
-    
+    // WFI exit - PC already advanced by Rust handler (context.pc += 4).
+    // Do NOT advance PC here to avoid double-advance.
+
     // Restore host callee-saved registers
     ldp     x19, x20, [sp], #16
     ldp     x21, x22, [sp], #16
@@ -254,7 +261,7 @@ guest_exit_wfi:
     ldp     x25, x26, [sp], #16
     ldp     x27, x28, [sp], #16
     ldp     x29, x30, [sp], #16
-    
+
     // Return 1 (WFI) to enter_guest's caller
     mov     x0, #1
     ret
@@ -332,7 +339,9 @@ irq_exception_handler:
     bl      handle_irq_exception
 
     // Check return value: true (1) = continue, false (0) = exit
-    cbz     w0, guest_exit
+    // IRQ exits must NOT go through guest_exit (which reads stale ESR_EL2).
+    // Use guest_exit_irq which returns 0 without checking ESR_EL2.
+    cbz     w0, guest_exit_irq
 
     // Restore context and re-enter guest
     adrp    x0, current_vcpu_context

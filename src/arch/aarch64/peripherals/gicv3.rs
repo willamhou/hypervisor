@@ -452,8 +452,11 @@ impl GicV3VirtualInterface {
 
     /// Initialize virtual interrupt interface
     pub fn init() {
-        // Enable virtual interrupts
-        Self::write_hcr(1);
+        // Enable virtual interrupts + TALL1 (trap ICC_SGI1R_EL1 writes from EL1).
+        // With En=1, most ICC Group 1 registers are redirected to virtual ICV_*
+        // registers and bypass the TALL1 trap. Only ICC_SGI1R_EL1 (not virtualized)
+        // is actually trapped, giving us SGI intercept with minimal overhead.
+        Self::write_hcr((ICH_HCR_TALL1 | ICH_HCR_EN) as u32);
 
         // Configure ICH_VMCR_EL2 for guest virtual CPU interface
         // Bits [31:24]: VPMR = 0xFF (allow all priorities)

@@ -6,9 +6,11 @@
 use crate::vcpu::Vcpu;
 use crate::arch::aarch64::{MemoryAttributes, init_stage2};
 use crate::arch::aarch64::defs::*;
+use crate::arch::aarch64::peripherals::gicv3::GicV3VirtualInterface;
 use crate::devices::DeviceManager;
 use crate::scheduler::Scheduler;
 use crate::platform;
+use core::sync::atomic::Ordering;
 
 /// Maximum number of vCPUs per VM
 pub const MAX_VCPUS: usize = 8;
@@ -221,6 +223,136 @@ impl Vm {
         }
     }
 
+    /// Run the VM with SMP scheduling (multiple vCPUs, round-robin on single pCPU)
+    pub fn run_smp(&mut self) -> Result<(), &'static str> {
+        use crate::uart_puts;
+        use crate::uart_put_hex;
+
+        if self.state != VmState::Ready {
+            return Err("VM is not in Ready state");
+        }
+        if self.vcpu_count == 0 {
+            return Err("No vCPUs configured");
+        }
+
+        self.state = VmState::Running;
+
+        loop {
+            // Check for pending PSCI CPU_ON requests
+            if let Some((target, entry, ctx_id)) = crate::global::PENDING_CPU_ON.take() {
+                let vcpu_id = (target & 0xFF) as usize;
+                if vcpu_id < MAX_VCPUS && self.vcpus[vcpu_id].is_none() {
+                    uart_puts(b"[VM] Booting secondary vCPU ");
+                    uart_put_hex(vcpu_id as u64);
+                    uart_puts(b" at entry=0x");
+                    uart_put_hex(entry);
+                    uart_puts(b"\n");
+                    self.boot_secondary_vcpu(vcpu_id, entry, ctx_id);
+                }
+            }
+
+            // Unblock vCPUs with pending SGIs BEFORE scheduling, so the
+            // scheduler can immediately pick a vCPU that has work.
+            wake_pending_vcpus(&mut self.scheduler, &self.vcpus);
+
+            // Schedule next vCPU
+            let vcpu_id = match self.schedule() {
+                Some(id) => id,
+                None => {
+                    // All vCPUs blocked (WFI). Unblock all online vCPUs so
+                    // timers can fire and make progress.
+                    let online = crate::global::VCPU_ONLINE_MASK.load(Ordering::Relaxed);
+                    let mut any = false;
+                    for id in 0..MAX_VCPUS {
+                        if online & (1 << id) != 0 && self.vcpus[id].is_some() {
+                            self.scheduler.unblock(id);
+                            any = true;
+                        }
+                    }
+                    if !any {
+                        break; // No vCPUs at all
+                    }
+                    continue; // Retry scheduling
+                }
+            };
+
+            // Set current vCPU ID so IRQ/trap handler knows who's running
+            crate::global::CURRENT_VCPU_ID.store(vcpu_id, Ordering::Release);
+
+            // Inject pending SGIs into this vCPU's arch_state before run
+            inject_pending_sgis(self.vcpus[vcpu_id].as_mut().unwrap());
+
+            // Arm CNTHP preemption watchdog (10ms) in SMP mode.
+            // This ensures preemption works even when the guest virtual timer
+            // is masked (e.g., during multi_cpu_stop with IRQs disabled).
+            let online = crate::global::VCPU_ONLINE_MASK.load(Ordering::Relaxed);
+            let multi_vcpu = online != 0 && (online & (online - 1)) != 0;
+            if multi_vcpu {
+                ensure_cnthp_enabled();
+                crate::arch::aarch64::peripherals::timer::arm_preemption_timer();
+            }
+
+            // Run it
+            let vcpu = self.vcpus[vcpu_id].as_mut().unwrap();
+            let result = vcpu.run();
+
+            match result {
+                Ok(()) => {
+                    // Normal exit - distinguish CPU_ON, preemption, or real termination
+                    if crate::global::PENDING_CPU_ON.requested.load(Ordering::Relaxed) {
+                        // CPU_ON exit: yield so we process the request at loop top
+                        self.scheduler.yield_current();
+                    } else if crate::global::PREEMPTION_EXIT
+                        .compare_exchange(true, false, Ordering::Acquire, Ordering::Relaxed)
+                        .is_ok()
+                    {
+                        // Preemptive timer exit: yield to let other vCPUs run
+                        self.scheduler.yield_current();
+                    } else {
+                        // Real exit (HVC #1 exit, SYSTEM_OFF, etc.) - remove from scheduler
+                        self.scheduler.remove_vcpu(vcpu_id);
+                    }
+                }
+                Err("WFI") => {
+                    // WFI - block until SGI/IPI wakes this vCPU
+                    self.scheduler.block_current();
+                }
+                Err(_) => {
+                    // Other error - yield
+                    self.scheduler.yield_current();
+                }
+            }
+        }
+
+        self.state = VmState::Ready;
+        Ok(())
+    }
+
+    /// Boot a secondary vCPU via PSCI CPU_ON
+    fn boot_secondary_vcpu(&mut self, id: usize, entry: u64, ctx_id: u64) {
+        // Wake up the target CPU's GICR so it accepts pending SGIs.
+        // Without this, ICC_SGI1R_EL1 writes targeting this CPU are dropped
+        // by the physical GIC because GICR_WAKER.ProcessorSleep=1.
+        if id == 1 {
+            wake_gicr(platform::GICR1_RD_BASE);
+        }
+        let mut vcpu = Vcpu::new(id, entry, 0);
+        // PSCI CPU_ON: x0 = context_id, booting into EL1h with DAIF masked
+        vcpu.context_mut().gp_regs.x0 = ctx_id;
+        vcpu.context_mut().spsr_el2 = SPSR_EL1H_DAIF_MASKED;
+        // SCTLR_EL1: RES1 value (MMU off, caches off) - same as primary at boot
+        vcpu.arch_state_mut().sctlr_el1 = 0x30D0_0800;
+        // Enable FP/SIMD access (CPACR_EL1.FPEN = 0b11)
+        vcpu.arch_state_mut().cpacr_el1 = 3 << 20;
+        vcpu.arch_state_mut().init_for_vcpu(id);
+        self.vcpus[id] = Some(vcpu);
+        self.vcpu_count += 1;
+        self.scheduler.add_vcpu(id);
+        crate::global::VCPU_ONLINE_MASK.fetch_or(1 << id, Ordering::Release);
+        // Reset exception counters so the new vCPU gets a clean slate
+        crate::arch::aarch64::hypervisor::exception::reset_exception_counters();
+    }
+
     /// Pause the VM
     pub fn pause(&mut self) -> Result<(), &'static str> {
         if self.state != VmState::Running {
@@ -289,6 +421,111 @@ impl Vm {
     /// Get the currently scheduled vCPU ID
     pub fn current_vcpu(&self) -> Option<usize> {
         self.scheduler.current()
+    }
+}
+
+/// Wake up a GICR redistributor by clearing GICR_WAKER.ProcessorSleep.
+///
+/// With TALL1 SGI trapping, the physical GICR isn't strictly needed for
+/// SGI delivery. But we still wake it so the redistributor is in a consistent
+/// state and can accept physical PPIs/SPIs if needed.
+fn wake_gicr(rd_base: u64) {
+    let waker_addr = (rd_base + platform::GICR_WAKER_OFF) as *mut u32;
+    unsafe {
+        let mut waker = core::ptr::read_volatile(waker_addr);
+        // Clear ProcessorSleep (bit 1)
+        waker &= !(1 << 1);
+        core::ptr::write_volatile(waker_addr, waker);
+        // Wait for ChildrenAsleep (bit 2) to clear
+        loop {
+            let w = core::ptr::read_volatile(waker_addr);
+            if w & (1 << 2) == 0 {
+                break;
+            }
+        }
+    }
+}
+
+/// Ensure INTID 26 (CNTHP timer PPI) is enabled and Group 1 in GICR0.
+///
+/// Must be called before every vCPU entry because the guest may re-initialize
+/// its GIC (ICENABLER0 clears all, then re-enables only guest PPIs), which
+/// would disable our CNTHP timer interrupt.
+#[inline]
+fn ensure_cnthp_enabled() {
+    unsafe {
+        let sgi_base = platform::GICR0_SGI_BASE;
+        // IGROUPR0: ensure Group 1 (read-modify-write)
+        let igroupr0 = core::ptr::read_volatile(
+            (sgi_base + platform::GICR_IGROUPR0_OFF) as *const u32,
+        );
+        if igroupr0 & (1 << 26) == 0 {
+            core::ptr::write_volatile(
+                (sgi_base + platform::GICR_IGROUPR0_OFF) as *mut u32,
+                igroupr0 | (1 << 26),
+            );
+        }
+        // ISENABLER0: write-1-to-set (only sets bit 26, doesn't affect others)
+        core::ptr::write_volatile(
+            (sgi_base + platform::GICR_ISENABLER0_OFF) as *mut u32,
+            1 << 26,
+        );
+    }
+}
+
+/// Check for pending SGIs and unblock blocked vCPUs that have work.
+///
+/// This ensures blocked (WFI-ing) vCPUs wake up when they receive an IPI.
+/// SGIs are queued in PENDING_SGIS by the TALL1 trap handler when the guest
+/// writes ICC_SGI1R_EL1.
+fn wake_pending_vcpus(scheduler: &mut Scheduler, vcpus: &[Option<Vcpu>; MAX_VCPUS]) {
+    for id in 0..MAX_VCPUS {
+        if vcpus[id].is_none() {
+            continue;
+        }
+        if crate::global::PENDING_SGIS[id].load(Ordering::Relaxed) != 0 {
+            scheduler.unblock(id);
+        }
+    }
+}
+
+/// Inject pending SGIs into a vCPU's saved arch_state LRs before running.
+///
+/// SGIs are queued in PENDING_SGIS by the TALL1 trap handler (handle_sgi_trap)
+/// when the guest writes ICC_SGI1R_EL1.
+///
+/// Critical: must write to `arch_state.ich_lr[]` (not hardware LRs), because
+/// `vcpu.run()` calls `arch_state.restore()` which overwrites hardware LRs.
+fn inject_pending_sgis(vcpu: &mut Vcpu) {
+    let vcpu_id = vcpu.id();
+
+    let all = crate::global::PENDING_SGIS[vcpu_id].swap(0, Ordering::Acquire);
+    if all == 0 {
+        return;
+    }
+
+    let arch = vcpu.arch_state_mut();
+    for sgi in 0..16u32 {
+        if all & (1 << sgi) == 0 {
+            continue;
+        }
+        // Find a free LR slot in saved state
+        let mut injected = false;
+        for lr in arch.ich_lr.iter_mut() {
+            if (*lr >> LR_STATE_SHIFT) & LR_STATE_MASK == 0 {
+                // LR is free — write pending SGI
+                *lr = (GicV3VirtualInterface::LR_STATE_PENDING << LR_STATE_SHIFT)
+                    | LR_GROUP1_BIT
+                    | ((IRQ_DEFAULT_PRIORITY as u64) << LR_PRIORITY_SHIFT)
+                    | (sgi as u64);
+                injected = true;
+                break;
+            }
+        }
+        if !injected {
+            // No free LR — re-queue for next entry
+            crate::global::PENDING_SGIS[vcpu_id].fetch_or(1 << sgi, Ordering::Relaxed);
+        }
     }
 }
 

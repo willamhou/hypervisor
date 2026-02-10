@@ -73,6 +73,7 @@
 //! interrupts enabled.
 
 use crate::arch::aarch64::{VcpuContext, enter_guest};
+use crate::arch::aarch64::vcpu_arch_state::VcpuArchState;
 use crate::vcpu_interrupt::VirtualInterruptState;
 
 /// Virtual CPU execution state
@@ -126,15 +127,18 @@ pub enum VcpuState {
 pub struct Vcpu {
     /// Unique identifier for this vCPU
     id: usize,
-    
+
     /// Current state of the vCPU
     state: VcpuState,
-    
+
     /// Register context for this vCPU
     context: VcpuContext,
-    
+
     /// Virtual interrupt state for this vCPU
     virt_irq: VirtualInterruptState,
+
+    /// Per-vCPU architectural state (GIC, timer, EL1 sysregs)
+    arch_state: VcpuArchState,
 }
 
 impl Vcpu {
@@ -145,11 +149,14 @@ impl Vcpu {
     /// * `entry_point` - Guest code entry point (physical address)
     /// * `stack_pointer` - Guest stack pointer
     pub fn new(id: usize, entry_point: u64, stack_pointer: u64) -> Self {
+        let mut arch_state = VcpuArchState::new();
+        arch_state.init_for_vcpu(id);
         Self {
             id,
             state: VcpuState::Ready,
             context: VcpuContext::new(entry_point, stack_pointer),
             virt_irq: VirtualInterruptState::new(),
+            arch_state,
         }
     }
     
@@ -172,6 +179,11 @@ impl Vcpu {
     pub fn context(&self) -> &VcpuContext {
         &self.context
     }
+
+    /// Get mutable reference to architectural state
+    pub fn arch_state_mut(&mut self) -> &mut VcpuArchState {
+        &mut self.arch_state
+    }
     
     /// Run the vCPU
     /// 
@@ -185,9 +197,12 @@ impl Vcpu {
         if self.state != VcpuState::Ready {
             return Err("vCPU is not in Ready state");
         }
-        
+
         self.state = VcpuState::Running;
-        
+
+        // Restore per-vCPU architectural state (GIC LRs, timer, EL1 sysregs)
+        self.arch_state.restore();
+
         // Apply virtual interrupt state to HCR_EL2 before entering guest
         unsafe {
             use crate::vcpu_interrupt::{get_hcr_el2, set_hcr_el2};
@@ -195,20 +210,23 @@ impl Vcpu {
             let hcr_with_vi = self.virt_irq.apply_to_hcr(hcr);
             set_hcr_el2(hcr_with_vi);
         }
-        
+
         // Enter the guest
         let result = unsafe {
             enter_guest(&mut self.context as *mut VcpuContext)
         };
-        
+
+        // Save per-vCPU architectural state
+        self.arch_state.save();
+
         self.state = VcpuState::Ready;
-        
+
         // After guest exit, check if interrupt was handled and clear VI bit if needed
         if self.virt_irq.has_pending_interrupt() {
             // Guest returned from interrupt handler, clear pending state
             self.virt_irq.clear_irq();
         }
-        
+
         match result {
             0 => Ok(()),          // Normal exit (HVC #0)
             1 => Err("WFI"),      // Guest executed WFI

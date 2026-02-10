@@ -35,6 +35,13 @@
 			device_type = "cpu";
 			enable-method = "psci";
 		};
+
+		cpu@1 {
+			reg = <0x01>;
+			compatible = "arm,cortex-a53";
+			device_type = "cpu";
+			enable-method = "psci";
+		};
 	};
 
 	timer {

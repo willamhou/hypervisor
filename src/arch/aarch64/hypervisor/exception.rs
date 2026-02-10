@@ -59,8 +59,9 @@ pub fn init() {
                       | HCR_AMO        // Route physical SError to EL2
                       | HCR_FB         // Force Broadcast TLB/cache maintenance
                       | HCR_BSU_INNER  // Barrier Shareability Upgrade = IS
-                      | HCR_TWI        // Trap WFI to EL2
-                      | HCR_TWE        // Trap WFE to EL2
+                      | HCR_TWI        // Trap WFI to EL2 (for vCPU scheduling)
+                      // TWE NOT set: WFE executes natively (used in spinlocks,
+                      // woken by SEV not SGI — trapping would cause deadlock)
                       | HCR_APK        // Don't trap PAC key register accesses
                       | HCR_API;       // Don't trap PAC instructions
 
@@ -145,15 +146,25 @@ pub extern "C" fn handle_exception(context: &mut VcpuContext) -> bool {
             // Reset exception counter on successful WFI handling
             EXCEPTION_COUNT.store(0, Ordering::Relaxed);
 
-            // WFI/WFE: Guest is waiting for interrupt
-            // Check if virtual timer is pending and inject it to guest
-            if handle_wfi_with_timer_injection(context) {
-                // Advance PC past the WFI instruction
+            // In SMP mode (multiple vCPUs online), always exit on WFI
+            // so the scheduler can switch to another vCPU.
+            // Still inject timer if pending, but always advance PC and exit.
+            let online = crate::global::VCPU_ONLINE_MASK.load(Ordering::Relaxed);
+            let multi_vcpu = online != 0 && (online & (online - 1)) != 0; // >1 bit set
+
+            if multi_vcpu {
+                // Inject timer if pending, then exit for scheduling
+                handle_wfi_with_timer_injection(context);
                 context.pc += AARCH64_INSN_SIZE;
-                true // Continue with injected interrupt
+                false // Exit to scheduler
             } else {
-                // No timer pending, exit to let host decide
-                false
+                // Single vCPU: use existing logic
+                if handle_wfi_with_timer_injection(context) {
+                    context.pc += AARCH64_INSN_SIZE;
+                    true // Continue with injected interrupt
+                } else {
+                    false
+                }
             }
         }
 
@@ -425,6 +436,7 @@ pub extern "C" fn handle_exception(context: &mut VcpuContext) -> bool {
 /// # Returns
 /// * `true` - Continue running guest
 /// * `false` - Exit to host
+
 #[no_mangle]
 pub extern "C" fn handle_irq_exception(_context: &mut VcpuContext) -> bool {
     use crate::arch::aarch64::peripherals::gicv3::{GicV3SystemRegs, GicV3VirtualInterface, VTIMER_IRQ};
@@ -442,6 +454,40 @@ pub extern "C" fn handle_irq_exception(_context: &mut VcpuContext) -> bool {
     }
 
     match intid {
+        0..=15 => {
+            // SGI (Software Generated Interrupt) arrived at pCPU 0.
+            // Physical SGIs targeting pCPU 0 are always for vCPU 0.
+            let current_vcpu = crate::global::CURRENT_VCPU_ID.load(Ordering::Relaxed);
+            if current_vcpu == 0 {
+                // vCPU 0 is running — inject directly via LR
+                let _ = GicV3VirtualInterface::inject_interrupt(intid, IRQ_DEFAULT_PRIORITY);
+            } else {
+                // vCPU 0 is NOT running — queue for later injection
+                crate::global::PENDING_SGIS[0].fetch_or(1 << intid, Ordering::Relaxed);
+            }
+            // ACK + deactivate the physical SGI (no HW linkage for SGIs)
+            GicV3SystemRegs::write_eoir1(intid);
+            GicV3SystemRegs::write_dir(intid);
+            return true; // continue guest
+        }
+        26 => {
+            // EL2 hypervisor physical timer (CNTHP) — preemption watchdog.
+            // This fires independently of the guest virtual timer, ensuring
+            // preemption works even when the guest timer is masked (e.g.,
+            // during multi_cpu_stop with IRQs disabled).
+            timer::disarm_preemption_timer();
+            let online = crate::global::VCPU_ONLINE_MASK.load(Ordering::Relaxed);
+            let multi_vcpu = online != 0 && (online & (online - 1)) != 0;
+            if multi_vcpu {
+                crate::global::PREEMPTION_EXIT.store(true, Ordering::Release);
+                GicV3SystemRegs::write_eoir1(intid);
+                GicV3SystemRegs::write_dir(intid); // No HW linkage
+                return false; // exit to host for scheduling
+            }
+            GicV3SystemRegs::write_eoir1(intid);
+            GicV3SystemRegs::write_dir(intid);
+            return true;
+        }
         27 => {
             // Virtual timer interrupt (PPI 27)
             // Mask the timer to stop continuous firing
@@ -455,10 +501,36 @@ pub extern "C" fn handle_irq_exception(_context: &mut VcpuContext) -> bool {
             );
 
             // DO NOT modify SPSR_EL2 (guest's saved PSTATE).
-            // The virtual IRQ is pending in the LR. When we ERET back, the guest
-            // resumes with its original PSTATE. If the guest had interrupts disabled
-            // (PSTATE.I=1, e.g. holding a spinlock), the virtual IRQ stays pending
-            // until the guest re-enables interrupts - preventing deadlock.
+
+            // Demand-driven preemption: exit to host only when another vCPU
+            // has pending SGIs. Time-based fallback is handled by CNTHP (INTID 26).
+            let online = crate::global::VCPU_ONLINE_MASK.load(Ordering::Relaxed);
+            let multi_vcpu = online != 0 && (online & (online - 1)) != 0;
+            if multi_vcpu {
+                let current = crate::global::CURRENT_VCPU_ID.load(Ordering::Relaxed);
+                // Check PENDING_SGIS for any non-current vCPU with queued SGIs
+                let mut needs_switch = false;
+                for id in 0..crate::global::MAX_VCPUS {
+                    if id != current
+                        && crate::global::PENDING_SGIS[id].load(Ordering::Relaxed) != 0
+                    {
+                        needs_switch = true;
+                        break;
+                    }
+                }
+
+                if needs_switch {
+                    crate::global::PREEMPTION_EXIT.store(true, Ordering::Release);
+                    GicV3SystemRegs::write_eoir1(intid);
+                    // No DIR for HW=1 — guest virtual EOI handles deactivation
+                    return false; // exit to host
+                }
+            }
+
+            // EOImode=1: priority drop only
+            GicV3SystemRegs::write_eoir1(intid);
+            // No DIR for HW=1 timer
+            return true;
         }
         _ => {
             uart_puts(b"[IRQ] Unhandled INTID=");
@@ -468,18 +540,14 @@ pub extern "C" fn handle_irq_exception(_context: &mut VcpuContext) -> bool {
     }
 
     // EOImode=1: EOIR only does priority drop (not deactivation).
-    // This is required for HW=1 interrupts (timer) where guest's virtual
-    // EOI handles physical deactivation.
     GicV3SystemRegs::write_eoir1(intid);
 
-    // For non-HW interrupts, explicitly deactivate the physical interrupt
-    // since there's no HW link to do it automatically.
-    // INTID 27 (timer) uses HW=1, so guest virtual EOI handles deactivation.
+    // For non-HW interrupts, explicitly deactivate
     if intid != 27 {
         GicV3SystemRegs::write_dir(intid);
     }
 
-    true // Always continue guest after IRQ
+    true // Continue guest
 }
 
 /// Handle MSR/MRS trap (EC=0x18)
@@ -553,6 +621,11 @@ fn emulate_mrs(op0: u32, op1: u32, crn: u32, crm: u32, op2: u32) -> u64 {
 /// Writes the value to the system register if we know how, otherwise ignores.
 fn emulate_msr(op0: u32, op1: u32, crn: u32, crm: u32, op2: u32, value: u64) {
     match (op0, op1, crn, crm, op2) {
+        // ICC_SGI1R_EL1 (S3_0_C12_C11_5) — Software Generated Interrupt
+        // Trapped by ICH_HCR_EL2.TALL1. Decode target vCPUs and queue SGIs.
+        (3, 0, 12, 11, 5) => {
+            handle_sgi_trap(value);
+        }
         // Debug registers
         (2, 0, 0, 2, 2) => {
             // MDSCR_EL1 - Debug Status and Control
@@ -574,6 +647,57 @@ fn emulate_msr(op0: u32, op1: u32, crn: u32, crm: u32, op2: u32, value: u64) {
         (3, 3, 9, _, _) | (3, 0, 9, _, _) => {}
         // Any other trapped register: Write-Ignored
         _ => {}
+    }
+}
+
+/// Handle trapped ICC_SGI1R_EL1 write (MSR trap via TALL1)
+///
+/// Decodes the SGI target affinity and INTID from the value the guest
+/// intended to write, then queues SGIs in PENDING_SGIS for injection
+/// on vCPU entry.
+///
+/// ICC_SGI1R_EL1 encoding:
+///   [55:48] Aff3, [47:44] RS, [40] IRM, [39:32] Aff2,
+///   [27:24] Aff1, [23:16] TargetList, [3:0] INTID
+fn handle_sgi_trap(value: u64) {
+    use crate::arch::aarch64::peripherals::gicv3::GicV3VirtualInterface;
+
+    // ICC_SGI1R_EL1 encoding (from ARM GICv3 spec):
+    //   [55:48] Aff3, [47:44] RS, [40] IRM, [39:32] Aff2,
+    //   [27:24] INTID, [23:16] Aff1, [15:0] TargetList
+    let target_list = (value & 0xFFFF) as u32;          // bits [15:0]
+    let intid = ((value >> 24) & 0xF) as u32;           // bits [27:24]
+    let irm = (value >> 40) & 1;                        // bit [40]
+    let current_vcpu = crate::global::CURRENT_VCPU_ID.load(Ordering::Relaxed);
+
+
+
+    if irm == 1 {
+        // IRM=1: target all PEs except self
+        let online = crate::global::VCPU_ONLINE_MASK.load(Ordering::Relaxed);
+        for id in 0..crate::global::MAX_VCPUS {
+            if id != current_vcpu && online & (1 << id) != 0 {
+                crate::global::PENDING_SGIS[id].fetch_or(1 << intid, Ordering::Release);
+            }
+        }
+    } else {
+        // IRM=0: target based on TargetList bitmap (bits [15:0]).
+        // Bit N of TargetList = PE with Aff0 = (RS * 16) + N.
+        // For our 2-vCPU system (RS=0, Aff1/2/3=0): bit 0 = vCPU 0, bit 1 = vCPU 1.
+        for bit in 0..crate::global::MAX_VCPUS {
+            if target_list & (1 << bit) == 0 {
+                continue;
+            }
+            let target_vcpu = bit;
+            if target_vcpu == current_vcpu {
+                // Self-targeting: inject directly into hardware LR
+                let _ = GicV3VirtualInterface::inject_interrupt(intid, IRQ_DEFAULT_PRIORITY);
+            } else if target_vcpu < crate::global::MAX_VCPUS {
+                // Queue for target vCPU
+                crate::global::PENDING_SGIS[target_vcpu]
+                    .fetch_or(1 << intid, Ordering::Release);
+            }
+        }
     }
 }
 
@@ -744,21 +868,32 @@ fn handle_psci(context: &mut VcpuContext, function_id: u64) -> bool {
         }
 
         PSCI_CPU_ON_32 | PSCI_CPU_ON_64 => {
-            // CPU on - secondary CPU startup
-            let _target_cpu = context.gp_regs.x1;
-            let _entry_point = context.gp_regs.x2;
-            let _context_id = context.gp_regs.x3;
+            let target_cpu = context.gp_regs.x1;
+            let entry_point = context.gp_regs.x2;
+            let context_id = context.gp_regs.x3;
 
-            uart_puts(b"[PSCI] CPU_ON (not fully implemented)\n");
+            uart_puts(b"[PSCI] CPU_ON target=0x");
+            uart_put_hex(target_cpu);
+            uart_puts(b" entry=0x");
+            uart_put_hex(entry_point);
+            uart_puts(b"\n");
+
+            crate::global::PENDING_CPU_ON.request(target_cpu, entry_point, context_id);
             context.gp_regs.x0 = PSCI_SUCCESS;
-            true
+            // Exit to host so run_smp() can pick up the request and boot the vCPU
+            false
         }
 
         PSCI_AFFINITY_INFO_32 | PSCI_AFFINITY_INFO_64 => {
-            // Return affinity state
-            // 0 = ON, 1 = OFF, 2 = ON_PENDING
-            let _target_affinity = context.gp_regs.x1;
-            context.gp_regs.x0 = 0; // ON
+            // Return affinity state: 0 = ON, 1 = OFF, 2 = ON_PENDING
+            let target_affinity = context.gp_regs.x1;
+            let vcpu_id = target_affinity & 0xFF;
+            let online_mask = crate::global::VCPU_ONLINE_MASK.load(Ordering::Acquire);
+            if online_mask & (1 << vcpu_id) != 0 {
+                context.gp_regs.x0 = 0; // ON
+            } else {
+                context.gp_regs.x0 = 1; // OFF
+            }
             true
         }
 

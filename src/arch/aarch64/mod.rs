@@ -13,6 +13,7 @@ pub mod regs;
 pub mod hypervisor;
 pub mod mm;
 pub mod peripherals;
+pub mod vcpu_arch_state;
 
 // Re-export commonly used types
 pub use regs::{VcpuContext, GeneralPurposeRegs, SystemRegs, ExitReason};

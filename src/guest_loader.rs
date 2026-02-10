@@ -227,28 +227,19 @@ pub fn run_guest(config: &GuestConfig) -> Result<(), &'static str> {
 
     // Initialize EL1 system registers to clean state for Linux boot
     if config.guest_type == GuestType::Linux {
-        uart_puts(b"[GUEST] Initializing EL1 system registers...\n");
+        uart_puts(b"[GUEST] Initializing EL1/EL2 registers...\n");
+
+        // Set initial EL1 state in vCPU 0's arch_state (restored on guest entry)
+        if let Some(vcpu) = vm.vcpu_mut(0) {
+            let arch = vcpu.arch_state_mut();
+            arch.sctlr_el1 = 0x30D0_0800; // RES1, MMU off, caches off
+            arch.cpacr_el1 = 3 << 20;      // FP/SIMD access enabled
+            // All other EL1 regs default to 0 (from VcpuArchState::new)
+        }
+
+        // Configure EL2 registers (not per-vCPU)
         unsafe {
             core::arch::asm!(
-                // Set SCTLR_EL1 to RES1 value (MMU off, caches off)
-                "mov x0, #0x0800",
-                "movk x0, #0x30D0, lsl #16",
-                "msr sctlr_el1, x0",
-                // Zero out translation registers
-                "msr tcr_el1, xzr",
-                "msr ttbr0_el1, xzr",
-                "msr ttbr1_el1, xzr",
-                "msr mair_el1, xzr",
-                "msr vbar_el1, xzr",
-                // Enable FP/SIMD access at EL1 (CPACR_EL1.FPEN = 0b11)
-                "mov x0, #(3 << 20)",
-                "msr cpacr_el1, x0",
-                // Zero out other EL1 registers
-                "msr contextidr_el1, xzr",
-                "msr mdscr_el1, xzr",
-                "msr tpidr_el1, xzr",
-                "msr tpidrro_el0, xzr",
-                "msr tpidr_el0, xzr",
                 // Ensure CPTR_EL2 does NOT trap FP/SIMD/SVE/SME to EL2
                 "mrs x0, cptr_el2",
                 "bic x0, x0, {cptr_tz}",
@@ -258,11 +249,10 @@ pub fn run_guest(config: &GuestConfig) -> Result<(), &'static str> {
                 "msr cptr_el2, x0",
                 // Clear MDCR_EL2
                 "msr mdcr_el2, xzr",
-                // Set VPIDR_EL2 and VMPIDR_EL2 from real hardware values
+                // Set VPIDR_EL2 from real hardware value
                 "mrs x0, midr_el1",
                 "msr vpidr_el2, x0",
-                "mrs x0, mpidr_el1",
-                "msr vmpidr_el2, x0",
+                // VMPIDR_EL2 is now set per-vCPU by VcpuArchState::restore()
                 "isb",
                 cptr_tz = const CPTR_TZ,
                 cptr_tfp = const CPTR_TFP,
@@ -272,19 +262,18 @@ pub fn run_guest(config: &GuestConfig) -> Result<(), &'static str> {
                 options(nostack),
             );
         }
-        uart_puts(b"[GUEST] EL1 registers initialized\n");
+        uart_puts(b"[GUEST] EL1/EL2 registers initialized\n");
     }
 
-    // For Linux guests: clear TWI/TWE in HCR_EL2
+    // For Linux guests: keep TWI set (trap WFI to EL2 for SMP scheduling),
+    // clear TWE only. WFI traps enable cooperative vCPU scheduling in run_smp().
     if config.guest_type == GuestType::Linux {
         unsafe {
             core::arch::asm!(
                 "mrs x0, hcr_el2",
-                "bic x0, x0, {twi}",
                 "bic x0, x0, {twe}",
                 "msr hcr_el2, x0",
                 "isb",
-                twi = const HCR_TWI,
                 twe = const HCR_TWE,
                 out("x0") _,
                 options(nostack),
@@ -303,8 +292,12 @@ pub fn run_guest(config: &GuestConfig) -> Result<(), &'static str> {
     uart_puts(b"...\n");
     uart_puts(b"========================================\n\n");
 
-    // Run VM
-    let result = vm.run();
+    // Run VM - use SMP scheduling for Linux, single vCPU for others
+    let result = if config.guest_type == GuestType::Linux {
+        vm.run_smp()
+    } else {
+        vm.run()
+    };
 
     // Debug: check UART state after guest exits
     uart_puts(b"\n[GUEST] Guest exited, checking UART state...\n");

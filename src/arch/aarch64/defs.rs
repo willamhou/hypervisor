@@ -47,6 +47,10 @@ pub const CPTR_TFP: u64 = 1 << 10;
 pub const CPTR_TSM: u64 = 1 << 12;
 pub const CPTR_TCPAC: u64 = 1 << 20;
 
+// ── ICH_HCR_EL2 (Hypervisor Control Register for Virtual GIC) ───────
+pub const ICH_HCR_EN: u64 = 1 << 0;
+pub const ICH_HCR_TALL1: u64 = 1 << 13;
+
 // ── ICC register bits ────────────────────────────────────────────────
 pub const ICC_SRE_SRE: u32 = 1 << 0;
 pub const ICC_SRE_ENABLE: u32 = 1 << 3;
@@ -89,6 +93,11 @@ pub const PAGE_OFFSET_MASK: u64 = 0xFFF;
 pub const PT_INDEX_MASK: u64 = 0x1FF;
 pub const BLOCK_SIZE_2MB: u64 = 2 * 1024 * 1024;
 pub const BLOCK_MASK_2MB: u64 = BLOCK_SIZE_2MB - 1;
+
+// ── Preemptive scheduling ────────────────────────────────────────────
+// Preemption is now handled by CNTHP timer (INTID 26) armed before each
+// vcpu.run(). See timer::arm_preemption_timer(). This ensures preemption
+// works even when the guest virtual timer (INTID 27) is masked.
 
 // ── ARM64 instruction width ──────────────────────────────────────────
 pub const AARCH64_INSN_SIZE: u64 = 4;
