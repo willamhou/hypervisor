@@ -364,6 +364,12 @@ pub extern "C" fn handle_exception(context: &mut VcpuContext) -> bool {
                 EXCEPTION_COUNT.store(0, Ordering::Relaxed);
                 // Successfully handled, advance PC and continue
                 context.pc += AARCH64_INSN_SIZE;
+
+                // Inject any SPIs that were just queued (e.g. virtio completion).
+                // Without this, SPIs sit in PENDING_SPIS until the next vCPU exit,
+                // causing unacceptable latency for virtio-blk completion interrupts.
+                flush_pending_spis_to_hardware();
+
                 true
             } else {
                 // Not MMIO or failed to handle
@@ -1058,4 +1064,34 @@ fn handle_wfi_with_timer_injection(context: &mut VcpuContext) -> bool {
     }
 
     true
+}
+
+/// Flush pending SPIs for the current vCPU directly into hardware ICH_LRs.
+///
+/// Called from the exception handler (still at EL2) right before ERET,
+/// so the hardware List Registers are live. This avoids the latency of
+/// waiting until the next run_smp() iteration to inject completion interrupts.
+fn flush_pending_spis_to_hardware() {
+    use crate::arch::aarch64::peripherals::gicv3::GicV3VirtualInterface;
+
+    let vcpu_id = crate::global::CURRENT_VCPU_ID.load(Ordering::Relaxed);
+    if vcpu_id >= crate::global::MAX_VCPUS {
+        return;
+    }
+
+    let pending = crate::global::PENDING_SPIS[vcpu_id].swap(0, Ordering::Acquire);
+    if pending == 0 {
+        return;
+    }
+
+    for bit in 0..32u32 {
+        if pending & (1 << bit) == 0 {
+            continue;
+        }
+        let intid = bit + 32; // SPI INTIDs start at 32
+        if GicV3VirtualInterface::inject_interrupt(intid, IRQ_DEFAULT_PRIORITY).is_err() {
+            // No free LR — re-queue for later
+            crate::global::PENDING_SPIS[vcpu_id].fetch_or(1 << bit, Ordering::Relaxed);
+        }
+    }
 }

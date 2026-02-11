@@ -25,6 +25,12 @@ pub const LINUX_MEM_SIZE: u64 = 512 * 1024 * 1024;
 pub const ZEPHYR_MEM_SIZE: u64 = 128 * 1024 * 1024;
 pub const GUEST_STACK_RESERVE: u64 = 0x1000;
 
+// ── Virtio-blk disk image ───────────────────────────────────────────
+/// Disk image load address (loaded by QEMU -device loader)
+pub const VIRTIO_DISK_ADDR: u64 = 0x5800_0000;
+/// Disk image size (2MB default — overridden if image is smaller/larger)
+pub const VIRTIO_DISK_SIZE: u64 = 2 * 1024 * 1024;
+
 // ── GICR redistributor frames ────────────────────────────────────────
 /// GICR 0 RD base
 pub const GICR0_RD_BASE: u64 = 0x080A_0000;
@@ -34,6 +40,22 @@ pub const GICR1_RD_BASE: u64 = 0x080C_0000;
 pub const GICR0_SGI_BASE: u64 = 0x080B_0000;
 /// GICR 1 SGI frame: RD base + 0x10000
 pub const GICR1_SGI_BASE: u64 = 0x080D_0000;
+/// GICR 2 RD base
+pub const GICR2_RD_BASE: u64 = 0x080E_0000;
+/// GICR 2 SGI frame: RD base + 0x10000
+pub const GICR2_SGI_BASE: u64 = 0x080F_0000;
+/// GICR 3 RD base
+pub const GICR3_RD_BASE: u64 = 0x0810_0000;
+/// GICR 3 SGI frame: RD base + 0x10000
+pub const GICR3_SGI_BASE: u64 = 0x0811_0000;
+
+/// GICR RD base addresses indexed by vCPU ID
+pub const GICR_RD_BASES: [u64; 4] = [
+    GICR0_RD_BASE,
+    GICR1_RD_BASE,
+    GICR2_RD_BASE,
+    GICR3_RD_BASE,
+];
 /// GICR_WAKER offset from RD base
 pub const GICR_WAKER_OFF: u64 = 0x014;
 /// GICR_IGROUPR0 offset within SGI frame (interrupt group)

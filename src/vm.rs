@@ -279,8 +279,9 @@ impl Vm {
             // Set current vCPU ID so IRQ/trap handler knows who's running
             crate::global::CURRENT_VCPU_ID.store(vcpu_id, Ordering::Release);
 
-            // Inject pending SGIs into this vCPU's arch_state before run
+            // Inject pending SGIs and SPIs into this vCPU's arch_state before run
             inject_pending_sgis(self.vcpus[vcpu_id].as_mut().unwrap());
+            inject_pending_spis(self.vcpus[vcpu_id].as_mut().unwrap());
 
             // Arm CNTHP preemption watchdog (10ms) in SMP mode.
             // This ensures preemption works even when the guest virtual timer
@@ -333,8 +334,8 @@ impl Vm {
         // Wake up the target CPU's GICR so it accepts pending SGIs.
         // Without this, ICC_SGI1R_EL1 writes targeting this CPU are dropped
         // by the physical GIC because GICR_WAKER.ProcessorSleep=1.
-        if id == 1 {
-            wake_gicr(platform::GICR1_RD_BASE);
+        if id > 0 && id < platform::GICR_RD_BASES.len() {
+            wake_gicr(platform::GICR_RD_BASES[id]);
         }
         let mut vcpu = Vcpu::new(id, entry, 0);
         // PSCI CPU_ON: x0 = context_id, booting into EL1h with DAIF masked
@@ -483,7 +484,9 @@ fn wake_pending_vcpus(scheduler: &mut Scheduler, vcpus: &[Option<Vcpu>; MAX_VCPU
         if vcpus[id].is_none() {
             continue;
         }
-        if crate::global::PENDING_SGIS[id].load(Ordering::Relaxed) != 0 {
+        if crate::global::PENDING_SGIS[id].load(Ordering::Relaxed) != 0
+            || crate::global::PENDING_SPIS[id].load(Ordering::Relaxed) != 0
+        {
             scheduler.unblock(id);
         }
     }
@@ -525,6 +528,41 @@ fn inject_pending_sgis(vcpu: &mut Vcpu) {
         if !injected {
             // No free LR — re-queue for next entry
             crate::global::PENDING_SGIS[vcpu_id].fetch_or(1 << sgi, Ordering::Relaxed);
+        }
+    }
+}
+
+/// Inject pending SPIs into a vCPU's saved arch_state LRs before running.
+///
+/// SPIs are queued in PENDING_SPIS by `global::inject_spi()`.
+/// Bit N = SPI with INTID (N + 32).
+fn inject_pending_spis(vcpu: &mut Vcpu) {
+    let vcpu_id = vcpu.id();
+
+    let all = crate::global::PENDING_SPIS[vcpu_id].swap(0, Ordering::Acquire);
+    if all == 0 {
+        return;
+    }
+
+    let arch = vcpu.arch_state_mut();
+    for bit in 0..32u32 {
+        if all & (1 << bit) == 0 {
+            continue;
+        }
+        let intid = bit + 32; // SPI INTIDs start at 32
+        let mut injected = false;
+        for lr in arch.ich_lr.iter_mut() {
+            if (*lr >> LR_STATE_SHIFT) & LR_STATE_MASK == 0 {
+                *lr = (GicV3VirtualInterface::LR_STATE_PENDING << LR_STATE_SHIFT)
+                    | LR_GROUP1_BIT
+                    | ((IRQ_DEFAULT_PRIORITY as u64) << LR_PRIORITY_SHIFT)
+                    | (intid as u64);
+                injected = true;
+                break;
+            }
+        }
+        if !injected {
+            crate::global::PENDING_SPIS[vcpu_id].fetch_or(1 << bit, Ordering::Relaxed);
         }
     }
 }

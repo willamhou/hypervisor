@@ -15,7 +15,7 @@ BINARY_BIN := $(BUILD_DIR)/$(TARGET).bin
 QEMU := qemu-system-aarch64
 QEMU_FLAGS := -machine virt,virtualization=on,gic-version=3 \
               -cpu max \
-              -smp 2 \
+              -smp 4 \
               -m 1G \
               -nographic \
               -kernel $(BINARY)
@@ -55,6 +55,8 @@ endif
 # Linux guest paths
 LINUX_IMAGE ?= guest/linux/Image
 LINUX_DTB ?= guest/linux/guest.dtb
+LINUX_INITRAMFS ?= guest/linux/initramfs.cpio.gz
+LINUX_DISK ?= guest/linux/disk.img
 
 # Run hypervisor with Linux kernel
 run-linux:
@@ -66,7 +68,9 @@ run-linux:
 	@echo "Press Ctrl+A then X to exit QEMU"
 	$(QEMU) $(QEMU_FLAGS) \
 	    -device loader,file=$(LINUX_IMAGE),addr=0x48000000 \
-	    -device loader,file=$(LINUX_DTB),addr=0x47000000
+	    -device loader,file=$(LINUX_DTB),addr=0x47000000 \
+	    -device loader,file=$(LINUX_INITRAMFS),addr=0x54000000 \
+	    -device loader,file=$(LINUX_DISK),addr=0x58000000
 
 # Run with GDB server (for debugging)
 debug: build

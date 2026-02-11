@@ -31,6 +31,15 @@ impl GlobalDeviceManager {
         }
     }
     
+    /// Attach a virtio-blk device to the global device manager.
+    pub fn attach_virtio_blk(&self, disk_base: u64, disk_size: u64) {
+        unsafe {
+            if let Some(ref mut devices) = *self.devices.get() {
+                devices.attach_virtio_blk(disk_base, disk_size);
+            }
+        }
+    }
+
     /// Handle MMIO access
     pub fn handle_mmio(&self, addr: u64, value: u64, size: u8, is_write: bool) -> Option<u64> {
         unsafe {
@@ -44,6 +53,17 @@ impl GlobalDeviceManager {
                 } else {
                     Some(0)
                 }
+            }
+        }
+    }
+
+    /// Look up SPI routing via GICD_IROUTER
+    pub fn route_spi(&self, intid: u32) -> usize {
+        unsafe {
+            if let Some(ref devices) = *self.devices.get() {
+                devices.route_spi(intid)
+            } else {
+                0
             }
         }
     }
@@ -116,3 +136,32 @@ pub static PENDING_SGIS: [AtomicU32; MAX_VCPUS] = [
 
 /// Flag set by IRQ handler to signal preemptive vCPU exit
 pub static PREEMPTION_EXIT: AtomicBool = AtomicBool::new(false);
+
+/// Pending SPI bitmask per vCPU. Each bit represents an SPI INTID offset
+/// from 32 (bit 0 = INTID 32, bit 1 = INTID 33, ..., bit 31 = INTID 63).
+/// Only covers the first 32 SPIs (INTIDs 32-63), which is sufficient for
+/// UART (SPI 1 = INTID 33) and virtio (SPI 16 = INTID 48).
+pub static PENDING_SPIS: [AtomicU32; MAX_VCPUS] = [
+    AtomicU32::new(0), AtomicU32::new(0), AtomicU32::new(0), AtomicU32::new(0),
+    AtomicU32::new(0), AtomicU32::new(0), AtomicU32::new(0), AtomicU32::new(0),
+];
+
+/// Inject an SPI to the correct vCPU based on GICD_IROUTER.
+///
+/// Called from exception handler or device completion path.
+/// Reads the IROUTER for the given SPI to determine the target vCPU,
+/// then queues the SPI bit in PENDING_SPIS for that vCPU.
+///
+/// Only supports INTIDs 32-63 (first 32 SPIs).
+pub fn inject_spi(intid: u32) {
+    if intid < 32 || intid > 63 {
+        return;
+    }
+    let bit = intid - 32;
+
+    // Read IROUTER to find target vCPU
+    let target = DEVICES.route_spi(intid);
+    if target < MAX_VCPUS {
+        PENDING_SPIS[target].fetch_or(1 << bit, Ordering::Release);
+    }
+}

@@ -104,6 +104,7 @@
 
 pub mod pl011;
 pub mod gic;
+pub mod virtio;
 
 /// Trait for MMIO-accessible devices
 ///
@@ -172,15 +173,31 @@ pub trait MmioDevice {
 pub struct DeviceManager {
     uart: pl011::VirtualUart,
     gicd: gic::VirtualGicd,
+    virtio_blk: Option<virtio::mmio::VirtioMmioTransport<virtio::blk::VirtioBlk>>,
 }
 
+/// Virtio-blk MMIO base address (first QEMU virt virtio-mmio slot)
+const VIRTIO_BLK_BASE: u64 = 0x0a00_0000;
+/// Virtio-blk SPI: SPI 16 = INTID 48
+const VIRTIO_BLK_INTID: u32 = 48;
+
 impl DeviceManager {
-    /// Create a new device manager
+    /// Create a new device manager (no virtio-blk by default)
     pub fn new() -> Self {
         Self {
             uart: pl011::VirtualUart::new(),
             gicd: gic::VirtualGicd::new(),
+            virtio_blk: None,
         }
+    }
+
+    /// Attach a virtio-blk device backed by an in-memory disk image.
+    pub fn attach_virtio_blk(&mut self, disk_base: u64, disk_size: u64) {
+        let blk = virtio::blk::VirtioBlk::new(disk_base, disk_size);
+        let transport = virtio::mmio::VirtioMmioTransport::new(
+            VIRTIO_BLK_BASE, blk, VIRTIO_BLK_INTID,
+        );
+        self.virtio_blk = Some(transport);
     }
     
     /// Handle MMIO access
@@ -198,36 +215,45 @@ impl DeviceManager {
         // Try UART first (most common)
         if self.uart.contains(addr) {
             let offset = addr - self.uart.base_address();
-            if is_write {
+            return if is_write {
                 self.uart.write(offset, value, size);
                 None
             } else {
                 self.uart.read(offset, size)
-            }
+            };
         }
+
         // Try GICD
-        else if self.gicd.contains(addr) {
+        if self.gicd.contains(addr) {
             let offset = addr - self.gicd.base_address();
-            if is_write {
+            return if is_write {
                 self.gicd.write(offset, value, size);
                 None
             } else {
                 self.gicd.read(offset, size)
+            };
+        }
+
+        // Try virtio-blk
+        if let Some(ref mut vblk) = self.virtio_blk {
+            if vblk.contains(addr) {
+                let offset = addr - vblk.base_address();
+                return if is_write {
+                    vblk.write(offset, value, size);
+                    None
+                } else {
+                    vblk.read(offset, size)
+                };
             }
         }
-        // Unknown device
-        else {
-            crate::uart_puts(b"[MMIO] Unknown device access at 0x");
-            crate::uart_put_hex(addr);
-            crate::uart_puts(b"\n");
-            
-            // Return 0 for reads, ignore writes
-            if is_write {
-                None
-            } else {
-                Some(0)
-            }
-        }
+
+        // Unknown device — return 0 for reads, ignore writes
+        if is_write { None } else { Some(0) }
+    }
+
+    /// Look up SPI routing via GICD_IROUTER
+    pub fn route_spi(&self, intid: u32) -> usize {
+        self.gicd.route_spi(intid)
     }
 }
 
