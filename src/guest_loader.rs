@@ -148,10 +148,17 @@ impl GuestConfig {
         uart_put_hex(entry_point);
         uart_puts(b"\n");
 
+        // Stage-2 mapping must cover from GUEST_RAM_BASE through the end of
+        // the DTB-declared memory region (GUEST_LOAD_ADDR + LINUX_MEM_SIZE).
+        // The DTB says memory starts at GUEST_LOAD_ADDR (0x48000000), but the
+        // Stage-2 mapping starts from GUEST_RAM_BASE (0x40000000) to also cover
+        // the DTB itself (at 0x47000000).
+        let stage2_size = (kernel_addr - mem_start) + platform::LINUX_MEM_SIZE;
+
         Self {
             guest_type: GuestType::Linux,
             load_addr: mem_start,
-            mem_size: platform::LINUX_MEM_SIZE,
+            mem_size: stage2_size,
             entry_point,
             dtb_addr,
         }
