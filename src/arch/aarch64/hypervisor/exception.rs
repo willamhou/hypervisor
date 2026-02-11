@@ -355,11 +355,30 @@ pub extern "C" fn handle_exception(context: &mut VcpuContext) -> bool {
         }
 
         ExitReason::DataAbort => {
-            // Data abort - might be MMIO access
-            let far = context.sys_regs.far_el2;
+            // Data abort - determine the faulting IPA (guest physical address).
+            //
+            // When Stage-2 is enabled (HCR_EL2.VM=1), FAR_EL2 holds the
+            // guest virtual address, NOT the IPA. The IPA page is in HPFAR_EL2.
+            // We combine HPFAR_EL2 (page frame) with FAR_EL2 (page offset).
+            //
+            // When the guest MMU is off, VA == IPA so FAR_EL2 also works,
+            // but HPFAR_EL2 is still valid and correct.
+            let hpfar: u64;
+            unsafe {
+                core::arch::asm!(
+                    "mrs {}, hpfar_el2",
+                    out(reg) hpfar,
+                    options(nostack, nomem),
+                );
+            }
+            // HPFAR_EL2[43:4] = IPA[47:12] (page number)
+            // FAR_EL2[11:0] = page offset within the 4KB page
+            let ipa_page = (hpfar & 0x0000_0FFF_FFFF_FFF0) << 8;
+            let page_offset = context.sys_regs.far_el2 & 0xFFF;
+            let addr = ipa_page | page_offset;
 
             // Try to handle as MMIO
-            if handle_mmio_abort(context, far) {
+            if handle_mmio_abort(context, addr) {
                 // Reset exception counter on successful MMIO
                 EXCEPTION_COUNT.store(0, Ordering::Relaxed);
                 // Successfully handled, advance PC and continue
@@ -373,8 +392,10 @@ pub extern "C" fn handle_exception(context: &mut VcpuContext) -> bool {
                 true
             } else {
                 // Not MMIO or failed to handle
-                uart_puts(b"[VCPU] Data abort at 0x");
-                uart_put_hex(far);
+                uart_puts(b"[VCPU] Data abort IPA=0x");
+                uart_put_hex(addr);
+                uart_puts(b" VA=0x");
+                uart_put_hex(context.sys_regs.far_el2);
                 uart_puts(b" (not MMIO)\n");
                 false // Exit
             }
