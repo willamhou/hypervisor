@@ -7,7 +7,7 @@ use crate::vcpu::Vcpu;
 use crate::arch::aarch64::{MemoryAttributes, init_stage2};
 use crate::arch::aarch64::defs::*;
 use crate::arch::aarch64::peripherals::gicv3::GicV3VirtualInterface;
-use crate::devices::DeviceManager;
+use crate::devices::MmioDevice;
 use crate::scheduler::Scheduler;
 use crate::platform;
 use core::sync::atomic::Ordering;
@@ -59,10 +59,16 @@ impl Vm {
     /// Create a new VM
     pub fn new(id: usize) -> Self {
         const INIT: Option<Vcpu> = None;
-        let devices = DeviceManager::new();
-
-        // Install device manager globally for exception handler access
-        crate::global::DEVICES.init(devices);
+        // Reset and register default devices into the global device manager.
+        // GlobalDeviceManager uses a static DeviceManager to avoid stack overflow
+        // (VirtualGicd alone is ~10KB due to irouter[988]).
+        crate::global::DEVICES.reset();
+        crate::global::DEVICES.register_device(crate::devices::Device::Uart(
+            crate::devices::pl011::VirtualUart::new(),
+        ));
+        crate::global::DEVICES.register_device(crate::devices::Device::Gicd(
+            crate::devices::gic::VirtualGicd::new(),
+        ));
 
         Self {
             id,
@@ -129,8 +135,8 @@ impl Vm {
             // GIC region: covers distributor + redistributor
             MAPPER.map_region(platform::GIC_REGION_BASE, platform::GIC_REGION_SIZE, MemoryAttributes::DEVICE);
 
-            // Map UART for passthrough
-            MAPPER.map_region(platform::UART_BASE as u64, BLOCK_SIZE_2MB, MemoryAttributes::DEVICE);
+            // UART (0x09000000) is NOT mapped — all accesses trap to VirtualUart
+            // for full emulation with RX interrupt injection.
 
             // Initialize Stage-2 translation
             init_stage2(&MAPPER);
@@ -278,6 +284,18 @@ impl Vm {
 
             // Set current vCPU ID so IRQ/trap handler knows who's running
             crate::global::CURRENT_VCPU_ID.store(vcpu_id, Ordering::Release);
+
+            // Drain physical UART RX bytes into VirtualUart and inject SPI 33
+            while let Some(ch) = crate::global::UART_RX.pop() {
+                if let Some(uart) = crate::global::DEVICES.uart_mut() {
+                    uart.push_rx(ch);
+                }
+            }
+            if let Some(uart) = crate::global::DEVICES.uart_mut() {
+                if uart.pending_irq().is_some() {
+                    crate::global::inject_spi(33);
+                }
+            }
 
             // Inject pending SGIs and SPIs into this vCPU's arch_state before run
             inject_pending_sgis(self.vcpus[vcpu_id].as_mut().unwrap());

@@ -419,6 +419,144 @@ impl DynamicIdentityMapper {
         (pa & !BLOCK_MASK_2MB) | attr_bits | PTE_VALID
     }
 
+    /// Map a single 4KB page (identity mapping: IPA == PA).
+    ///
+    /// If the target L2 entry is a 2MB block, it is first split into 512 x 4KB
+    /// page entries preserving the original mapping attributes.
+    pub fn map_4kb_page(&mut self, ipa: u64, attr: MemoryAttribute) -> Result<(), &'static str> {
+        let l1_idx = ((ipa >> 30) & PT_INDEX_MASK) as usize;
+        let l2_table = self.get_or_create_l2(l1_idx)?;
+        let l2_idx = ((ipa >> 21) & PT_INDEX_MASK) as usize;
+        let l3_idx = ((ipa >> 12) & PT_INDEX_MASK) as usize;
+
+        let l2_entry = unsafe { *(l2_table as *const u64).add(l2_idx) };
+
+        let l3_table = if l2_entry & PTE_VALID != 0 && l2_entry & PTE_TABLE == 0 {
+            // L2 entry is a 2MB block — split into L3 table
+            self.split_2mb_block(l2_table, l2_idx, l2_entry)?
+        } else if l2_entry & (PTE_VALID | PTE_TABLE) == (PTE_VALID | PTE_TABLE) {
+            // L2 entry already points to an L3 table
+            l2_entry & PTE_ADDR_MASK
+        } else {
+            // L2 entry invalid — create fresh L3 table (all invalid entries)
+            let l3 = crate::mm::heap::alloc_page()
+                .ok_or("Failed to allocate L3 table")?;
+            unsafe { core::ptr::write_bytes(l3 as *mut u8, 0, PAGE_SIZE); }
+            let l3_desc = l3 | PTE_VALID | PTE_TABLE;
+            unsafe { *(l2_table as *mut u64).add(l2_idx) = l3_desc; }
+            l3
+        };
+
+        // Write the 4KB page entry (L3 page descriptor: bit[1]=1 means page at L3)
+        let page_entry = self.make_page_entry(ipa & !PAGE_MASK_4KB, attr);
+        unsafe { *(l3_table as *mut u64).add(l3_idx) = page_entry; }
+
+        // TLB invalidate for this IPA
+        Self::tlbi_ipa(ipa);
+
+        Ok(())
+    }
+
+    /// Remove a 4KB page mapping (mark L3 entry invalid).
+    pub fn unmap_4kb_page(&mut self, ipa: u64) -> Result<(), &'static str> {
+        let l1_idx = ((ipa >> 30) & PT_INDEX_MASK) as usize;
+        let l1_entry = unsafe { *(self.l1_table as *const u64).add(l1_idx) };
+        if l1_entry & (PTE_VALID | PTE_TABLE) != (PTE_VALID | PTE_TABLE) {
+            return Err("L1 entry not valid");
+        }
+        let l2_table = l1_entry & PTE_ADDR_MASK;
+        let l2_idx = ((ipa >> 21) & PT_INDEX_MASK) as usize;
+        let l2_entry = unsafe { *(l2_table as *const u64).add(l2_idx) };
+        if l2_entry & (PTE_VALID | PTE_TABLE) != (PTE_VALID | PTE_TABLE) {
+            return Err("L2 entry is not an L3 table");
+        }
+        let l3_table = l2_entry & PTE_ADDR_MASK;
+        let l3_idx = ((ipa >> 12) & PT_INDEX_MASK) as usize;
+        unsafe { *(l3_table as *mut u64).add(l3_idx) = 0; }
+        Self::tlbi_ipa(ipa);
+        Ok(())
+    }
+
+    /// Split a 2MB block entry into 512 x 4KB page entries.
+    ///
+    /// Uses break-before-make: invalidate L2 entry → TLB flush → write new table.
+    fn split_2mb_block(&self, l2_table: u64, l2_idx: usize, block_entry: u64) -> Result<u64, &'static str> {
+        let block_pa = block_entry & !BLOCK_MASK_2MB;
+        let block_attr_bits = block_entry & BLOCK_MASK_2MB & !0x3; // strip valid+type bits
+
+        // Allocate L3 table
+        let l3 = crate::mm::heap::alloc_page()
+            .ok_or("Failed to allocate L3 table for split")?;
+
+        // Fill L3 with 512 page entries preserving original attributes.
+        // L3 page descriptor: [PA | attrs | bit1=1(page) | bit0=1(valid)]
+        unsafe {
+            let l3_ptr = l3 as *mut u64;
+            for i in 0..512u64 {
+                let pa = block_pa + i * PAGE_SIZE_4KB;
+                // Page descriptor: same attr bits as block, but bit[1] = 1 (page)
+                let page = pa | block_attr_bits | PTE_TABLE | PTE_VALID;
+                *l3_ptr.add(i as usize) = page;
+            }
+        }
+
+        // Break-before-make: invalidate old L2 entry
+        unsafe { *(l2_table as *mut u64).add(l2_idx) = 0; }
+        Self::tlbi_all();
+
+        // Write new L2 table descriptor pointing to L3
+        let l2_desc = l3 | PTE_VALID | PTE_TABLE;
+        unsafe { *(l2_table as *mut u64).add(l2_idx) = l2_desc; }
+        Self::tlbi_all();
+
+        Ok(l3)
+    }
+
+    /// Create a 4KB page entry (L3 level).
+    fn make_page_entry(&self, pa: u64, attr: MemoryAttribute) -> u64 {
+        let attr_bits = match attr {
+            MemoryAttribute::Normal => {
+                (0b1111 << 2) | (0b11 << 6) | (0b11 << 8) | (1 << 10)
+            }
+            MemoryAttribute::Device => {
+                (0b0000 << 2) | (0b11 << 6) | (0b00 << 8) | (1 << 10)
+            }
+            MemoryAttribute::ReadOnly => {
+                (0b1111 << 2) | (0b01 << 6) | (0b11 << 8) | (1 << 10)
+            }
+        };
+        // L3 page: bit[1] = 1 (page), bit[0] = 1 (valid)
+        (pa & !PAGE_MASK_4KB) | attr_bits | PTE_TABLE | PTE_VALID
+    }
+
+    /// Invalidate all Stage-2 TLB entries.
+    fn tlbi_all() {
+        unsafe {
+            core::arch::asm!(
+                "dsb ishst",
+                "tlbi vmalls12e1is",
+                "dsb ish",
+                "isb",
+                options(nostack),
+            );
+        }
+    }
+
+    /// Invalidate a single IPA from Stage-2 TLB.
+    fn tlbi_ipa(ipa: u64) {
+        let ipa_shifted = (ipa >> 12) & 0x0000_00FF_FFFF_FFFF;
+        unsafe {
+            core::arch::asm!(
+                "dsb ishst",
+                "tlbi ipas2e1is, {ipa}",
+                "dsb ish",
+                "isb",
+                ipa = in(reg) ipa_shifted,
+                options(nostack),
+            );
+        }
+    }
+
     /// Get VTTBR value (L0 table address)
     pub fn vttbr(&self) -> u64 {
         self.l0_table

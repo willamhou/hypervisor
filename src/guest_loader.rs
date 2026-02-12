@@ -301,6 +301,12 @@ pub fn run_guest(config: &GuestConfig) -> Result<(), &'static str> {
         );
     }
 
+    // Enable physical UART RX interrupt (INTID 33) so the hypervisor
+    // can deliver keyboard input to the guest via VirtualUart.
+    if config.guest_type == GuestType::Linux {
+        enable_physical_uart_irq();
+    }
+
     // Reset exception counters so Linux exceptions are clearly visible
     if config.guest_type == GuestType::Linux {
         crate::arch::aarch64::hypervisor::exception::reset_exception_counters();
@@ -338,4 +344,38 @@ pub fn run_guest(config: &GuestConfig) -> Result<(), &'static str> {
     }
 
     result
+}
+
+/// Enable physical UART RX interrupt (INTID 33 = SPI 1).
+///
+/// Configures:
+/// 1. GICD: enable INTID 33, set priority, route to PE 0
+/// 2. Physical PL011: enable RX interrupt in UARTIMSC
+fn enable_physical_uart_irq() {
+    use crate::uart_puts;
+    const GICD_BASE: u64 = 0x0800_0000;
+    const UART_BASE: u64 = 0x0900_0000;
+    const INTID: u32 = 33; // SPI 1
+
+    unsafe {
+        // GICD_ISENABLER1: enable INTID 33 (bit 1 of word 1)
+        let isenabler1 = (GICD_BASE + 0x104) as *mut u32;
+        core::ptr::write_volatile(isenabler1, 1 << (INTID - 32));
+
+        // GICD_IPRIORITYR8: set priority for INTID 33
+        // INTID 33 is byte 1 of IPRIORITYR[8] (offset 0x420 + 1)
+        let ipriorityr = (GICD_BASE + 0x421) as *mut u8;
+        core::ptr::write_volatile(ipriorityr, 0xA0); // medium priority
+
+        // GICD_IROUTER33: route to PE 0 (Aff0=0)
+        let irouter = (GICD_BASE + 0x6100 + (INTID as u64 - 32) * 8) as *mut u64;
+        core::ptr::write_volatile(irouter, 0); // Aff0=0 → PE 0
+
+        // Enable RX interrupt in physical PL011 UARTIMSC (bit 4 = RXIM)
+        let uartimsc = (UART_BASE + 0x038) as *mut u32;
+        let current = core::ptr::read_volatile(uartimsc as *const u32);
+        core::ptr::write_volatile(uartimsc, current | (1 << 4));
+    }
+
+    uart_puts(b"[GUEST] Physical UART RX interrupt enabled (INTID 33)\n");
 }

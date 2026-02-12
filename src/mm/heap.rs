@@ -47,6 +47,17 @@ pub fn alloc(size: u64) -> Option<u64> {
     }
 }
 
+/// Return a 4KB page to the free-list for reuse.
+///
+/// # Safety
+/// Caller must ensure `addr` was previously allocated via `alloc_page()`,
+/// is 4KB-aligned, and is no longer in use.
+pub unsafe fn free_page(addr: u64) {
+    (*HEAP.allocator.get())
+        .as_mut()
+        .map(|a| a.free_page(addr));
+}
+
 /// Get remaining heap space
 pub fn remaining() -> u64 {
     unsafe {

@@ -8,11 +8,13 @@ use core::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, AtomicUsize, Ordering
 use crate::devices::DeviceManager;
 
 /// Global device manager
-/// 
-/// This is accessed from exception handlers to emulate MMIO devices.
+///
+/// Uses UnsafeCell<DeviceManager> directly (not Option) to avoid placing
+/// the large DeviceManager on the stack during initialization.
 /// Safety: Only one vCPU runs at a time, so this is effectively single-threaded.
 pub struct GlobalDeviceManager {
-    devices: UnsafeCell<Option<DeviceManager>>,
+    devices: UnsafeCell<DeviceManager>,
+    initialized: AtomicBool,
 }
 
 unsafe impl Sync for GlobalDeviceManager {}
@@ -20,51 +22,51 @@ unsafe impl Sync for GlobalDeviceManager {}
 impl GlobalDeviceManager {
     pub const fn new() -> Self {
         Self {
-            devices: UnsafeCell::new(None),
+            devices: UnsafeCell::new(DeviceManager::new()),
+            initialized: AtomicBool::new(false),
         }
     }
-    
-    /// Initialize with a device manager
-    pub fn init(&self, devices: DeviceManager) {
+
+    /// Remove all registered devices.
+    pub fn reset(&self) {
         unsafe {
-            *self.devices.get() = Some(devices);
+            (*self.devices.get()).reset();
         }
     }
-    
+
+    /// Register a device in the global device manager.
+    pub fn register_device(&self, dev: crate::devices::Device) {
+        unsafe {
+            (*self.devices.get()).register_device(dev);
+        }
+        self.initialized.store(true, Ordering::Relaxed);
+    }
+
     /// Attach a virtio-blk device to the global device manager.
     pub fn attach_virtio_blk(&self, disk_base: u64, disk_size: u64) {
         unsafe {
-            if let Some(ref mut devices) = *self.devices.get() {
-                devices.attach_virtio_blk(disk_base, disk_size);
-            }
+            (*self.devices.get()).attach_virtio_blk(disk_base, disk_size);
         }
     }
 
     /// Handle MMIO access
     pub fn handle_mmio(&self, addr: u64, value: u64, size: u8, is_write: bool) -> Option<u64> {
         unsafe {
-            if let Some(ref mut devices) = *self.devices.get() {
-                devices.handle_mmio(addr, value, size, is_write)
-            } else {
-                // No device manager installed
-                crate::uart_puts(b"[MMIO] No device manager!\n");
-                if is_write {
-                    None
-                } else {
-                    Some(0)
-                }
-            }
+            (*self.devices.get()).handle_mmio(addr, value, size, is_write)
         }
     }
 
     /// Look up SPI routing via GICD_IROUTER
     pub fn route_spi(&self, intid: u32) -> usize {
         unsafe {
-            if let Some(ref devices) = *self.devices.get() {
-                devices.route_spi(intid)
-            } else {
-                0
-            }
+            (*self.devices.get()).route_spi(intid)
+        }
+    }
+
+    /// Get mutable reference to the UART device (for RX injection).
+    pub fn uart_mut(&self) -> Option<&mut crate::devices::pl011::VirtualUart> {
+        unsafe {
+            (*self.devices.get()).uart_mut()
         }
     }
 }
@@ -165,3 +167,50 @@ pub fn inject_spi(intid: u32) {
         PENDING_SPIS[target].fetch_or(1 << bit, Ordering::Release);
     }
 }
+
+// ── UART RX pending ring buffer ─────────────────────────────────────
+// Filled by handle_irq_exception (INTID 33), drained by run loop.
+
+const UART_RX_RING_SIZE: usize = 64;
+
+pub struct UartRxRing {
+    buf: UnsafeCell<[u8; UART_RX_RING_SIZE]>,
+    head: AtomicUsize,  // read index
+    tail: AtomicUsize,  // write index
+}
+
+unsafe impl Sync for UartRxRing {}
+
+impl UartRxRing {
+    pub const fn new() -> Self {
+        Self {
+            buf: UnsafeCell::new([0; UART_RX_RING_SIZE]),
+            head: AtomicUsize::new(0),
+            tail: AtomicUsize::new(0),
+        }
+    }
+
+    /// Push a byte (called from IRQ handler).
+    pub fn push(&self, ch: u8) {
+        let tail = self.tail.load(Ordering::Relaxed);
+        let next = (tail + 1) % UART_RX_RING_SIZE;
+        if next == self.head.load(Ordering::Acquire) {
+            return; // full, drop
+        }
+        unsafe { (*self.buf.get())[tail] = ch; }
+        self.tail.store(next, Ordering::Release);
+    }
+
+    /// Pop a byte (called from run loop).
+    pub fn pop(&self) -> Option<u8> {
+        let head = self.head.load(Ordering::Relaxed);
+        if head == self.tail.load(Ordering::Acquire) {
+            return None; // empty
+        }
+        let ch = unsafe { (*self.buf.get())[head] };
+        self.head.store((head + 1) % UART_RX_RING_SIZE, Ordering::Release);
+        Some(ch)
+    }
+}
+
+pub static UART_RX: UartRxRing = UartRxRing::new();

@@ -515,6 +515,35 @@ pub extern "C" fn handle_irq_exception(_context: &mut VcpuContext) -> bool {
             GicV3SystemRegs::write_dir(intid);
             return true;
         }
+        33 => {
+            // Physical UART RX interrupt (SPI 1 = INTID 33).
+            // Read all available bytes from physical UART into global ring buffer.
+            loop {
+                let fr: u32;
+                unsafe {
+                    core::arch::asm!(
+                        "ldr {val:w}, [{addr}]",
+                        addr = in(reg) (0x0900_0000usize + 0x18),
+                        val = out(reg) fr,
+                        options(nostack, readonly),
+                    );
+                }
+                if fr & (1 << 4) != 0 { break; } // RXFE — FIFO empty
+                let data: u32;
+                unsafe {
+                    core::arch::asm!(
+                        "ldr {val:w}, [{addr}]",
+                        addr = in(reg) 0x0900_0000usize,
+                        val = out(reg) data,
+                        options(nostack, readonly),
+                    );
+                }
+                crate::global::UART_RX.push((data & 0xFF) as u8);
+            }
+            GicV3SystemRegs::write_eoir1(intid);
+            GicV3SystemRegs::write_dir(intid);
+            return false; // exit to host to deliver RX data to VirtualUart
+        }
         27 => {
             // Virtual timer interrupt (PPI 27)
             // Mask the timer to stop continuous firing

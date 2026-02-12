@@ -93,6 +93,8 @@ pub const PAGE_OFFSET_MASK: u64 = 0xFFF;
 pub const PT_INDEX_MASK: u64 = 0x1FF;
 pub const BLOCK_SIZE_2MB: u64 = 2 * 1024 * 1024;
 pub const BLOCK_MASK_2MB: u64 = BLOCK_SIZE_2MB - 1;
+pub const PAGE_SIZE_4KB: u64 = 4096;
+pub const PAGE_MASK_4KB: u64 = PAGE_SIZE_4KB - 1;
 
 // ── Preemptive scheduling ────────────────────────────────────────────
 // Preemption is now handled by CNTHP timer (INTID 26) armed before each
