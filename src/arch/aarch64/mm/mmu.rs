@@ -458,6 +458,7 @@ impl DynamicIdentityMapper {
     }
 
     /// Remove a 4KB page mapping (mark L3 entry invalid).
+    /// If the L2 entry is a 2MB block, it is first split into an L3 table.
     pub fn unmap_4kb_page(&mut self, ipa: u64) -> Result<(), &'static str> {
         let l1_idx = ((ipa >> 30) & PT_INDEX_MASK) as usize;
         let l1_entry = unsafe { *(self.l1_table as *const u64).add(l1_idx) };
@@ -467,10 +468,17 @@ impl DynamicIdentityMapper {
         let l2_table = l1_entry & PTE_ADDR_MASK;
         let l2_idx = ((ipa >> 21) & PT_INDEX_MASK) as usize;
         let l2_entry = unsafe { *(l2_table as *const u64).add(l2_idx) };
-        if l2_entry & (PTE_VALID | PTE_TABLE) != (PTE_VALID | PTE_TABLE) {
-            return Err("L2 entry is not an L3 table");
-        }
-        let l3_table = l2_entry & PTE_ADDR_MASK;
+
+        let l3_table = if l2_entry & PTE_VALID != 0 && l2_entry & PTE_TABLE == 0 {
+            // L2 entry is a 2MB block — split into L3 first
+            self.split_2mb_block(l2_table, l2_idx, l2_entry)?
+        } else if l2_entry & (PTE_VALID | PTE_TABLE) == (PTE_VALID | PTE_TABLE) {
+            // L2 entry already points to an L3 table
+            l2_entry & PTE_ADDR_MASK
+        } else {
+            return Err("L2 entry not valid");
+        };
+
         let l3_idx = ((ipa >> 12) & PT_INDEX_MASK) as usize;
         unsafe { *(l3_table as *mut u64).add(l3_idx) = 0; }
         Self::tlbi_ipa(ipa);
@@ -597,6 +605,35 @@ impl Stage2Mapper for DynamicIdentityMapper {
 
     fn root_table_addr(&self) -> u64 {
         self.l0_table
+    }
+}
+
+/// Initialize Stage-2 translation from a Stage2Config (used by DynamicIdentityMapper).
+pub fn init_stage2_from_config(config: &Stage2Config) {
+    // Enable Stage-2 translation in HCR_EL2
+    unsafe {
+        let mut hcr: u64;
+        core::arch::asm!(
+            "mrs {hcr}, hcr_el2",
+            hcr = out(reg) hcr,
+            options(nostack, nomem),
+        );
+        hcr |= HCR_VM;
+        core::arch::asm!(
+            "msr hcr_el2, {hcr}",
+            "isb",
+            hcr = in(reg) hcr,
+            options(nostack, nomem),
+        );
+    }
+    config.install();
+    unsafe {
+        core::arch::asm!(
+            "tlbi vmalls12e1is",
+            "dsb sy",
+            "isb",
+            options(nostack, nomem),
+        );
     }
 }
 

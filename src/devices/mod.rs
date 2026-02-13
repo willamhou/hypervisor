@@ -37,6 +37,7 @@ pub trait MmioDevice {
 pub enum Device {
     Uart(pl011::VirtualUart),
     Gicd(gic::VirtualGicd),
+    Gicr(gic::VirtualGicr),
     VirtioBlk(virtio::mmio::VirtioMmioTransport<virtio::blk::VirtioBlk>),
 }
 
@@ -45,6 +46,7 @@ impl MmioDevice for Device {
         match self {
             Device::Uart(d) => d.read(offset, size),
             Device::Gicd(d) => d.read(offset, size),
+            Device::Gicr(d) => d.read(offset, size),
             Device::VirtioBlk(d) => d.read(offset, size),
         }
     }
@@ -53,6 +55,7 @@ impl MmioDevice for Device {
         match self {
             Device::Uart(d) => d.write(offset, value, size),
             Device::Gicd(d) => d.write(offset, value, size),
+            Device::Gicr(d) => d.write(offset, value, size),
             Device::VirtioBlk(d) => d.write(offset, value, size),
         }
     }
@@ -61,6 +64,7 @@ impl MmioDevice for Device {
         match self {
             Device::Uart(d) => d.base_address(),
             Device::Gicd(d) => d.base_address(),
+            Device::Gicr(d) => d.base_address(),
             Device::VirtioBlk(d) => d.base_address(),
         }
     }
@@ -69,6 +73,7 @@ impl MmioDevice for Device {
         match self {
             Device::Uart(d) => d.size(),
             Device::Gicd(d) => d.size(),
+            Device::Gicr(d) => d.size(),
             Device::VirtioBlk(d) => d.size(),
         }
     }
@@ -77,6 +82,7 @@ impl MmioDevice for Device {
         match self {
             Device::Uart(d) => d.pending_irq(),
             Device::Gicd(d) => d.pending_irq(),
+            Device::Gicr(d) => d.pending_irq(),
             Device::VirtioBlk(d) => d.pending_irq(),
         }
     }
@@ -85,6 +91,7 @@ impl MmioDevice for Device {
         match self {
             Device::Uart(d) => d.ack_irq(),
             Device::Gicd(d) => d.ack_irq(),
+            Device::Gicr(d) => d.ack_irq(),
             Device::VirtioBlk(d) => d.ack_irq(),
         }
     }

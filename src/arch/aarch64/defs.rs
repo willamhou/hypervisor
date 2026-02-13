@@ -15,6 +15,7 @@ pub const HCR_BSU_INNER: u64 = 1 << 10;
 pub const HCR_TWI: u64 = 1 << 13;
 pub const HCR_TWE: u64 = 1 << 14;
 pub const HCR_RW: u64 = 1 << 31;
+pub const HCR_TEA: u64 = 1 << 37;  // Trap External Aborts to EL2
 pub const HCR_APK: u64 = 1 << 40;
 pub const HCR_API: u64 = 1 << 41;
 

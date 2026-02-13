@@ -62,6 +62,7 @@ pub fn init() {
                       | HCR_TWI        // Trap WFI to EL2 (for vCPU scheduling)
                       // TWE NOT set: WFE executes natively (used in spinlocks,
                       // woken by SEV not SGI — trapping would cause deadlock)
+                      | HCR_TEA        // Trap External Aborts to EL2
                       | HCR_APK        // Don't trap PAC key register accesses
                       | HCR_API;       // Don't trap PAC instructions
 

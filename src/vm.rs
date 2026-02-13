@@ -4,6 +4,7 @@
 //! containing one or more vCPUs, Stage-2 memory mapping, and emulated devices.
 
 use crate::vcpu::Vcpu;
+#[cfg(not(feature = "linux_guest"))]
 use crate::arch::aarch64::{MemoryAttributes, init_stage2};
 use crate::arch::aarch64::defs::*;
 use crate::arch::aarch64::peripherals::gicv3::GicV3VirtualInterface;
@@ -69,6 +70,10 @@ impl Vm {
         crate::global::DEVICES.register_device(crate::devices::Device::Gicd(
             crate::devices::gic::VirtualGicd::new(),
         ));
+        #[cfg(feature = "linux_guest")]
+        crate::global::DEVICES.register_device(crate::devices::Device::Gicr(
+            crate::devices::gic::VirtualGicr::new(4),
+        ));
 
         Self {
             id,
@@ -99,7 +104,6 @@ impl Vm {
     pub fn init_memory(&mut self, guest_mem_start: u64, guest_mem_size: u64) {
         use crate::uart_puts;
         use crate::uart_put_hex;
-        use crate::arch::aarch64::mm::IdentityMapper;
 
         if self.memory_initialized {
             uart_puts(b"[VM] Memory already initialized\n");
@@ -108,15 +112,6 @@ impl Vm {
 
         uart_puts(b"[VM] Initializing memory mapping...\n");
 
-        // Use a global static mapper (to avoid large stack allocation)
-        static mut MAPPER: IdentityMapper = IdentityMapper::new();
-
-        // Reset the mapper to clear any stale mappings from previous VM runs
-        unsafe {
-            MAPPER.reset();
-        }
-
-        // Map guest memory region (identity mapping)
         // Round to 2MB boundaries
         let start_aligned = guest_mem_start & !BLOCK_MASK_2MB;
         let size_aligned = ((guest_mem_size + BLOCK_SIZE_2MB - 1) / BLOCK_SIZE_2MB) * BLOCK_SIZE_2MB;
@@ -127,23 +122,121 @@ impl Vm {
         uart_put_hex(start_aligned + size_aligned);
         uart_puts(b"\n");
 
-        unsafe {
-            MAPPER.map_region(start_aligned, size_aligned, MemoryAttributes::NORMAL);
+        #[cfg(feature = "linux_guest")]
+        self.init_memory_dynamic(start_aligned, size_aligned);
 
-            // Map MMIO device regions (DEVICE memory type)
-
-            // GIC region: covers distributor + redistributor
-            MAPPER.map_region(platform::GIC_REGION_BASE, platform::GIC_REGION_SIZE, MemoryAttributes::DEVICE);
-
-            // UART (0x09000000) is NOT mapped — all accesses trap to VirtualUart
-            // for full emulation with RX interrupt injection.
-
-            // Initialize Stage-2 translation
-            init_stage2(&MAPPER);
-        }
+        #[cfg(not(feature = "linux_guest"))]
+        self.init_memory_static(start_aligned, size_aligned);
 
         self.memory_initialized = true;
         uart_puts(b"[VM] Memory mapping complete\n");
+    }
+
+    /// Static mapper path for unit tests (no 4KB page support needed)
+    #[cfg(not(feature = "linux_guest"))]
+    fn init_memory_static(&self, start_aligned: u64, size_aligned: u64) {
+        use crate::arch::aarch64::mm::IdentityMapper;
+
+        static mut MAPPER: IdentityMapper = IdentityMapper::new();
+        unsafe {
+            MAPPER.reset();
+            MAPPER.map_region(start_aligned, size_aligned, MemoryAttributes::NORMAL);
+            MAPPER.map_region(platform::GIC_REGION_BASE, platform::GIC_REGION_SIZE, MemoryAttributes::DEVICE);
+            init_stage2(&MAPPER);
+        }
+    }
+
+    /// Dynamic mapper path for Linux guest (supports 4KB unmap for GICR trap)
+    #[cfg(feature = "linux_guest")]
+    fn init_memory_dynamic(&self, start_aligned: u64, size_aligned: u64) {
+        use crate::uart_puts;
+        use crate::arch::aarch64::mm::mmu::{DynamicIdentityMapper, MemoryAttribute, init_stage2_from_config};
+
+        let mut mapper = DynamicIdentityMapper::new();
+
+        // Map guest memory in two regions, SKIPPING the hypervisor heap.
+        // The heap (HEAP_START .. HEAP_START+HEAP_SIZE) lies within the guest's
+        // Stage-2 address range. If mapped as Normal, the guest could corrupt
+        // page tables allocated from the heap (L3 tables for GICR trap-and-emulate).
+        // By not mapping the heap region, accesses from the guest to those addresses
+        // cause Stage-2 translation faults (harmless — the kernel's declared memory
+        // starts at 0x48000000, well above the heap).
+        let heap_start = platform::HEAP_START;
+        let heap_end = heap_start + platform::HEAP_SIZE;
+        let end_aligned = start_aligned + size_aligned;
+
+        if heap_start > start_aligned && heap_end < end_aligned {
+            // Heap falls within guest range — split into two regions
+            let region1_size = heap_start - start_aligned;
+            let region2_start = heap_end;
+            let region2_size = end_aligned - heap_end;
+            uart_puts(b"[VM] Mapping guest memory around heap gap:\n");
+            uart_puts(b"[VM]   Region 1: 0x");
+            crate::uart_put_hex(start_aligned);
+            uart_puts(b" - 0x");
+            crate::uart_put_hex(start_aligned + region1_size);
+            uart_puts(b"\n");
+            uart_puts(b"[VM]   Heap gap: 0x");
+            crate::uart_put_hex(heap_start);
+            uart_puts(b" - 0x");
+            crate::uart_put_hex(heap_end);
+            uart_puts(b"\n");
+            uart_puts(b"[VM]   Region 2: 0x");
+            crate::uart_put_hex(region2_start);
+            uart_puts(b" - 0x");
+            crate::uart_put_hex(region2_start + region2_size);
+            uart_puts(b"\n");
+            mapper.map_region(start_aligned, region1_size, MemoryAttribute::Normal)
+                .expect("Failed to map guest memory region 1");
+            mapper.map_region(region2_start, region2_size, MemoryAttribute::Normal)
+                .expect("Failed to map guest memory region 2");
+        } else {
+            // Heap is outside guest range — single contiguous mapping
+            mapper.map_region(start_aligned, size_aligned, MemoryAttribute::Normal)
+                .expect("Failed to map guest memory");
+        }
+
+        // Map entire GIC region as DEVICE (passthrough), then selectively
+        // unmap GICR0, GICR1, GICR3 so those accesses trap to EL2 for
+        // emulation via VirtualGicr.
+        //
+        // GICR2 is left as DEVICE passthrough due to a QEMU workaround:
+        // unmapping L3 entries for GICR2 (L3[224-255]) causes QEMU to
+        // generate external aborts (DFSC=0x10) on the adjacent GICR3
+        // entries (L3[256-287]), even though GICR3 entries are valid.
+        // Since HCR_EL2.TEA is RAZ/WI on QEMU, these external aborts
+        // crash the guest. Keeping GICR2 as passthrough avoids this.
+        //
+        // GICD is also left as DEVICE passthrough (VirtualGicd tracks
+        // shadow state for SPI routing).
+        mapper.map_region(platform::GIC_REGION_BASE, platform::GIC_REGION_SIZE, MemoryAttribute::Device)
+            .expect("Failed to map GIC region");
+
+        // Unmap GICR0, GICR1, GICR3 (each = 128KB = 32 × 4KB pages)
+        // GICR2 stays mapped as DEVICE passthrough (QEMU workaround)
+        let gicr_to_unmap = [
+            platform::GICR0_RD_BASE,  // 0x080A_0000
+            platform::GICR1_RD_BASE,  // 0x080C_0000
+            platform::GICR3_RD_BASE,  // 0x0810_0000
+        ];
+        for &base in &gicr_to_unmap {
+            for page in 0..32u64 {
+                let addr = base + page * PAGE_SIZE_4KB;
+                mapper.unmap_4kb_page(addr)
+                    .expect("Failed to unmap GICR page");
+            }
+        }
+        uart_puts(b"[VM] GICR0,1,3 unmapped (trap to EL2); GICR2 passthrough\n");
+
+        // UART (0x09000000) is NOT mapped — all accesses trap to VirtualUart
+
+        // Install Stage-2 translation
+        let config = mapper.config();
+        init_stage2_from_config(&config);
+
+        // Keep mapper alive — page tables are heap-allocated and must not be freed.
+        // Leak it intentionally (we only create one per boot).
+        core::mem::forget(mapper);
     }
 
     /// Create a vCPU with specified ID

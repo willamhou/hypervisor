@@ -273,7 +273,7 @@ pub fn run_guest(config: &GuestConfig) -> Result<(), &'static str> {
     }
 
     // For Linux guests: keep TWI set (trap WFI to EL2 for SMP scheduling),
-    // clear TWE only. WFI traps enable cooperative vCPU scheduling in run_smp().
+    // clear TWE only.
     if config.guest_type == GuestType::Linux {
         unsafe {
             core::arch::asm!(
@@ -290,11 +290,6 @@ pub fn run_guest(config: &GuestConfig) -> Result<(), &'static str> {
 
     // Attach virtio-blk device (backed by in-memory disk image loaded by QEMU)
     if config.guest_type == GuestType::Linux {
-        uart_puts(b"[GUEST] Attaching virtio-blk at disk_addr=0x");
-        crate::uart_put_hex(platform::VIRTIO_DISK_ADDR);
-        uart_puts(b" size=0x");
-        crate::uart_put_hex(platform::VIRTIO_DISK_SIZE);
-        uart_puts(b"\n");
         crate::global::DEVICES.attach_virtio_blk(
             platform::VIRTIO_DISK_ADDR,
             platform::VIRTIO_DISK_SIZE,
