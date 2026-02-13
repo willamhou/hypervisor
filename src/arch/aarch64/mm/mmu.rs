@@ -640,36 +640,5 @@ pub fn init_stage2_from_config(config: &Stage2Config) {
 /// Initialize Stage-2 translation for a VM
 pub fn init_stage2(mapper: &IdentityMapper) {
     let config = mapper.config();
-
-    // Enable Stage-2 translation in HCR_EL2
-    unsafe {
-        let mut hcr: u64;
-        core::arch::asm!(
-            "mrs {hcr}, hcr_el2",
-            hcr = out(reg) hcr,
-            options(nostack, nomem),
-        );
-
-        hcr |= HCR_VM;
-
-        core::arch::asm!(
-            "msr hcr_el2, {hcr}",
-            "isb",
-            hcr = in(reg) hcr,
-            options(nostack, nomem),
-        );
-    }
-
-    // Install page tables
-    config.install();
-
-    // Invalidate all Stage-2 TLB entries
-    unsafe {
-        core::arch::asm!(
-            "tlbi vmalls12e1is",
-            "dsb sy",
-            "isb",
-            options(nostack, nomem),
-        );
-    }
+    init_stage2_from_config(&config);
 }

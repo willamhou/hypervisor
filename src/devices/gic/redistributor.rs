@@ -12,8 +12,8 @@ use crate::devices::MmioDevice;
 const GICR_BASE: u64 = 0x080A_0000;
 /// Size per redistributor (RD + SGI frames)
 const GICR_PER_CPU: u64 = 0x20000; // 128KB
-/// Maximum vCPUs supported
-const MAX_VCPUS: usize = 4;
+/// Maximum vCPUs supported (matches platform::SMP_CPUS)
+const MAX_VCPUS: usize = crate::platform::SMP_CPUS;
 /// Total GICR region size
 const GICR_TOTAL_SIZE: u64 = GICR_PER_CPU * MAX_VCPUS as u64; // 512KB
 
@@ -78,8 +78,12 @@ pub struct VirtualGicr {
 }
 
 impl VirtualGicr {
-    /// Create a new GICR emulator for `n` vCPUs
+    /// Create a new GICR emulator for `n` vCPUs.
+    ///
+    /// # Panics
+    /// Panics if `num_vcpus > MAX_VCPUS`.
     pub fn new(num_vcpus: usize) -> Self {
+        assert!(num_vcpus <= MAX_VCPUS, "num_vcpus exceeds MAX_VCPUS");
         Self {
             state: [
                 GicrState::new(),

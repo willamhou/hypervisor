@@ -31,6 +31,10 @@ pub const VIRTIO_DISK_ADDR: u64 = 0x5800_0000;
 /// Disk image size (2MB default — overridden if image is smaller/larger)
 pub const VIRTIO_DISK_SIZE: u64 = 2 * 1024 * 1024;
 
+// ── SMP ──────────────────────────────────────────────────────────────
+/// Number of vCPUs for the Linux guest (must match QEMU -smp and DTB)
+pub const SMP_CPUS: usize = 4;
+
 // ── GICR redistributor frames ────────────────────────────────────────
 /// GICR 0 RD base
 pub const GICR0_RD_BASE: u64 = 0x080A_0000;

@@ -72,7 +72,7 @@ impl Vm {
         ));
         #[cfg(feature = "linux_guest")]
         crate::global::DEVICES.register_device(crate::devices::Device::Gicr(
-            crate::devices::gic::VirtualGicr::new(4),
+            crate::devices::gic::VirtualGicr::new(platform::SMP_CPUS),
         ));
 
         Self {
@@ -165,31 +165,39 @@ impl Vm {
         let heap_end = heap_start + platform::HEAP_SIZE;
         let end_aligned = start_aligned + size_aligned;
 
-        if heap_start > start_aligned && heap_end < end_aligned {
-            // Heap falls within guest range — split into two regions
-            let region1_size = heap_start - start_aligned;
-            let region2_start = heap_end;
-            let region2_size = end_aligned - heap_end;
-            uart_puts(b"[VM] Mapping guest memory around heap gap:\n");
-            uart_puts(b"[VM]   Region 1: 0x");
-            crate::uart_put_hex(start_aligned);
+        // Compute the overlap between [start_aligned, end_aligned) and [heap_start, heap_end)
+        let overlap_start = if heap_start > start_aligned { heap_start } else { start_aligned };
+        let overlap_end = if heap_end < end_aligned { heap_end } else { end_aligned };
+        let has_overlap = overlap_start < overlap_end;
+
+        if has_overlap {
+            // Map the portion before the heap (if any)
+            if start_aligned < overlap_start {
+                let before_size = overlap_start - start_aligned;
+                uart_puts(b"[VM] Guest region before heap: 0x");
+                crate::uart_put_hex(start_aligned);
+                uart_puts(b" - 0x");
+                crate::uart_put_hex(overlap_start);
+                uart_puts(b"\n");
+                mapper.map_region(start_aligned, before_size, MemoryAttribute::Normal)
+                    .expect("Failed to map guest memory before heap");
+            }
+            uart_puts(b"[VM] Heap gap (unmapped): 0x");
+            crate::uart_put_hex(overlap_start);
             uart_puts(b" - 0x");
-            crate::uart_put_hex(start_aligned + region1_size);
+            crate::uart_put_hex(overlap_end);
             uart_puts(b"\n");
-            uart_puts(b"[VM]   Heap gap: 0x");
-            crate::uart_put_hex(heap_start);
-            uart_puts(b" - 0x");
-            crate::uart_put_hex(heap_end);
-            uart_puts(b"\n");
-            uart_puts(b"[VM]   Region 2: 0x");
-            crate::uart_put_hex(region2_start);
-            uart_puts(b" - 0x");
-            crate::uart_put_hex(region2_start + region2_size);
-            uart_puts(b"\n");
-            mapper.map_region(start_aligned, region1_size, MemoryAttribute::Normal)
-                .expect("Failed to map guest memory region 1");
-            mapper.map_region(region2_start, region2_size, MemoryAttribute::Normal)
-                .expect("Failed to map guest memory region 2");
+            // Map the portion after the heap (if any)
+            if overlap_end < end_aligned {
+                let after_size = end_aligned - overlap_end;
+                uart_puts(b"[VM] Guest region after heap: 0x");
+                crate::uart_put_hex(overlap_end);
+                uart_puts(b" - 0x");
+                crate::uart_put_hex(end_aligned);
+                uart_puts(b"\n");
+                mapper.map_region(overlap_end, after_size, MemoryAttribute::Normal)
+                    .expect("Failed to map guest memory after heap");
+            }
         } else {
             // Heap is outside guest range — single contiguous mapping
             mapper.map_region(start_aligned, size_aligned, MemoryAttribute::Normal)
@@ -541,6 +549,11 @@ impl Vm {
 /// With TALL1 SGI trapping, the physical GICR isn't strictly needed for
 /// SGI delivery. But we still wake it so the redistributor is in a consistent
 /// state and can accept physical PPIs/SPIs if needed.
+///
+/// NOTE: Operates on physical GICR addresses at EL2, bypassing Stage-2.
+/// This works even for GICR0/1/3 whose Stage-2 entries are unmapped
+/// (for guest trap-and-emulate), because EL2 accesses are not subject
+/// to Stage-2 translation.
 fn wake_gicr(rd_base: u64) {
     let waker_addr = (rd_base + platform::GICR_WAKER_OFF) as *mut u32;
     unsafe {
@@ -563,6 +576,11 @@ fn wake_gicr(rd_base: u64) {
 /// Must be called before every vCPU entry because the guest may re-initialize
 /// its GIC (ICENABLER0 clears all, then re-enables only guest PPIs), which
 /// would disable our CNTHP timer interrupt.
+///
+/// NOTE: This writes directly to the **physical** GICR0 SGI frame at EL2,
+/// bypassing Stage-2 translation. The VirtualGicr emulator state for vCPU 0
+/// is NOT updated, but this is intentional: INTID 26 is a hypervisor-owned
+/// PPI (EL2 physical timer), not visible to the guest through VirtualGicr.
 #[inline]
 fn ensure_cnthp_enabled() {
     unsafe {
