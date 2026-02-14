@@ -54,7 +54,7 @@ pub const GICR3_RD_BASE: u64 = 0x0810_0000;
 pub const GICR3_SGI_BASE: u64 = 0x0811_0000;
 
 /// GICR RD base addresses indexed by vCPU ID
-pub const GICR_RD_BASES: [u64; 4] = [
+pub const GICR_RD_BASES: [u64; SMP_CPUS] = [
     GICR0_RD_BASE,
     GICR1_RD_BASE,
     GICR2_RD_BASE,

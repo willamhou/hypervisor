@@ -39,6 +39,7 @@ const GICR_ICFGR0: u64 = 0x0C00;
 const GICR_ICFGR1: u64 = 0x0C04;
 
 /// Per-vCPU GICR state (SGIs 0-15 + PPIs 16-31 = INTIDs 0-31)
+#[derive(Copy, Clone)]
 struct GicrState {
     // RD frame
     ctlr: u32,
@@ -85,12 +86,7 @@ impl VirtualGicr {
     pub fn new(num_vcpus: usize) -> Self {
         assert!(num_vcpus <= MAX_VCPUS, "num_vcpus exceeds MAX_VCPUS");
         Self {
-            state: [
-                GicrState::new(),
-                GicrState::new(),
-                GicrState::new(),
-                GicrState::new(),
-            ],
+            state: [GicrState::new(); MAX_VCPUS],
             num_vcpus,
         }
     }
