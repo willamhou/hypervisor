@@ -156,7 +156,7 @@ Array-based routing: `devices: [Option<Device>; 8]`, scan for `dev.contains(addr
 
 ## Tests
 
-All 40 tests run automatically on `make run` (no feature flags). Orchestrated sequentially in `src/main.rs`. Located in `tests/`:
+40 assertions across 12 test suites run automatically on `make run` (no feature flags). Orchestrated sequentially in `src/main.rs`. Located in `tests/`:
 
 | Test | Coverage |
 |------|----------|
@@ -167,14 +167,16 @@ All 40 tests run automatically on `make run` (no feature flags). Orchestrated se
 | `test_scheduler` | Round-robin scheduling, block/unblock |
 | `test_vm_scheduler` | VM-integrated scheduling lifecycle |
 | `test_gicv3_virt` | List Register injection, ELRSR |
-| `test_guest` | Basic hypercall (HVC #0) |
-| `test_timer` | Timer interrupt detection |
 | `test_mmio` | MMIO device registration + routing |
 | `test_complete_interrupt` | End-to-end IRQ injection flow |
-| `test_guest_irq` | HCR_EL2.VI injection |
-| `test_guest_interrupt` | Guest exception vector handling |
+| `test_guest` | Basic hypercall (HVC #0) |
 | `test_guest_loader` | GuestConfig for Zephyr/Linux |
 | `test_simple_guest` | Simple guest boot + exit |
+
+Not wired into `main.rs` (exported but not called):
+- `test_timer` — timer interrupt detection
+- `test_guest_interrupt` — guest exception vector handling
+- `test_guest_irq` — placeholder (TODO)
 
 ## Critical Implementation Details
 
