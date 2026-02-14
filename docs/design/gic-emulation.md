@@ -8,9 +8,8 @@ The hypervisor uses a hybrid approach — some GIC components are passed through
 
 | Component | Address | Strategy | Reason |
 |-----------|---------|----------|--------|
-| GICD | 0x08000000 | Passthrough + shadow | Guest configures SPIs directly; hypervisor shadows IROUTER for routing |
-| GICR 0,1,3 | 0x080A0000+ | Trap-and-emulate | Per-vCPU state must be multiplexed on single pCPU |
-| GICR 2 | 0x080E0000 | Passthrough | QEMU bug workaround (L3 unmap causes external aborts) |
+| GICD | 0x08000000 | Trap + write-through | Guest writes trapped, forwarded to physical GICD + shadow state |
+| GICR 0-3 | 0x080A0000+ | Trap-and-emulate | Per-vCPU state must be multiplexed on single pCPU |
 | ICC regs | System regs | Virtual redirect | ICH_HCR_EL2.En=1 redirects to ICV_* at EL1 |
 | ICC_SGI1R | System reg | Trapped (TALL1) | Decoded for cross-vCPU IPI delivery |
 
@@ -46,9 +45,8 @@ Each physical GICR frame is wired to a specific physical CPU. With 4 vCPUs on 1 
 
 In `vm.rs:init_memory_dynamic()`:
 1. Map entire GIC region (0x08000000, 16MB) as DEVICE
-2. Use `DynamicIdentityMapper::unmap_4kb_page()` to unmap GICR0, GICR1, GICR3
+2. Use `DynamicIdentityMapper::unmap_4kb_page()` to unmap all 4 GICRs (0-3)
 3. Each GICR = 128KB = 32 x 4KB pages
-4. GICR2 left mapped (QEMU bug workaround)
 
 Guest access to unmapped pages → Stage-2 Data Abort → `handle_mmio_abort()` → `DeviceManager` → `VirtualGicr`.
 
@@ -100,14 +98,6 @@ register_offset = frame_offset % 0x10000
 | GICR_IPRIORITYR | 0x0400-0x041F | Priority bytes | Stored per-byte |
 | GICR_ICFGR0 | 0x0C00 | Shadow icfgr0 | Stored |
 | GICR_ICFGR1 | 0x0C04 | Shadow icfgr1 | Stored |
-
-### QEMU GICR2 Workaround
-
-GICR2 (0x080E0000) is left as DEVICE passthrough because:
-1. `DynamicIdentityMapper::unmap_4kb_page()` converts a 2MB block to an L3 table
-2. GICR2 and GICR3 share the same 2MB block (0x08000000-0x081FFFFF)
-3. After unmapping GICR2 L3 entries, QEMU generates external aborts (DFSC=0x10) on GICR3 entries
-4. HCR_EL2.TEA is RAZ/WI on QEMU, so these aborts crash the guest
 
 ## SGI/IPI Emulation
 

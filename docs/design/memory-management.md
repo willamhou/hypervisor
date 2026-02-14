@@ -134,10 +134,10 @@ mapper.map_region(GIC_REGION_BASE, GIC_REGION_SIZE, MemoryAttribute::Device);
 Then GICR pages are selectively unmapped for trap-and-emulate:
 - GICR0: 32 pages at 0x080A0000
 - GICR1: 32 pages at 0x080C0000
+- GICR2: 32 pages at 0x080E0000
 - GICR3: 32 pages at 0x08100000
-- GICR2: **not unmapped** (QEMU bug workaround)
 
-GICD (0x08000000) stays mapped — VirtualGicd uses shadow state, not full trap.
+GICD (0x08000000) is also unmapped (16 pages) — `VirtualGicd` uses trap + write-through.
 
 ## UART Region
 

@@ -309,7 +309,7 @@ M5: RME & CCA         ░░░░░░░░░░░░░░░░░░░�
 
 3. **GIC寄存器模拟**:
    - [x] GICD_*（Distributor）: passthrough + shadow state (IROUTER[988], ISENABLER, IPRIORITYR, ICFGR, IGROUPR)
-   - [x] GICR_*（Redistributor）: full trap-and-emulate via VirtualGicr (GICR0/1/3), GICR2 passthrough (QEMU workaround)
+   - [x] GICR_*（Redistributor）: full trap-and-emulate via VirtualGicr (all 4 GICRs)
    - [x] Stage-2 4KB selective unmap for GICR trap regions
 
 **验收**:

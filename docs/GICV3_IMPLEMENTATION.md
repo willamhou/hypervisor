@@ -54,9 +54,7 @@ Each GICv3 Redistributor (GICR) has two 64KB frames:
 - **RD frame** (offset 0x00000): GICR_CTLR, GICR_WAKER, GICR_TYPER, etc.
 - **SGI frame** (offset 0x10000): GICR_IGROUPR0, GICR_ISENABLER0, GICR_ICENABLER0, etc.
 
-The hypervisor unmaps GICR0, GICR1, GICR3 via Stage-2 4KB page unmapping (32 pages per GICR = 128KB). Guest accesses trap as Data Aborts to EL2, where `VirtualGicr` emulates the registers.
-
-**GICR2 exception**: Left as DEVICE passthrough due to a QEMU bug — unmapping L3 entries for GICR2 causes external aborts on adjacent GICR3 entries.
+The hypervisor unmaps all 4 GICRs (0-3) via Stage-2 4KB page unmapping (32 pages per GICR = 128KB). Guest accesses trap as Data Aborts to EL2, where `VirtualGicr` emulates the registers.
 
 ### VirtualGicr State
 

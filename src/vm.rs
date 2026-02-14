@@ -205,18 +205,8 @@ impl Vm {
         }
 
         // Map entire GIC region as DEVICE (passthrough), then selectively
-        // unmap GICD and GICR0/1/3 so guest accesses trap to EL2 for
-        // emulation via VirtualGicd / VirtualGicr.
-        //
-        // GICR2 is left as DEVICE passthrough due to a QEMU workaround:
-        // unmapping L3 entries for GICR2 (L3[224-255]) causes QEMU to
-        // generate external aborts (DFSC=0x10) on the adjacent GICR3
-        // entries (L3[256-287]), even though GICR3 entries are valid.
-        // Since HCR_EL2.TEA is RAZ/WI on QEMU, these external aborts
-        // crash the guest. Keeping GICR2 as passthrough avoids this.
-        //
-        // GICD pages (L3[0-15]) are far from GICR2, so unmapping them
-        // does not trigger the adjacent-entry QEMU bug.
+        // unmap GICD and all GICR frames so guest accesses trap to EL2
+        // for emulation via VirtualGicd / VirtualGicr.
         mapper.map_region(platform::GIC_REGION_BASE, platform::GIC_REGION_SIZE, MemoryAttribute::Device)
             .expect("Failed to map GIC region");
 
@@ -230,21 +220,15 @@ impl Vm {
         }
         uart_puts(b"[VM] GICD unmapped (trap to EL2 via VirtualGicd)\n");
 
-        // Unmap GICR0, GICR1, GICR3 (each = 128KB = 32 × 4KB pages)
-        // GICR2 stays mapped as DEVICE passthrough (QEMU workaround)
-        let gicr_to_unmap = [
-            platform::GICR0_RD_BASE,  // 0x080A_0000
-            platform::GICR1_RD_BASE,  // 0x080C_0000
-            platform::GICR3_RD_BASE,  // 0x0810_0000
-        ];
-        for &base in &gicr_to_unmap {
+        // Unmap all GICR frames (each = 128KB = 32 × 4KB pages)
+        for &base in &platform::GICR_RD_BASES {
             for page in 0..32u64 {
                 let addr = base + page * PAGE_SIZE_4KB;
                 mapper.unmap_4kb_page(addr)
                     .expect("Failed to unmap GICR page");
             }
         }
-        uart_puts(b"[VM] GICR0,1,3 unmapped (trap to EL2); GICR2 passthrough\n");
+        uart_puts(b"[VM] All GICRs unmapped (trap to EL2 via VirtualGicr)\n");
 
         // UART (0x09000000) is NOT mapped — all accesses trap to VirtualUart
 
