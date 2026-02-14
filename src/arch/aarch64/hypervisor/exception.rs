@@ -77,13 +77,11 @@ pub fn init() {
 
 // Exception loop prevention: track consecutive exceptions
 static EXCEPTION_COUNT: AtomicU32 = AtomicU32::new(0);
-static TOTAL_EXCEPTION_COUNT: AtomicU64 = AtomicU64::new(0);
 const MAX_CONSECUTIVE_EXCEPTIONS: u32 = 100;
 
 /// Reset all exception counters (call before entering a new guest)
 pub fn reset_exception_counters() {
     EXCEPTION_COUNT.store(0, Ordering::Relaxed);
-    TOTAL_EXCEPTION_COUNT.store(0, Ordering::Relaxed);
     WFI_CONSECUTIVE_COUNT.store(0, Ordering::Relaxed);
     LAST_WFI_PC.store(0, Ordering::Relaxed);
 }
@@ -136,9 +134,6 @@ pub extern "C" fn handle_exception(context: &mut VcpuContext) -> bool {
 
     // Get exit reason
     let exit_reason = context.exit_reason();
-
-    // Count exceptions for debugging
-    TOTAL_EXCEPTION_COUNT.fetch_add(1, Ordering::Relaxed);
 
     use crate::arch::aarch64::regs::ExitReason;
 

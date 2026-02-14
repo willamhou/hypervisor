@@ -1,14 +1,22 @@
 /// Virtual GIC Distributor (GICD)
 ///
-/// Emulates the GICv3 distributor for guest interrupt configuration.
-/// Handles CTLR, TYPER, ISENABLER/ICENABLER, IGROUPR, IPRIORITYR,
-/// ICFGR, ISPENDR/ICPENDR, ISACTIVER/ICACTIVER, and IROUTER registers.
+/// Trap-and-emulate for the GICv3 distributor with write-through to physical
+/// hardware. Guest GICD accesses are trapped via Stage-2 Data Abort, reads
+/// are served from shadow state (with corrections like ARE_NS read-as-one),
+/// and writes are forwarded to both shadow state and the physical GICD.
+///
+/// Write-through is required because the physical GIC must stay in sync with
+/// the guest's configuration (EnableGrp1NS, ISENABLER, IROUTER, etc.) for
+/// physical interrupt forwarding to work correctly.
 
 use crate::devices::MmioDevice;
 
 /// GICD base address
 const GICD_BASE: u64 = 0x08000000;
 const GICD_SIZE: u64 = 0x10000;
+
+/// GICD_CTLR bit definitions
+const GICD_CTLR_ARE_NS: u32 = 1 << 4;  // Affinity Routing Enable, Non-Secure
 
 /// GICD register offsets
 const GICD_CTLR: u64 = 0x000;
@@ -81,7 +89,7 @@ impl VirtualGicd {
             ispendr: [0; 32],
             isactiver: [0; 32],
             irouter: [0; 988],
-            num_cpus: 4,
+            num_cpus: crate::platform::SMP_CPUS as u32,
         }
     }
 
@@ -156,16 +164,21 @@ impl MmioDevice for VirtualGicd {
         }
 
         match offset {
-            GICD_CTLR => Some(self.ctlr as u64),
+            GICD_CTLR => {
+                // ARE_NS (bit 4) is read-as-one (affinity routing always enabled).
+                // RWP (bit 31) always reads 0 (writes are instant in emulation).
+                let val = self.ctlr | GICD_CTLR_ARE_NS;
+                Some(val as u64)
+            }
 
             GICD_TYPER => {
                 // ITLinesNumber[4:0] = 31 → (31+1)*32 = 1024 interrupts
                 // CPUNumber[7:5] = (num_cpus - 1)
                 // SecurityExtn[10] = 0
+                // No1N[25] = 1, A3V[24] = 1, IDbits[23:19] = 9 (10 bits, max 1024)
                 // MBIS[16] = 0, RSS[26] = 0
-                // ARE_NS[4] in CTLR implies affinity routing — TYPER reflects that
                 let cpu_num = (self.num_cpus.saturating_sub(1) & 0x7) << 5;
-                Some((31 | cpu_num) as u64)
+                Some((31 | cpu_num | (1 << 24) | (1 << 25) | (9 << 19)) as u64)
             }
 
             GICD_IIDR => {
@@ -228,6 +241,29 @@ impl MmioDevice for VirtualGicd {
     }
 
     fn write(&mut self, offset: u64, value: u64, size: u8) -> bool {
+        // Write-through to physical GICD at EL2 (bypasses Stage-2).
+        // Skip read-only registers; force ARE_NS on CTLR writes.
+        let forward = !matches!(offset, GICD_TYPER | GICD_IIDR | GICD_PIDR2);
+        if forward {
+            let fwd_value = if offset == GICD_CTLR {
+                value | GICD_CTLR_ARE_NS as u64 // enforce affinity routing
+            } else {
+                value
+            };
+            // SAFETY: GICD_BASE is valid MMIO at EL2 (bypasses Stage-2).
+            // GIC registers are naturally aligned; single-threaded access.
+            unsafe {
+                let phys = GICD_BASE + offset;
+                match size {
+                    1 => core::ptr::write_volatile(phys as *mut u8, fwd_value as u8),
+                    2 => core::ptr::write_volatile(phys as *mut u16, fwd_value as u16),
+                    4 => core::ptr::write_volatile(phys as *mut u32, fwd_value as u32),
+                    8 => core::ptr::write_volatile(phys as *mut u64, fwd_value),
+                    _ => {}
+                }
+            }
+        }
+
         // IROUTER: 64-bit or split 32-bit writes
         match offset {
             GICD_IROUTER_BASE..=GICD_IROUTER_END if size == 8 => {
@@ -257,7 +293,7 @@ impl MmioDevice for VirtualGicd {
 
         match offset {
             GICD_CTLR => {
-                self.ctlr = val;
+                self.ctlr = val | GICD_CTLR_ARE_NS;
                 true
             }
 

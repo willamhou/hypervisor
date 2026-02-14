@@ -81,7 +81,7 @@ The `run_smp()` loop in `src/vm.rs` runs all vCPUs on a single physical CPU via 
 
 | Component | Address | Mode | Implementation |
 |-----------|---------|------|----------------|
-| GICD | 0x08000000 | Passthrough + shadow | `VirtualGicd` tracks IROUTER for SPI routing |
+| GICD | 0x08000000 | Trap + write-through | `VirtualGicd` shadow state + write-through to physical GICD |
 | GICR 0,1,3 | 0x080A0000+ | Trap-and-emulate | `VirtualGicr` (Stage-2 unmapped, 4KB pages) |
 | GICR 2 | 0x080E0000 | Passthrough | QEMU bug workaround (L3 unmap causes external aborts) |
 | ICC regs | System regs | Virtual | ICH_HCR_EL2.En=1 redirects to ICV_* at EL1 |
