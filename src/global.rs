@@ -7,18 +7,18 @@ use core::cell::UnsafeCell;
 use core::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, AtomicUsize, Ordering};
 use crate::devices::DeviceManager;
 
-/// Global device manager
-///
-/// Uses UnsafeCell<DeviceManager> directly (not Option) to avoid placing
-/// the large DeviceManager on the stack during initialization.
-/// Safety: Only one vCPU runs at a time, so this is effectively single-threaded.
+// ── Single-pCPU GlobalDeviceManager (UnsafeCell, no locking) ──────
+
+#[cfg(not(feature = "multi_pcpu"))]
 pub struct GlobalDeviceManager {
     devices: UnsafeCell<DeviceManager>,
     initialized: AtomicBool,
 }
 
+#[cfg(not(feature = "multi_pcpu"))]
 unsafe impl Sync for GlobalDeviceManager {}
 
+#[cfg(not(feature = "multi_pcpu"))]
 impl GlobalDeviceManager {
     pub const fn new() -> Self {
         Self {
@@ -27,46 +27,74 @@ impl GlobalDeviceManager {
         }
     }
 
-    /// Remove all registered devices.
     pub fn reset(&self) {
-        unsafe {
-            (*self.devices.get()).reset();
-        }
+        unsafe { (*self.devices.get()).reset(); }
     }
 
-    /// Register a device in the global device manager.
     pub fn register_device(&self, dev: crate::devices::Device) {
-        unsafe {
-            (*self.devices.get()).register_device(dev);
-        }
+        unsafe { (*self.devices.get()).register_device(dev); }
         self.initialized.store(true, Ordering::Relaxed);
     }
 
-    /// Attach a virtio-blk device to the global device manager.
     pub fn attach_virtio_blk(&self, disk_base: u64, disk_size: u64) {
-        unsafe {
-            (*self.devices.get()).attach_virtio_blk(disk_base, disk_size);
-        }
+        unsafe { (*self.devices.get()).attach_virtio_blk(disk_base, disk_size); }
     }
 
-    /// Handle MMIO access
     pub fn handle_mmio(&self, addr: u64, value: u64, size: u8, is_write: bool) -> Option<u64> {
-        unsafe {
-            (*self.devices.get()).handle_mmio(addr, value, size, is_write)
-        }
+        unsafe { (*self.devices.get()).handle_mmio(addr, value, size, is_write) }
     }
 
-    /// Look up SPI routing via GICD_IROUTER
     pub fn route_spi(&self, intid: u32) -> usize {
-        unsafe {
-            (*self.devices.get()).route_spi(intid)
+        unsafe { (*self.devices.get()).route_spi(intid) }
+    }
+
+    pub fn uart_mut(&self) -> Option<&mut crate::devices::pl011::VirtualUart> {
+        unsafe { (*self.devices.get()).uart_mut() }
+    }
+}
+
+// ── Multi-pCPU GlobalDeviceManager (SpinLock protected) ───────────
+
+#[cfg(feature = "multi_pcpu")]
+use crate::sync::SpinLock;
+
+#[cfg(feature = "multi_pcpu")]
+pub struct GlobalDeviceManager {
+    devices: SpinLock<DeviceManager>,
+}
+
+#[cfg(feature = "multi_pcpu")]
+impl GlobalDeviceManager {
+    pub const fn new() -> Self {
+        Self {
+            devices: SpinLock::new(DeviceManager::new()),
         }
     }
 
-    /// Get mutable reference to the UART device (for RX injection).
-    pub fn uart_mut(&self) -> Option<&mut crate::devices::pl011::VirtualUart> {
-        unsafe {
-            (*self.devices.get()).uart_mut()
+    pub fn reset(&self) {
+        self.devices.lock().reset();
+    }
+
+    pub fn register_device(&self, dev: crate::devices::Device) {
+        self.devices.lock().register_device(dev);
+    }
+
+    pub fn attach_virtio_blk(&self, disk_base: u64, disk_size: u64) {
+        self.devices.lock().attach_virtio_blk(disk_base, disk_size);
+    }
+
+    pub fn handle_mmio(&self, addr: u64, value: u64, size: u8, is_write: bool) -> Option<u64> {
+        self.devices.lock().handle_mmio(addr, value, size, is_write)
+    }
+
+    pub fn route_spi(&self, intid: u32) -> usize {
+        self.devices.lock().route_spi(intid)
+    }
+
+    /// UART RX injection — acquires the device lock.
+    pub fn uart_push_rx(&self, ch: u8) {
+        if let Some(uart) = self.devices.lock().uart_mut() {
+            uart.push_rx(ch);
         }
     }
 }
