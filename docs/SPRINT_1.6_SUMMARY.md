@@ -1,7 +1,9 @@
 # Sprint 1.6: 完善中断注入 - 实现总结
 
+> **Historical Document**: This document records Sprint 1.6 (2026-01-26) which implemented basic interrupt injection using HCR_EL2.VI. The hypervisor has since evolved significantly — see [CLAUDE.md](../CLAUDE.md) for current architecture and [docs/design/](design/) for detailed module design docs. The GICv3 List Register mechanism replaced the HCR_EL2.VI approach documented here.
+
 **完成日期**: 2026-01-26
-**状态**: 已实现（待编译测试）
+**状态**: ✅ 已完成 (历史文档 — 后续由 GICv3 LR 机制取代)
 **预计时间**: 2-3h
 **实际用时**: ~2h
 

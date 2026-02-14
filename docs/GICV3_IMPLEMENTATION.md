@@ -1,503 +1,194 @@
-# GICv3/v4 虚拟中断注入实现
+# GICv3 Virtual Interrupt Implementation
 
-**实现日期**: 2026-01-26
-**状态**: 代码已实现，待测试验证
-**版本**: v0.4.0
-
----
-
-## 📋 实现概述
-
-本次实现将虚拟中断注入机制从传统的 HCR_EL2.VI 方式升级到 GICv3/v4 的 List Register (LR) 机制。
-
-### 关键改进
-
-1. **GICv3 系统寄存器接口** - 替代 MMIO 访问
-2. **List Register 中断注入** - 硬件自动化管理
-3. **向后兼容** - 自动检测并回退到 GICv2
-4. **虚拟化扩展支持** - ICH_* 寄存器用于虚拟中断
+**Version**: v0.7.0
+**Last updated**: 2026-02-14
+**Status**: Verified — Linux 6.12.12 boots to BusyBox shell with 4 vCPUs, no RCU stalls
 
 ---
 
-## 🎯 GICv2 vs GICv3 比较
+## Overview
 
-### GICv2（旧方式 - HCR_EL2.VI）
+The hypervisor uses ARM GICv3 hardware virtualization to provide interrupt services to the guest. The implementation combines three strategies:
 
-**优点**:
-- 简单直接
-- 所有 ARMv8 处理器都支持
+| Component | Strategy | Purpose |
+|-----------|----------|---------|
+| GICD (0x08000000) | Passthrough + shadow | Guest writes directly; VirtualGicd shadows IROUTER for SPI routing |
+| GICR (0x080A0000+) | Trap-and-emulate | Stage-2 unmapped (4KB pages); VirtualGicr emulates per-vCPU state |
+| ICC system regs | Virtual redirect | ICH_HCR_EL2.En=1 redirects ICC_* to ICV_* at EL1 |
+| ICC_SGI1R_EL1 | Trapped (TALL1) | Decoded for IPI emulation across vCPUs |
+| ICH_LR_EL2 | Direct | 4 List Registers for virtual interrupt injection |
 
-**缺点**:
-- 只能注入一个虚拟中断（IRQ 或 FIQ）
-- 需要软件管理中断状态
-- 无中断优先级支持
-- 性能较低
+## List Register Injection
 
-**实现**:
-```rust
-// 设置 HCR_EL2.VI 位
-hcr_el2 |= (1 << 7);  // VI bit
+### LR Format (64-bit)
 
-// Guest 会在下次进入时收到虚拟 IRQ
-// 但无法知道具体是哪个中断号
+```
+Bits [63:62] - State: 00=Invalid, 01=Pending, 10=Active, 11=Pending+Active
+Bit  [61]    - HW: 1=physical-virtual linkage (pINTID in [41:32])
+Bit  [60]    - Group: 1=Group 1
+Bits [55:48] - Priority (0x00 = highest)
+Bits [41:32] - pINTID (physical INTID, when HW=1)
+Bits [31:0]  - vINTID (virtual INTID)
 ```
 
-### GICv3（新方式 - List Registers）
+### Injection Paths
 
-**优点**:
-- 支持多个并发虚拟中断（4-16 个 LR）
-- 硬件自动管理状态转换（Pending → Active → Inactive）
-- 支持中断优先级和抢占
-- 性能更高
-- 符合 ARM 规范
+1. **SGI (INTID 0-15)**: Queued in `PENDING_SGIS[vcpu_id]` atomics, injected into `arch_state.ich_lr[]` before `vcpu.run()`.
+2. **SPI (INTID 32+)**: Queued in `PENDING_SPIS[vcpu_id]` atomics, injected before run or flushed immediately via `flush_pending_spis_to_hardware()`.
+3. **Virtual Timer (INTID 27)**: Injected with **HW=1** (pINTID=27) in IRQ handler. Guest EOI auto-deactivates physical interrupt.
+4. **Direct**: `GicV3VirtualInterface::inject_interrupt()` writes hardware LRs from exception handler context.
 
-**缺点**:
-- 需要 GICv3+ 硬件支持
-- 配置稍复杂
+### EOImode=1
 
-**实现**:
-```rust
-// 写入 List Register
-// LR 格式：State | HW | Group | Priority | vINTID
-let lr_value = (1u64 << 62)                    // State = Pending
-              | (1u64 << 60)                    // Group1
-              | ((priority as u64) << 48)       // Priority
-              | (intid as u64);                 // vINTID
+ICC_CTLR_EL1.EOImode=1 is set at EL2, splitting EOI into:
+- **EOIR** (priority drop): Guest writes ICC_EOIR1_EL1
+- **DIR** (deactivation): Hypervisor calls `GicV3SystemRegs::write_dir()` for non-HW interrupts
 
-// 写入 ICH_LR0_EL2
-GicV3VirtualInterface::write_lr(0, lr_value);
+For HW=1 interrupts (vtimer), the guest's virtual EOI automatically deactivates the physical interrupt — no DIR needed.
 
-// 硬件自动注入，Guest 收到精确的中断号
-```
+## GICR Trap-and-Emulate (Phase 7)
 
----
+### Architecture
 
-## 📂 文件结构
+Each GICv3 Redistributor (GICR) has two 64KB frames:
+- **RD frame** (offset 0x00000): GICR_CTLR, GICR_WAKER, GICR_TYPER, etc.
+- **SGI frame** (offset 0x10000): GICR_IGROUPR0, GICR_ISENABLER0, GICR_ICENABLER0, etc.
 
-### 新增文件
+The hypervisor unmaps GICR0, GICR1, GICR3 via Stage-2 4KB page unmapping (32 pages per GICR = 128KB). Guest accesses trap as Data Aborts to EL2, where `VirtualGicr` emulates the registers.
 
-1. **`src/arch/aarch64/peripherals/gicv3.rs`** (520 行)
-   - GICv3 系统寄存器接口
-   - List Register 管理
-   - 虚拟中断注入/清除
+**GICR2 exception**: Left as DEVICE passthrough due to a QEMU bug — unmapping L3 entries for GICR2 causes external aborts on adjacent GICR3 entries.
 
-### 修改文件
-
-1. **`src/arch/aarch64/peripherals/mod.rs`**
-   - 导出 gicv3 模块
-
-2. **`src/vcpu_interrupt.rs`**
-   - 添加 `use_gicv3` 标志
-   - `inject_irq()` 使用 List Register
-   - 向后兼容 GICv2 模式
-
-3. **`src/main.rs`**
-   - 调用 `gicv3::init()` 而不是 `gic::init()`
-
----
-
-## 🔧 技术实现细节
-
-### 1. GICv3 系统寄存器
-
-#### ICC_* 寄存器（CPU Interface）
+### VirtualGicr State
 
 ```rust
-// ICC_IAR1_EL1 - Interrupt Acknowledge
-let intid = GicV3SystemRegs::read_iar1();
-
-// ICC_EOIR1_EL1 - End Of Interrupt
-GicV3SystemRegs::write_eoir1(intid);
-
-// ICC_PMR_EL1 - Priority Mask (0xFF = allow all)
-GicV3SystemRegs::write_pmr(0xFF);
-
-// ICC_IGRPEN1_EL1 - Enable Group 1 interrupts
-GicV3SystemRegs::write_igrpen1(true);
-```
-
-#### ICH_* 寄存器（Hypervisor 虚拟接口）
-
-```rust
-// ICH_VTR_EL2 - VGIC Type Register
-let vtr = GicV3VirtualInterface::read_vtr();
-let num_lrs = ((vtr & 0x1F) + 1) as u32;  // 可用 LR 数量
-
-// ICH_HCR_EL2 - Hypervisor Control
-GicV3VirtualInterface::write_hcr(1);  // Enable virtual interrupts
-
-// ICH_LR0_EL2 - List Register 0
-GicV3VirtualInterface::write_lr(0, lr_value);
-```
-
-### 2. List Register 格式
-
-**64-bit List Register 布局**:
-
-```
-Bits [63:62] - State
-  00 = Invalid (free)
-  01 = Pending
-  10 = Active
-  11 = Pending + Active
-
-Bit [61] - HW
-  0 = Software interrupt
-  1 = Hardware interrupt (physical INTID in bits [41:32])
-
-Bit [60] - Group
-  0 = Group 0
-  1 = Group 1
-
-Bits [59:56] - Reserved
-Bits [55:48] - Priority (0 = highest)
-Bits [47:32] - Reserved
-Bits [31:0]  - vINTID (virtual interrupt ID)
-```
-
-**示例**:
-```rust
-// 注入 PPI 27 (Virtual Timer), 优先级 0xA0
-let lr = (1u64 << 62)         // Pending
-       | (1u64 << 60)         // Group1
-       | (0xA0u64 << 48)      // Priority
-       | 27u64;               // vINTID = 27
-
-write_lr(0, lr);  // 写入 LR0
-```
-
-### 3. 中断注入流程
-
-#### Hypervisor 端
-
-```rust
-// 1. 找到空闲的 List Register
-for i in 0..num_lrs {
-    let lr = read_lr(i);
-    let state = (lr >> 62) & 0x3;
-    
-    if state == 0 {  // Invalid = free
-        // 2. 构建 LR 值
-        let lr_value = build_lr(intid, priority);
-        
-        // 3. 写入 LR
-        write_lr(i, lr_value);
-        
-        return Ok(());
-    }
+pub struct GicrState {
+    pub igroupr0: u32,      // Interrupt Group Register
+    pub isenabler0: u32,    // Interrupt Set-Enable
+    pub icenabler0: u32,    // Interrupt Clear-Enable (shadow)
+    pub ipriorityr: [u8; 32], // Priority for INTIDs 0-31
+    pub icfgr0: u32,        // SGI configuration
+    pub icfgr1: u32,        // PPI configuration
 }
 ```
 
-#### 硬件自动处理
-
-1. **注入**: 当 Guest 进入且 IRQ 未 mask 时，硬件自动触发虚拟中断
-2. **状态转换**: Pending → Active (当 Guest 执行 IAR 时)
-3. **EOI**: Active → Invalid (当 Guest 执行 EOIR 时)
-
-#### Guest 端
-
-```rust
-// Guest 中断处理流程（EL1）
-
-// 1. 进入 IRQ handler (vector 0x280)
-irq_handler:
-    // 2. Acknowledge interrupt
-    let intid = read(ICC_IAR1_EL1);  // 硬件自动：Pending → Active
-    
-    // 3. 处理中断
-    handle_interrupt(intid);
-    
-    // 4. End of Interrupt
-    write(ICC_EOIR1_EL1, intid);     // 硬件自动：Active → Invalid
-    
-    // 5. 返回
-    eret
+Per-vCPU state array: `states: [GicrState; SMP_CPUS]`. GICR index computed from IPA:
+```
+gicr_index = (ipa - GICR0_RD_BASE) / GICR_FRAME_SIZE
+vcpu_id = gicr_index  (identity: GICR N → vCPU N)
 ```
 
-### 4. 自动检测和回退
+### Key Emulated Registers
 
-```rust
-pub fn init() {
-    // 检查 GICv3 是否可用
-    if !is_gicv3_available() {
-        uart_puts(b"[GIC] GICv3 not available, falling back to GICv2\n");
-        super::gic::init();  // 使用 GICv2
-        return;
-    }
-    
-    uart_puts(b"[GIC] Initializing GICv3...\n");
-    
-    // 初始化 virtual interrupt interface
-    GicV3VirtualInterface::init();
-    
-    // 启用 CPU interrupt delivery
-    GicV3SystemRegs::enable();
-}
+| Register | Offset | Behavior |
+|----------|--------|----------|
+| GICR_CTLR | 0x0000 | Returns 0 (RWP=0, no LPIs) |
+| GICR_WAKER | 0x0014 | Returns 0 (ProcessorSleep=0, ChildrenAsleep=0) |
+| GICR_TYPER | 0x0008 | Returns per-vCPU Aff0, Last bit for final GICR |
+| GICR_IGROUPR0 | 0x10080 | Tracked per-vCPU, read/write |
+| GICR_ISENABLER0 | 0x10100 | Write-1-to-set semantics |
+| GICR_ICENABLER0 | 0x10180 | Write-1-to-clear semantics |
+| GICR_IPRIORITYR | 0x10400-0x1041F | Per-interrupt priority, byte access |
+| GICR_ICFGR0/1 | 0x10C00/0x10C04 | Edge/level configuration |
 
-fn is_gicv3_available() -> bool {
-    // 读取 ID_AA64PFR0_EL1
-    let pfr0: u64;
-    unsafe {
-        asm!("mrs {pfr0}, ID_AA64PFR0_EL1", pfr0 = out(reg) pfr0);
-    }
-    
-    // Bits [27:24] = GIC version
-    // 0001 = GICv3/v4 system register interface available
-    let gic_version = (pfr0 >> 24) & 0xF;
-    gic_version >= 1
-}
+## SGI/IPI Emulation
+
+### Trap Mechanism
+
+ICH_HCR_EL2.TALL1=1 traps guest writes to ICC_SGI1R_EL1 as MSR exceptions (EC=0x18).
+
+### ICC_SGI1R_EL1 Bit Fields
+
+**CRITICAL** — these differ from some documentation:
+
+| Field | Bits | Description |
+|-------|------|-------------|
+| TargetList | [15:0] | Bitmap of target PEs (bit N = Aff0=N) |
+| Aff1 | [23:16] | Affinity level 1 |
+| INTID | [27:24] | SGI interrupt ID (0-15) |
+| Aff2 | [39:32] | Affinity level 2 |
+| IRM | [40] | 1=target all PEs except self |
+| RS | [47:44] | Range Selector |
+| Aff3 | [55:48] | Affinity level 3 |
+
+### SGI Flow
+
+```
+Guest writes ICC_SGI1R_EL1
+  → TALL1 trap to EL2
+  → handle_sgi_trap() decodes TargetList, INTID, IRM
+  → Self-targeting: inject directly via hardware LR
+  → Cross-vCPU: queue in PENDING_SGIS[target_vcpu] atomic
+  → run_smp() loop: wake_pending_vcpus() unblocks targets
+  → inject_pending_sgis() drains queue into arch_state.ich_lr[]
+  → vcpu.run() → arch_state.restore() → hardware LRs set
+  → ERET → guest receives SGI
 ```
 
----
+## GICD Shadow State
 
-## 🧪 测试计划
+`VirtualGicd` intercepts GICD writes to track:
 
-### 单元测试
+- **GICD_IROUTER[N]**: SPI N routing affinity (Aff0 field → target vCPU ID)
+- **GICD_ISENABLER[N]**: SPI enable state
 
-1. **LR 格式测试** ✅
-   ```rust
-   #[test]
-   fn test_lr_format() {
-       let intid = 27u32;
-       let priority = 0xA0u8;
-       
-       let lr = build_lr(intid, priority);
-       
-       assert_eq!((lr >> 62) & 0x3, 1);  // State = Pending
-       assert_eq!((lr >> 60) & 0x1, 1);  // Group1
-       assert_eq!(((lr >> 48) & 0xFF) as u8, priority);
-       assert_eq!((lr & 0xFFFF_FFFF) as u32, intid);
-   }
-   ```
+Used by `inject_spi()` to route SPIs to the correct vCPU's `PENDING_SPIS` array based on IROUTER Aff0.
 
-2. **LR 分配测试**
-   ```rust
-   #[test]
-   fn test_lr_allocation() {
-       // 注入 4 个中断
-       for i in 0..4 {
-           assert!(inject_interrupt(i, 0xA0).is_ok());
-       }
-       
-       // 第 5 个应该失败（LR 满）
-       assert!(inject_interrupt(5, 0xA0).is_err());
-   }
-   ```
+## Virtual Timer (INTID 27)
 
-### 集成测试
+1. Physical timer fires → IRQ trap to EL2 (HCR_EL2.IMO=1)
+2. `handle_irq_exception()` acknowledges via ICC_IAR1_EL1
+3. `mask_guest_vtimer()` disables timer to stop re-firing
+4. `inject_hw_interrupt(27, 27, priority)` writes LR with HW=1, pINTID=27
+5. Guest acknowledges via ICV_IAR1_EL1 (virtual) → LR state: Pending→Active
+6. Guest EOIs via ICV_EOIR1_EL1 → hardware auto-deactivates physical INTID 27
+7. Timer unmasks on next guest timer write
 
-1. **简单注入测试** (已实现)
-   - 写入 LR
-   - 读取 LR 验证
-   - 清除 LR
+## Preemption Timer (INTID 26)
 
-2. **Guest 完整中断流程** (待实现)
-   - Guest 设置 VBAR_EL1
-   - Guest unmask IRQ
-   - Hypervisor 注入虚拟中断
-   - Guest 接收并处理
-   - 验证中断计数
+CNTHP_EL2 (EL2 physical timer) fires every 10ms for preemptive scheduling:
 
-3. **多中断测试**
-   - 连续注入 3 个中断
-   - 验证按优先级处理
-   - 验证 EOI 后可注入新中断
+1. `arm_preemption_timer()` sets CNTHP_CVAL and enables CNTHP_CTL
+2. Physical IRQ → INTID 26 → `handle_irq_exception()`
+3. Sets `PREEMPTION_EXIT=true` → returns false → exits to scheduler
+4. `ensure_cnthp_enabled()` re-enables INTID 26 in GICR before every vCPU entry (guest may disable it via GICR writes)
 
-### QEMU 测试命令
+## Source Files
 
-```bash
-# GICv3 测试
-qemu-system-aarch64 \
-    -machine virt,gic-version=3 \
-    -cpu max \
-    -nographic \
-    -serial mon:stdio \
-    -kernel target/aarch64-unknown-none/release/hypervisor \
-    -m 128M
+| File | Role |
+|------|------|
+| `src/arch/aarch64/peripherals/gicv3.rs` | GicV3SystemRegs, GicV3VirtualInterface, LR management |
+| `src/devices/gic/distributor.rs` | VirtualGicd — GICD trap-and-emulate, IROUTER shadow |
+| `src/devices/gic/redistributor.rs` | VirtualGicr — GICR trap-and-emulate, per-vCPU state |
+| `src/arch/aarch64/vcpu_arch_state.rs` | Per-vCPU ICH_LR/VMCR/HCR save/restore |
+| `src/vm.rs` | inject_pending_sgis/spis, wake_pending_vcpus, ensure_cnthp_enabled |
+| `src/arch/aarch64/hypervisor/exception.rs` | handle_irq_exception, handle_sgi_trap, flush_pending_spis |
+| `src/global.rs` | PENDING_SGIS, PENDING_SPIS, inject_spi() |
 
-# GICv2 回退测试
-qemu-system-aarch64 \
-    -machine virt,gic-version=2 \
-    -cpu cortex-a57 \
-    -nographic \
-    -serial mon:stdio \
-    -kernel target/aarch64-unknown-none/release/hypervisor \
-    -m 128M
-```
+## Implementation Checklist
 
----
+### Core GICv3 (Sprint 1.6)
+- [x] ICC system register interface (ICC_IAR1, ICC_EOIR1, ICC_PMR, ICC_IGRPEN1)
+- [x] ICH virtual interface (ICH_VTR, ICH_HCR, ICH_VMCR, ICH_LR0-3)
+- [x] List Register injection (`inject_interrupt`, `inject_hw_interrupt`)
+- [x] EOImode=1 (split priority drop / deactivation)
+- [x] HW=1 for virtual timer (physical-virtual EOI linkage)
+- [x] GICv3 availability detection (ID_AA64PFR0_EL1)
 
-## 📊 性能对比
+### Multi-vCPU GIC (Phase 7 / M2)
+- [x] Per-vCPU LR save/restore (VcpuArchState)
+- [x] Per-vCPU ICH_VMCR/HCR save/restore
+- [x] TALL1 SGI trap (ICC_SGI1R_EL1 emulation)
+- [x] PENDING_SGIS atomic queuing and injection
+- [x] PENDING_SPIS atomic queuing and injection
+- [x] flush_pending_spis_to_hardware() (low-latency SPI delivery)
+- [x] GICR trap-and-emulate (VirtualGicr, 4KB unmap)
+- [x] GICD shadow state (VirtualGicd, IROUTER tracking)
+- [x] SPI routing via GICD_IROUTER Aff0
+- [x] GICR WAKER management for secondary CPUs
+- [x] ensure_cnthp_enabled() (re-enable INTID 26)
+- [x] CNTHP preemption timer (10ms, INTID 26)
 
-### 理论分析
-
-| 操作 | GICv2 (HCR_EL2.VI) | GICv3 (List Register) |
-|------|-------------------|----------------------|
-| 注入延迟 | ~100ns | ~50ns |
-| 并发中断 | 1 个 | 4-16 个 |
-| 优先级支持 | 无 | 完整支持 |
-| 硬件辅助 | 最小 | 完全自动化 |
-| EOI 处理 | 软件 | 硬件自动 |
-
-### 预期改进
-
-- **中断注入延迟**: 减少 50%
-- **并发能力**: 提升 4-16 倍
-- **CPU 开销**: 减少 30%（硬件自动管理状态）
-
----
-
-## 🐛 已知问题和限制
-
-### 1. QEMU 输出问题
-
-**现象**: 编译成功但 QEMU 无串口输出
-
-**可能原因**:
-- QEMU 版本兼容性
-- 串口配置问题
-- 环境变量设置
-
-**解决方案**:
-- 使用 `-d int,guest_errors` 调试
-- 尝试不同的 QEMU 版本
-- 检查 DTB 配置
-
-### 2. GICv3 可用性检测
-
-**限制**: 只检查 ID_AA64PFR0_EL1，未检查实际硬件配置
-
-**改进**:
-- 添加 ICH_VTR_EL2 访问测试
-- 捕获异常并优雅回退
-
-### 3. LR 数量限制
-
-**现状**: 通常只有 4 个 LR
-
-**影响**: 最多同时挂起 4 个虚拟中断
-
-**缓解**: 
-- 实现 LR 优先级管理
-- 高优先级中断可抢占低优先级
-
----
-
-## 🚀 后续优化
-
-### Sprint 1.7 候选
-
-1. **完善 Guest 异常处理** [2-3h]
-   - 实现完整的 Guest exception vector table
-   - 测试实际的中断处理流程
-   - 验证 IAR/EOIR 机制
-
-2. **LR 优先级管理** [3-4h]
-   - 实现 LR 抢占逻辑
-   - 优先级队列管理
-   - 性能优化
-
-3. **多 vCPU 支持** [15-20h]
-   - Per-vCPU LR 管理
-   - 中断亲和性
-   - SMP 中断路由
-
-4. **性能基准测试** [2-3h]
-   - 中断注入延迟测量
-   - 吞吐量测试
-   - 与 GICv2 对比
-
----
-
-## 📚 参考资料
-
-### ARM 官方文档
-
-1. **ARM GIC Architecture Specification (v3/v4)**
-   - List Register 格式
-   - 虚拟化扩展
-   - 系统寄存器定义
-
-2. **ARM ARMv8 Architecture Reference Manual**
-   - ICH_* 寄存器详细说明
-   - ICC_* 寄存器详细说明
-   - 中断路由规则
-
-3. **ARM Virtualization Extensions**
-   - Virtual interrupt injection
-   - Maintenance interrupts
-   - Doorbell机制 (GICv4)
-
-### 开源实现参考
-
-1. **Linux KVM/ARM**
-   - `virt/kvm/arm/vgic/vgic-v3.c`
-   - LR 分配算法
-   - 优先级管理
-
-2. **Xen ARM**
-   - `xen/arch/arm/gic-v3.c`
-   - 虚拟 GIC 实现
-   - Performance optimizations
-
-3. **QEMU**
-   - `hw/intc/arm_gicv3.c`
-   - GICv3 设备模拟
-   - 虚拟化扩展支持
-
----
-
-## ✅ 实现检查清单
-
-### 核心功能
-- [x] GICv3 系统寄存器接口 (ICC_*)
-- [x] GICv3 虚拟化接口 (ICH_*)
-- [x] List Register 读写
-- [x] 中断注入 (`inject_interrupt`)
-- [x] 中断清除 (`clear_interrupt`)
-- [x] GICv3 可用性检测
-- [x] GICv2 自动回退
-
-### 集成
-- [x] vcpu_interrupt.rs 集成
-- [x] main.rs 初始化调用
-- [x] 编译通过
-
-### 测试
-- [x] 单元测试（LR 格式）
-- [x] 简单注入测试
-- [ ] Guest 完整流程测试（待 QEMU 环境修复）
-- [ ] 多中断测试
-- [ ] 性能基准测试
-
-### 文档
-- [x] 代码注释
-- [x] 实现文档（本文档）
-- [x] 技术对比
-- [ ] 使用示例
-
----
-
-## 📝 版本历史
-
-### v0.4.0 (2026-01-26) - GICv3 支持
-
-**新增**:
-- GICv3 系统寄存器接口
-- List Register 虚拟中断注入
-- 自动检测和 GICv2 回退
-
-**改进**:
-- 虚拟中断注入性能
-- 支持多并发中断
-- 硬件自动化管理
-
-**已知问题**:
-- QEMU 测试环境待修复
-- Guest 完整流程待验证
-
----
-
-**文档维护**: 本文档记录 GICv3/v4 实现的完整技术细节
-**作者**: 开发团队
-**最后更新**: 2026-01-26
+### Verified
+- [x] Linux 6.12.12 boots with 4 vCPUs, no RCU stalls
+- [x] Virtio-blk detected and functional
+- [x] BusyBox shell interactive
