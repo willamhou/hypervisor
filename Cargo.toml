@@ -23,6 +23,7 @@ lto = false  # Disable LTO to prevent code elimination
 default = []
 guest = []
 linux_guest = []
+multi_pcpu = ["linux_guest"]
 
 [profile.release]
 panic = "abort"

@@ -72,6 +72,20 @@ run-linux:
 	    -device loader,file=$(LINUX_INITRAMFS),addr=0x54000000 \
 	    -device loader,file=$(LINUX_DISK),addr=0x58000000
 
+# Run hypervisor with Linux kernel on multiple physical CPUs
+run-linux-smp:
+	@echo "Building hypervisor with multi-pCPU support..."
+	cargo build --target aarch64-unknown-none --features multi_pcpu
+	@echo "Creating raw binary..."
+	aarch64-linux-gnu-objcopy -O binary $(BINARY) $(BINARY_BIN)
+	@echo "Starting QEMU with Linux kernel (multi-pCPU)..."
+	@echo "Press Ctrl+A then X to exit QEMU"
+	$(QEMU) $(QEMU_FLAGS) \
+	    -device loader,file=$(LINUX_IMAGE),addr=0x48000000 \
+	    -device loader,file=$(LINUX_DTB),addr=0x47000000 \
+	    -device loader,file=$(LINUX_INITRAMFS),addr=0x54000000 \
+	    -device loader,file=$(LINUX_DISK),addr=0x58000000
+
 # Run with GDB server (for debugging)
 debug: build
 	@echo "Starting QEMU with GDB server on port 1234..."
@@ -101,7 +115,8 @@ help:
 	@echo "  build     - Build the hypervisor"
 	@echo "  run       - Build and run in QEMU"
 	@echo "  run-guest - Build and run with Zephyr guest (GUEST_ELF=/path/to/elf)"
-	@echo "  run-linux - Build and run with Linux kernel guest"
+	@echo "  run-linux - Build and run with Linux kernel guest (single pCPU)"
+	@echo "  run-linux-smp - Build and run with Linux kernel (multi-pCPU)"
 	@echo "  debug     - Build and run in QEMU with GDB server"
 	@echo "  clean     - Clean build artifacts"
 	@echo "  check     - Check code without building"
