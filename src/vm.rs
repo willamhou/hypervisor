@@ -324,7 +324,17 @@ impl Vm {
         }
     }
 
+    /// Run a single vCPU on the current pCPU (multi-pCPU mode).
+    /// Each pCPU calls this with its own vcpu_id (1:1 affinity).
+    /// Stub — full implementation in Task 8.
+    #[cfg(feature = "multi_pcpu")]
+    pub fn run_vcpu(&mut self, _vcpu_id: usize) -> Result<(), &'static str> {
+        // TODO: Implement in Task 8
+        Err("run_vcpu not yet implemented")
+    }
+
     /// Run the VM with SMP scheduling (multiple vCPUs, round-robin on single pCPU)
+    #[cfg(not(feature = "multi_pcpu"))]
     pub fn run_smp(&mut self) -> Result<(), &'static str> {
         use crate::uart_puts;
         use crate::uart_put_hex;

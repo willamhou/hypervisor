@@ -117,8 +117,57 @@ impl PendingCpuOn {
     }
 }
 
-/// Global pending CPU_ON request
+/// Global pending CPU_ON request (single-pCPU mode)
+#[cfg(not(feature = "multi_pcpu"))]
 pub static PENDING_CPU_ON: PendingCpuOn = PendingCpuOn::new();
+
+/// Per-vCPU PSCI CPU_ON request (multi-pCPU mode).
+/// Index = target vCPU ID. Each pCPU checks its own slot.
+#[cfg(feature = "multi_pcpu")]
+pub struct PerVcpuCpuOnRequest {
+    pub requested: AtomicBool,
+    pub entry_point: AtomicU64,
+    pub context_id: AtomicU64,
+}
+
+#[cfg(feature = "multi_pcpu")]
+impl PerVcpuCpuOnRequest {
+    pub const fn new() -> Self {
+        Self {
+            requested: AtomicBool::new(false),
+            entry_point: AtomicU64::new(0),
+            context_id: AtomicU64::new(0),
+        }
+    }
+
+    /// Signal a CPU_ON request for this vCPU
+    pub fn request(&self, entry: u64, ctx: u64) {
+        self.entry_point.store(entry, Ordering::Relaxed);
+        self.context_id.store(ctx, Ordering::Relaxed);
+        self.requested.store(true, Ordering::Release);
+    }
+
+    /// Take a pending CPU_ON request
+    pub fn take(&self) -> Option<(u64, u64)> {
+        if self.requested.compare_exchange(
+            true, false, Ordering::Acquire, Ordering::Relaxed,
+        ).is_ok() {
+            let entry = self.entry_point.load(Ordering::Relaxed);
+            let ctx = self.context_id.load(Ordering::Relaxed);
+            Some((entry, ctx))
+        } else {
+            None
+        }
+    }
+}
+
+#[cfg(feature = "multi_pcpu")]
+pub static PENDING_CPU_ON_PER_VCPU: [PerVcpuCpuOnRequest; MAX_VCPUS] = [
+    PerVcpuCpuOnRequest::new(), PerVcpuCpuOnRequest::new(),
+    PerVcpuCpuOnRequest::new(), PerVcpuCpuOnRequest::new(),
+    PerVcpuCpuOnRequest::new(), PerVcpuCpuOnRequest::new(),
+    PerVcpuCpuOnRequest::new(), PerVcpuCpuOnRequest::new(),
+];
 
 /// Bitmask of online vCPUs (bit N = vCPU N is online)
 /// vCPU 0 is online by default

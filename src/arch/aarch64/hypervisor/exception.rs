@@ -930,7 +930,19 @@ fn handle_psci(context: &mut VcpuContext, function_id: u64) -> bool {
             uart_put_hex(entry_point);
             uart_puts(b"\n");
 
-            crate::global::PENDING_CPU_ON.request(target_cpu, entry_point, context_id);
+            #[cfg(not(feature = "multi_pcpu"))]
+            {
+                crate::global::PENDING_CPU_ON.request(target_cpu, entry_point, context_id);
+            }
+            #[cfg(feature = "multi_pcpu")]
+            {
+                let target_id = (target_cpu & 0xFF) as usize;
+                if target_id < crate::global::MAX_VCPUS {
+                    crate::global::PENDING_CPU_ON_PER_VCPU[target_id].request(entry_point, context_id);
+                    // Wake the target pCPU from WFE
+                    unsafe { core::arch::asm!("sev") };
+                }
+            }
             context.gp_regs.x0 = PSCI_SUCCESS;
             // Exit to host so run_smp() can pick up the request and boot the vCPU
             false

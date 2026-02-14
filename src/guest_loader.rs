@@ -314,8 +314,15 @@ pub fn run_guest(config: &GuestConfig) -> Result<(), &'static str> {
     uart_puts(b"========================================\n\n");
 
     // Run VM - use SMP scheduling for Linux, single vCPU for others
+    #[cfg(not(feature = "multi_pcpu"))]
     let result = if config.guest_type == GuestType::Linux {
         vm.run_smp()
+    } else {
+        vm.run()
+    };
+    #[cfg(feature = "multi_pcpu")]
+    let result = if config.guest_type == GuestType::Linux {
+        vm.run_vcpu(0)
     } else {
         vm.run()
     };
