@@ -308,7 +308,7 @@ M5: RME & CCA         ░░░░░░░░░░░░░░░░░░░�
    - [x] EOImode=1 + HW=1 for timer interrupts
 
 3. **GIC寄存器模拟**:
-   - [x] GICD_*（Distributor）: passthrough + shadow state (IROUTER[988], ISENABLER, IPRIORITYR, ICFGR, IGROUPR)
+   - [x] GICD_*（Distributor）: trap + write-through (shadow state + forwarding to physical GICD)
    - [x] GICR_*（Redistributor）: full trap-and-emulate via VirtualGicr (all 4 GICRs)
    - [x] Stage-2 4KB selective unmap for GICR trap regions
 
@@ -403,7 +403,7 @@ M5: RME & CCA         ░░░░░░░░░░░░░░░░░░░�
 - [x] 支持交互式shell (UART RX双向交互)
 - [x] SMP稳定工作 (4 vCPU, 无RCU stalls)
 - [x] virtio-blk块设备 (`[vda] 4096 512-byte logical blocks`)
-- [x] GIC虚拟化 (GICD shadow + GICR trap-and-emulate)
+- [x] GIC虚拟化 (GICD trap + write-through, GICR trap-and-emulate)
 - [x] 文档完善 (CLAUDE.md全面更新)
 
 **预估总时间**: 8周（Week 11-18）
@@ -1023,11 +1023,12 @@ GitHub Actions配置：
 
 **Phase 8+ 候选方向** (选择一个):
 
-**选项 A**: GICD 全仿真 ⭐
-- [ ] 4KB unmap GICD 区域 (0x08000000)
-- [ ] 全 trap-and-emulate 所有 GICD 寄存器
-- [ ] 消除 guest 对物理 GICD 的直接访问
-- **收益**: 完全虚拟化的 GIC Distributor
+**选项 A**: GICD 全仿真 ✅ **已完成**
+- [x] 4KB unmap GICD 区域 (0x08000000) — 16 x 4KB pages
+- [x] 全 trap-and-emulate 所有 GICD 寄存器 (VirtualGicd + write-through)
+- [x] 消除 guest 对物理 GICD 的直接访问
+- [x] GICR2 workaround 移除 — 全部 4 个 GICR 均为 trap-and-emulate
+- **已完成**: 2026-02-14
 
 **选项 B**: 多 pCPU 支持
 - [ ] Per-pCPU run loop
@@ -1069,6 +1070,7 @@ GitHub Actions配置：
 - Phase 5: 4 vCPU SMP (PSCI CPU_ON, SGI emulation, CNTHP preemption)
 - Phase 6: 基础设施 (Allocator, 4KB pages, DeviceManager, UART RX)
 - Phase 7: GICR Trap-and-Emulate (VirtualGicr per-vCPU 状态)
+- Phase 8: GICD Full Trap-and-Emulate (write-through to physical GICD, GICR2 workaround 移除)
 
 ---
 
