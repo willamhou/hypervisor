@@ -4,133 +4,196 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Overview
 
-ARM64 Type-1 bare-metal hypervisor written in Rust (no_std) with ARM64 assembly. Runs at EL2 (hypervisor exception level) and manages guest VMs at EL1. Educational project targeting QEMU virt machine.
+ARM64 Type-1 bare-metal hypervisor written in Rust (no_std) with ARM64 assembly. Runs at EL2 (hypervisor exception level) and manages guest VMs at EL1. Targets QEMU virt machine. Boots Linux 6.12.12 to BusyBox shell with 4 vCPUs and virtio-blk storage.
 
 ## Build Commands
 
 ```bash
 make              # Build hypervisor
-make run          # Build and run in QEMU (exit: Ctrl+A then X)
-make debug        # Build and run with GDB server on port 1234
+make run          # Build + run in QEMU — runs 40 unit tests automatically (exit: Ctrl+A then X)
+make run-linux    # Build + boot Linux guest (--features linux_guest, 4 vCPUs, virtio-blk)
+make run-guest GUEST_ELF=/path/to/zephyr.elf  # Boot Zephyr guest (--features guest)
+make debug        # Build + run with GDB server on port 1234
 make clean        # Clean build artifacts
 make check        # Check code without building
 make clippy       # Run linter
 make fmt          # Format code
 ```
 
-**Debug session:**
-```bash
-# Terminal 1
-make debug
+**Feature flags** (Cargo features, selected via Makefile targets):
+- `(default)` — unit tests only, no guest boot
+- `guest` — Zephyr guest loading
+- `linux_guest` — Linux guest with DynamicIdentityMapper, GICR trap-and-emulate, virtio-blk
 
-# Terminal 2
-gdb-multiarch target/aarch64-unknown-none/debug/hypervisor
-(gdb) target remote :1234
-(gdb) b rust_main
-(gdb) c
-```
+**Toolchain requirements**: Rust nightly, `aarch64-linux-gnu-gcc`, `aarch64-linux-gnu-ar`, `aarch64-linux-gnu-objcopy`, `qemu-system-aarch64`
 
 ## Architecture
 
 ### Privilege Model
-- **EL2**: Hypervisor code runs here
-- **EL1**: Guest code runs here
-- **Stage-2 Translation**: IPA (Guest Physical) → PA (Host Physical)
+- **EL2**: Hypervisor — exception handling, Stage-2 page tables, GIC virtual interface
+- **EL1**: Guest — Linux kernel or Zephyr RTOS
+- **Stage-2 Translation**: Identity mapping (GPA == HPA), 2MB blocks + 4KB pages
 
-### Key Abstractions
+### Core Abstractions
 
-1. **VcpuContext** (`src/arch/aarch64/regs.rs`) - All guest register state (x0-x30, SP, PC, system registers)
-
-2. **Vcpu** (`src/vcpu.rs`) - Virtual CPU with state machine (Uninitialized → Ready → Running → Stopped), manages context and virtual interrupts
-
-3. **Vm** (`src/vm.rs`) - Manages up to 8 vCPUs, handles Stage-2 memory setup, holds device manager
-
-4. **DeviceManager** (`src/devices/mod.rs`) - Routes MMIO accesses to emulated devices (PL011 UART, GIC Distributor)
-
-5. **ExitReason** (`src/arch/aarch64/regs.rs`) - VM exit causes: WfiWfe, HvcCall, DataAbort, etc.
+| Type | File | Role |
+|------|------|------|
+| `Vm` | `src/vm.rs` | VM lifecycle, Stage-2 setup, `run_smp()` scheduler loop |
+| `Vcpu` | `src/vcpu.rs` | State machine (Uninitialized→Ready→Running→Stopped), context save/restore |
+| `VcpuContext` | `src/arch/aarch64/regs.rs` | Guest registers (x0-x30, SP, PC, SPSR, system regs) |
+| `VcpuArchState` | `src/arch/aarch64/vcpu_arch_state.rs` | Per-vCPU GIC LRs, timer, EL1 sysregs, PAC keys |
+| `DeviceManager` | `src/devices/mod.rs` | Enum-dispatch MMIO routing to emulated devices |
+| `Scheduler` | `src/scheduler.rs` | Round-robin vCPU scheduler with block/unblock |
+| `ExitReason` | `src/arch/aarch64/regs.rs` | VM exit causes: WfiWfe, HvcCall, DataAbort, etc. |
 
 ### Exception Handling Flow
 ```
 Guest @ EL1
-  ↓ trap
-Exception Vector (arch/aarch64/exception.S)
-  ↓ save context
+  ↓ trap (Data Abort, HVC, WFI, MSR/MRS)
+Exception Vector (arch/aarch64/exception.S) — save context
+  ↓
 handle_exception() (src/arch/aarch64/hypervisor/exception.rs)
-  ↓ decode ESR_EL2, route by type
-  - WFI: return exit
-  - Hypercall: handle + advance PC
-  - Data Abort: decode instruction → MMIO emulation
-  ↓ restore context
+  ├─ WFI → return false (exit to scheduler)
+  ├─ HVC → handle_psci() (CPU_ON, CPU_OFF, SYSTEM_RESET)
+  ├─ Data Abort → HPFAR_EL2 for IPA → decode instruction → MMIO dispatch
+  ├─ MSR/MRS trap → handle ICC_SGI1R_EL1 (SGI emulation), sysreg emulation
+  └─ IRQ → handle INTID 26 (preemption), 27 (vtimer), 33 (UART RX)
+  ↓ advance PC, restore context
 ERET back to guest
 ```
 
-### MMIO Trap-and-Emulate
-1. Guest load/store to MMIO region causes Data Abort
-2. Handler reads FAR_EL2 (fault address) and decodes instruction
-3. DeviceManager routes to appropriate device
-4. Result written to guest register, PC advanced, ERET resumes guest
+### SMP / Multi-vCPU
+
+The `run_smp()` loop in `src/vm.rs` runs all vCPUs on a single physical CPU via cooperative + preemptive scheduling:
+
+1. Check `PENDING_CPU_ON` atomics → `boot_secondary_vcpu()` (PSCI CPU_ON)
+2. Wake vCPUs with pending SGIs/SPIs → `scheduler.unblock()`
+3. Pick next vCPU (round-robin) → set `CURRENT_VCPU_ID`
+4. Drain UART RX ring → inject SPI 33
+5. Inject pending SGIs/SPIs into `arch_state.ich_lr[]`
+6. Arm CNTHP preemption timer (10ms, INTID 26)
+7. `vcpu.run()` → save/restore arch state → `enter_guest()` → ERET
+8. Handle exit: WFI→block, preemption→yield, real exit→remove
+
+**SGI/IPI emulation**: ICC_SGI1R_EL1 trapped via ICH_HCR_EL2.TALL1=1 → decoded (TargetList[15:0], Aff1[23:16], INTID[27:24]) → `PENDING_SGIS[vcpu_id]` atomics → injected before next entry.
+
+### GIC Emulation
+
+| Component | Address | Mode | Implementation |
+|-----------|---------|------|----------------|
+| GICD | 0x08000000 | Passthrough + shadow | `VirtualGicd` tracks IROUTER for SPI routing |
+| GICR 0,1,3 | 0x080A0000+ | Trap-and-emulate | `VirtualGicr` (Stage-2 unmapped, 4KB pages) |
+| GICR 2 | 0x080E0000 | Passthrough | QEMU bug workaround (L3 unmap causes external aborts) |
+| ICC regs | System regs | Virtual | ICH_HCR_EL2.En=1 redirects to ICV_* at EL1 |
+| ICC_SGI1R | System reg | Trapped | TALL1=1, decoded for IPI emulation |
+
+**List Register injection**: 4 LRs (ICH_LR0-3_EL2). HW=1 for vtimer (INTID 27) enables physical-virtual EOI linkage. EOImode=1 for proper priority drop / deactivation split.
+
+### Virtio-blk
+
+```
+VirtioMmioTransport<VirtioBlk>  @ 0x0a000000 (SPI 16 = INTID 48)
+  ├─ MMIO registers (virtio-mmio spec)
+  ├─ Virtqueue (descriptor table + available ring + used ring)
+  └─ VirtioBlk backend (disk image at 0x58000000, loaded by QEMU)
+```
+
+Guest writes QueueNotify → `process_request()` → read/write disk image via `copy_nonoverlapping` (identity-mapped) → update used ring → `inject_spi(48)` → `flush_pending_spis_to_hardware()`.
+
+### UART (PL011) Emulation
+
+Full trap-and-emulate (Stage-2 unmapped). TX: guest writes UARTDR → `output_char()` to physical UART. RX: physical IRQ (INTID 33) → `UART_RX` ring buffer → `VirtualUart.push_rx()` → inject SPI 33. Linux amba-pl011 probe requires PeriphID/PrimeCellID registers.
 
 ### Memory Layout
-- **Stage-2 Pages**: 2MB blocks (L2 descriptors)
-- **Identity Mapping**: GPA == HPA
-- **IPA Space**: 40-bit (1TB), PA Space: 48-bit
-- **Page Attributes**: NORMAL (cached), DEVICE (uncached)
 
-### Interrupt Injection
-- **GICv3**: Uses List Registers (ICH_LR_EL2) for injection
-- **Fallback**: HCR_EL2.VI bit for legacy injection
-- vcpu.inject_irq(irq_num) → hardware injects into guest → guest handles + EOI
+| Region | Address | Purpose |
+|--------|---------|---------|
+| Hypervisor code | 0x40000000 | Linker base (RAM start) |
+| Heap | 0x41000000 (16MB) | Page table allocation, `BumpAllocator` |
+| DTB | 0x47000000 | Device tree blob |
+| Kernel | 0x48000000 | Linux Image load address |
+| Initramfs | 0x54000000 | BusyBox initramfs |
+| Disk image | 0x58000000 | virtio-blk backing store |
+| Guest RAM | 0x48000000-0x68000000 | 512MB declared to Linux |
 
-## Key Files
+**Stage-2 mappers**:
+- `IdentityMapper` (static, 2MB-only) — used by unit tests (`make run`)
+- `DynamicIdentityMapper` (heap-allocated, 2MB+4KB) — used by Linux guest (`make run-linux`), supports `unmap_4kb_page()` for GICR trap setup
 
-| Path | Purpose |
-|------|---------|
-| `arch/aarch64/boot.S` | Entry point, stack setup, BSS clear |
-| `arch/aarch64/exception.S` | Exception vector table (2KB aligned), context save/restore |
-| `src/main.rs` | rust_main entry, test orchestration |
-| `src/arch/aarch64/hypervisor/exception.rs` | Exception handler, ESR_EL2 decode |
-| `src/arch/aarch64/hypervisor/decode.rs` | Instruction decoder for MMIO |
-| `src/arch/aarch64/mm/mmu.rs` | Stage-2 page tables, IdentityMapper |
-| `src/arch/aarch64/peripherals/gicv3.rs` | GICv3 system registers, List Registers |
-| `src/devices/mod.rs` | MmioDevice trait, DeviceManager |
-| `src/global.rs` | Global device manager for exception handler access |
+**Heap gap**: Heap lies within guest's PA range but is left unmapped in Stage-2 to prevent guest corruption of page tables. Guest kernel never accesses this range (declared memory starts at 0x48000000).
+
+### Global State (`src/global.rs`)
+
+| Global | Type | Purpose |
+|--------|------|---------|
+| `DEVICES` | `GlobalDeviceManager` | Exception handler MMIO dispatch (UnsafeCell, single-threaded) |
+| `PENDING_CPU_ON` | `PendingCpuOn` (atomics) | PSCI CPU_ON signaling between trap handler and run loop |
+| `VCPU_ONLINE_MASK` | `AtomicU64` | Bit N = vCPU N online |
+| `CURRENT_VCPU_ID` | `AtomicUsize` | Which vCPU is currently executing |
+| `PENDING_SGIS` | `[AtomicU32; MAX_VCPUS]` | Per-vCPU pending SGI bitmask |
+| `PENDING_SPIS` | `[AtomicU32; MAX_VCPUS]` | Per-vCPU pending SPI bitmask |
+| `PREEMPTION_EXIT` | `AtomicBool` | CNTHP timer fired, yield to scheduler |
+| `UART_RX` | `UartRxRing` | Lock-free ring buffer, IRQ handler → run loop |
+
+### Device Manager Pattern
+
+Enum-dispatch (no dynamic dispatch / trait objects):
+```rust
+pub enum Device {
+    Uart(pl011::VirtualUart),
+    Gicd(gic::VirtualGicd),
+    Gicr(gic::VirtualGicr),
+    VirtioBlk(virtio::mmio::VirtioMmioTransport<virtio::blk::VirtioBlk>),
+}
+```
+Array-based routing: `devices: [Option<Device>; 8]`, scan for `dev.contains(addr)`.
 
 ## Build System
 
-- **build.rs**: Compiles boot.S and exception.S via aarch64-linux-gnu-gcc, creates libboot.a
-- **Target**: aarch64-unknown-none (custom spec in aarch64-unknown-none.json)
-- **Toolchain**: Rust nightly with rust-src, rustfmt, clippy
-- **Linking**: whole-archive to include all assembly symbols
+- **build.rs**: Cross-compiles `boot.S` and `exception.S` via `aarch64-linux-gnu-gcc`, archives into `libboot.a`, links with `--whole-archive`
+- **Target**: `aarch64-unknown-none.json` (custom spec: `llvm-target: aarch64-unknown-none`, `panic-strategy: abort`, `disable-redzone: true`)
+- **Linker**: `arch/aarch64/linker.ld` — base at 0x40000000, `.text.boot` first
 
 ## Tests
 
-Tests run automatically on `make run`. Located in `tests/`:
-- `test_guest.rs` - Basic hypercall
-- `test_timer.rs` - Timer interrupt detection
-- `test_mmio.rs` - MMIO device emulation
-- `test_complete_interrupt.rs` - End-to-end interrupt handling
+All 40 tests run automatically on `make run` (no feature flags). Orchestrated sequentially in `src/main.rs`. Located in `tests/`:
 
-## Technical Notes
+| Test | Coverage |
+|------|----------|
+| `test_allocator` | Bump allocator page alloc/free |
+| `test_heap` | Global heap (Box, Vec) |
+| `test_dynamic_pagetable` | DynamicIdentityMapper 2MB mapping |
+| `test_multi_vcpu` | Multi-vCPU creation, VMPIDR |
+| `test_scheduler` | Round-robin scheduling, block/unblock |
+| `test_vm_scheduler` | VM-integrated scheduling lifecycle |
+| `test_gicv3_virt` | List Register injection, ELRSR |
+| `test_guest` | Basic hypercall (HVC #0) |
+| `test_timer` | Timer interrupt detection |
+| `test_mmio` | MMIO device registration + routing |
+| `test_complete_interrupt` | End-to-end IRQ injection flow |
+| `test_guest_irq` | HCR_EL2.VI injection |
+| `test_guest_interrupt` | Guest exception vector handling |
+| `test_guest_loader` | GuestConfig for Zephyr/Linux |
+| `test_simple_guest` | Simple guest boot + exit |
 
-### Exception Loop Prevention
-`MAX_CONSECUTIVE_EXCEPTIONS = 100` in exception.rs prevents infinite loops; system halts if exceeded.
+## Critical Implementation Details
 
-### Global Device Access
-Exception handlers use `global::DEVICES` static to access DeviceManager without passing through assembly.
-
-### HCR_EL2 Configuration
-Key bits: RW (AArch64 EL1), TWI/TWE (trap WFI/WFE), AMO/IMO/FMO (route exceptions to EL2)
-
-### Device Trait
-```rust
-pub trait MmioDevice {
-    fn read(&mut self, offset: u64, size: u8) -> Option<u64>;
-    fn write(&mut self, offset: u64, value: u64, size: u8) -> bool;
-    fn base_address(&self) -> u64;
-    fn size(&self) -> u64;
-}
+### HPFAR_EL2 for MMIO (must-know)
+When guest MMU is on, `FAR_EL2` = guest VA, NOT IPA. Use `HPFAR_EL2` for the IPA:
+```
+IPA = (hpfar & 0x0000_0FFF_FFFF_FFF0) << 8 | (far_el2 & 0xFFF)
 ```
 
-### Emulated Devices
-- **PL011 UART**: 0x09000000 (UARTDR, UARTFR, UARTCR)
-- **GIC Distributor**: 0x08000000 (GICD_CTLR, GICD_TYPER, ISENABLER/ICENABLER)
+### Never Modify Guest SPSR_EL2
+Guest controls its own `PSTATE.I` (interrupt mask). Overriding causes spinlock deadlocks.
+
+### CNTHP Timer Must Be Re-enabled
+Guest can re-disable INTID 26 via GICR writes. `ensure_cnthp_enabled()` directly writes physical GICR (EL2 bypasses Stage-2) before every vCPU entry.
+
+### ICC_SGI1R_EL1 Bit Fields
+- TargetList: bits [15:0] (NOT [23:16])
+- Aff1: bits [23:16] (NOT [27:24])
+- INTID: bits [27:24] (NOT [3:0])
+
+### Platform Constants
+All board-specific addresses are centralized in `src/platform.rs`. `SMP_CPUS` is the single source of truth for vCPU count — must match QEMU `-smp` and DTB cpu nodes.
