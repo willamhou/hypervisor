@@ -10,8 +10,9 @@ ARM64 Type-1 bare-metal hypervisor written in Rust (no_std) with ARM64 assembly.
 
 ```bash
 make              # Build hypervisor
-make run          # Build + run in QEMU — runs 40 unit tests automatically (exit: Ctrl+A then X)
-make run-linux    # Build + boot Linux guest (--features linux_guest, 4 vCPUs, virtio-blk)
+make run          # Build + run in QEMU — runs 43 unit tests automatically (exit: Ctrl+A then X)
+make run-linux    # Build + boot Linux guest (--features linux_guest, 4 vCPUs on 1 pCPU, virtio-blk)
+make run-linux-smp # Build + boot Linux guest (--features multi_pcpu, 4 vCPUs on 4 pCPUs)
 make run-guest GUEST_ELF=/path/to/zephyr.elf  # Boot Zephyr guest (--features guest)
 make debug        # Build + run with GDB server on port 1234
 make clean        # Clean build artifacts
@@ -24,6 +25,7 @@ make fmt          # Format code
 - `(default)` — unit tests only, no guest boot
 - `guest` — Zephyr guest loading
 - `linux_guest` — Linux guest with DynamicIdentityMapper, GICR trap-and-emulate, virtio-blk
+- `multi_pcpu` — Multi-pCPU support (implies `linux_guest`): 1:1 vCPU-to-pCPU affinity, PSCI boot, TPIDR_EL2 context, SpinLock devices
 
 **Toolchain requirements**: Rust nightly, `aarch64-linux-gnu-gcc`, `aarch64-linux-gnu-ar`, `aarch64-linux-gnu-objcopy`, `qemu-system-aarch64`
 
@@ -77,6 +79,22 @@ The `run_smp()` loop in `src/vm.rs` runs all vCPUs on a single physical CPU via 
 
 **SGI/IPI emulation**: ICC_SGI1R_EL1 trapped via ICH_HCR_EL2.TALL1=1 → decoded (TargetList[15:0], Aff1[23:16], INTID[27:24]) → `PENDING_SGIS[vcpu_id]` atomics → injected before next entry.
 
+### Multi-pCPU (4 vCPUs on 4 Physical CPUs)
+
+Feature: `multi_pcpu` (implies `linux_guest`). Target: `make run-linux-smp`.
+
+**Architecture**: 1:1 vCPU-to-pCPU affinity. Each physical CPU runs one vCPU exclusively — no scheduler needed.
+
+**Secondary pCPU Boot**: QEMU virt keeps secondary CPUs powered off. `wake_secondary_pcpus()` issues real PSCI CPU_ON SMC calls (`smc #0`, function_id=0xC4000003) to QEMU's EL3 firmware with `secondary_entry` as the entry point.
+
+**Per-CPU Context Pointer**: `TPIDR_EL2` (hardware-banked per physical CPU) replaces the global `current_vcpu_context` variable in `exception.S`. Set by `enter_guest()`, read by exception/IRQ handlers.
+
+**Physical GICR Programming**: `ensure_vtimer_enabled(cpu_id)` programs physical GICR ISENABLER0 for SGIs 0-15 + PPI 27 (vtimer) before every guest entry. Guest GICR writes only update the shadow `VirtualGicr` state.
+
+**Cross-pCPU SPI Delivery**: `inject_spi()` reads physical GICD_IROUTER directly (EL2 bypasses Stage-2) to avoid deadlock with the `DEVICES` SpinLock. If the target is a remote pCPU, sends physical SGI 0 via `msr icc_sgi1r_el1` to wake it.
+
+**WFI Passthrough**: TWI cleared in multi-pCPU mode — real WFI on physical CPU, woken by physical interrupts.
+
 ### GIC Emulation
 
 | Component | Address | Mode | Implementation |
@@ -125,8 +143,10 @@ Full trap-and-emulate (Stage-2 unmapped). TX: guest writes UARTDR → `output_ch
 
 | Global | Type | Purpose |
 |--------|------|---------|
-| `DEVICES` | `GlobalDeviceManager` | Exception handler MMIO dispatch (UnsafeCell, single-threaded) |
-| `PENDING_CPU_ON` | `PendingCpuOn` (atomics) | PSCI CPU_ON signaling between trap handler and run loop |
+| `DEVICES` | `GlobalDeviceManager` | Exception handler MMIO dispatch (UnsafeCell single-pCPU / SpinLock multi-pCPU) |
+| `PENDING_CPU_ON` | `PendingCpuOn` (atomics) | PSCI CPU_ON signaling (single-pCPU mode) |
+| `PENDING_CPU_ON_PER_VCPU` | `[PerVcpuCpuOnRequest; 8]` | Per-vCPU PSCI CPU_ON (multi-pCPU mode) |
+| `SHARED_VTTBR` / `SHARED_VTCR` | `AtomicU64` | Stage-2 config shared from primary to secondaries (multi-pCPU) |
 | `VCPU_ONLINE_MASK` | `AtomicU64` | Bit N = vCPU N online |
 | `CURRENT_VCPU_ID` | `AtomicUsize` | Which vCPU is currently executing |
 | `PENDING_SGIS` | `[AtomicU32; MAX_VCPUS]` | Per-vCPU pending SGI bitmask |
@@ -195,6 +215,18 @@ Guest can re-disable INTID 26 via GICR writes. `ensure_cnthp_enabled()` directly
 - TargetList: bits [15:0] (NOT [23:16])
 - Aff1: bits [23:16] (NOT [27:24])
 - INTID: bits [27:24] (NOT [3:0])
+
+### inject_spi() Must Not Acquire DEVICES Lock (multi-pCPU)
+`inject_spi()` is called from `signal_interrupt()` inside the `DEVICES` SpinLock. Reading `DEVICES.route_spi()` would deadlock (non-reentrant). Instead, multi-pCPU mode reads physical GICD_IROUTER directly (EL2 bypasses Stage-2).
+
+### QEMU virt Secondary CPUs Are Powered Off
+Secondary physical CPUs start powered off — they do NOT execute `_start`. Must use real PSCI CPU_ON SMC (`smc #0`, function_id=0xC4000003) to QEMU's EL3 firmware.
+
+### TPIDR_EL2 for Per-CPU Context (multi-pCPU)
+`exception.S` uses `mrs x0, tpidr_el2` instead of a global variable. Each physical CPU has its own hardware-banked TPIDR_EL2. Set by `enter_guest()` via `msr tpidr_el2, x0`.
+
+### Physical GICR Must Be Programmed for SGIs/PPIs
+Guest GICR writes only update `VirtualGicr` shadow state. `ensure_vtimer_enabled()` programs physical GICR ISENABLER0 for SGIs 0-15 + PPI 27 before every guest entry.
 
 ### Platform Constants
 All board-specific addresses are centralized in `src/platform.rs`. `SMP_CPUS` is the single source of truth for vCPU count — must match QEMU `-smp` and DTB cpu nodes.
