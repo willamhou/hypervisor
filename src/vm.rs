@@ -386,6 +386,14 @@ impl Vm {
             // Enter guest
             match vcpu.run() {
                 Ok(()) => {
+                    // Check for terminal PSCI exits (CPU_OFF, SYSTEM_OFF, SYSTEM_RESET)
+                    if crate::global::TERMINAL_EXIT[vcpu_id]
+                        .compare_exchange(true, false, Ordering::Acquire, Ordering::Relaxed)
+                        .is_ok()
+                    {
+                        uart_puts(b"[VM] vCPU 0 terminal exit\n");
+                        break;
+                    }
                     // Normal exit — IRQ handler exited to host for processing
                     // (e.g., UART RX data to drain). Loop back to re-enter.
                 }
@@ -727,7 +735,7 @@ fn wake_pending_vcpus(scheduler: &mut Scheduler, vcpus: &[Option<Vcpu>; MAX_VCPU
 ///
 /// Critical: must write to `arch_state.ich_lr[]` (not hardware LRs), because
 /// `vcpu.run()` calls `arch_state.restore()` which overwrites hardware LRs.
-fn inject_pending_sgis(vcpu: &mut Vcpu) {
+pub fn inject_pending_sgis(vcpu: &mut Vcpu) {
     let vcpu_id = vcpu.id();
 
     let all = crate::global::PENDING_SGIS[vcpu_id].swap(0, Ordering::Acquire);
@@ -764,7 +772,7 @@ fn inject_pending_sgis(vcpu: &mut Vcpu) {
 ///
 /// SPIs are queued in PENDING_SPIS by `global::inject_spi()`.
 /// Bit N = SPI with INTID (N + 32).
-fn inject_pending_spis(vcpu: &mut Vcpu) {
+pub fn inject_pending_spis(vcpu: &mut Vcpu) {
     let vcpu_id = vcpu.id();
 
     let all = crate::global::PENDING_SPIS[vcpu_id].swap(0, Ordering::Acquire);

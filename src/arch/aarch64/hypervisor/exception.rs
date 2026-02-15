@@ -975,7 +975,8 @@ fn handle_psci(context: &mut VcpuContext, function_id: u64) -> bool {
             // CPU off - for single vCPU, this is like system halt
             uart_puts(b"[PSCI] CPU_OFF\n");
             context.gp_regs.x0 = PSCI_SUCCESS;
-            // For single-core guest, CPU_OFF means we're done
+            let vcpu_id = crate::global::current_vcpu_id();
+            crate::global::TERMINAL_EXIT[vcpu_id].store(true, Ordering::Release);
             false
         }
 
@@ -1030,12 +1031,16 @@ fn handle_psci(context: &mut VcpuContext, function_id: u64) -> bool {
         PSCI_SYSTEM_OFF => {
             // System shutdown
             uart_puts(b"[PSCI] SYSTEM_OFF\n");
+            let vcpu_id = crate::global::current_vcpu_id();
+            crate::global::TERMINAL_EXIT[vcpu_id].store(true, Ordering::Release);
             false // Exit guest
         }
 
         PSCI_SYSTEM_RESET => {
             // System reset
             uart_puts(b"[PSCI] SYSTEM_RESET\n");
+            let vcpu_id = crate::global::current_vcpu_id();
+            crate::global::TERMINAL_EXIT[vcpu_id].store(true, Ordering::Release);
             false
         }
 

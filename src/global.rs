@@ -104,18 +104,27 @@ impl GlobalDeviceManager {
     /// Drain UART RX ring buffer and inject SPI 33 if needed.
     /// Single lock acquisition for the entire drain + IRQ check.
     pub fn drain_uart_rx(&self) {
-        let mut any = false;
+        // Pop all bytes from lock-free ring first, then take one lock
+        // to push them all into VirtualUart.
+        let mut buf = [0u8; 64];
+        let mut count = 0usize;
         while let Some(ch) = UART_RX.pop() {
-            if let Some(uart) = self.devices.lock().uart_mut() {
-                uart.push_rx(ch);
-                any = true;
+            if count < buf.len() {
+                buf[count] = ch;
+                count += 1;
             }
         }
-        if any {
-            if let Some(uart) = self.devices.lock().uart_mut() {
-                if uart.pending_irq().is_some() {
-                    inject_spi(33);
-                }
+        if count == 0 {
+            return;
+        }
+        let mut guard = self.devices.lock();
+        if let Some(uart) = guard.uart_mut() {
+            for &ch in &buf[..count] {
+                uart.push_rx(ch);
+            }
+            if uart.pending_irq().is_some() {
+                drop(guard); // Release lock before inject_spi (may re-lock)
+                inject_spi(33);
             }
         }
     }
@@ -257,6 +266,16 @@ pub static PENDING_SGIS: [AtomicU32; MAX_VCPUS] = [
 
 /// Flag set by IRQ handler to signal preemptive vCPU exit
 pub static PREEMPTION_EXIT: AtomicBool = AtomicBool::new(false);
+
+/// Per-vCPU terminal exit flag. Set by PSCI handler for CPU_OFF/SYSTEM_OFF/SYSTEM_RESET.
+/// Checked by run_vcpu()/secondary_enter_guest() to distinguish terminal exits from
+/// normal Ok(()) returns (e.g., IRQ-triggered host returns).
+pub static TERMINAL_EXIT: [AtomicBool; MAX_VCPUS] = [
+    AtomicBool::new(false), AtomicBool::new(false),
+    AtomicBool::new(false), AtomicBool::new(false),
+    AtomicBool::new(false), AtomicBool::new(false),
+    AtomicBool::new(false), AtomicBool::new(false),
+];
 
 /// Pending SPI bitmask per vCPU. Each bit represents an SPI INTID offset
 /// from 32 (bit 0 = INTID 32, bit 1 = INTID 33, ..., bit 31 = INTID 63).

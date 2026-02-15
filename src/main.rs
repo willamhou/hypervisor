@@ -252,12 +252,12 @@ pub extern "C" fn rust_main_secondary(cpu_id: usize) -> ! {
 }
 
 /// Set up vCPU and enter guest loop for a secondary pCPU.
-/// This function never returns — the pCPU runs this vCPU forever (1:1 affinity).
+/// Returns if the vCPU terminates (CPU_OFF/SYSTEM_OFF/SYSTEM_RESET),
+/// allowing the pCPU to return to the idle loop for potential reuse.
 #[cfg(feature = "multi_pcpu")]
-fn secondary_enter_guest(cpu_id: usize, entry: u64, ctx_id: u64) -> ! {
+fn secondary_enter_guest(cpu_id: usize, entry: u64, ctx_id: u64) {
     use hypervisor::vcpu::Vcpu;
     use hypervisor::arch::aarch64::defs::*;
-    use hypervisor::arch::aarch64::peripherals::gicv3::GicV3VirtualInterface;
     use hypervisor::platform;
     use core::sync::atomic::Ordering;
 
@@ -296,51 +296,31 @@ fn secondary_enter_guest(cpu_id: usize, entry: u64, ctx_id: u64) -> ! {
     hypervisor::uart_put_hex(entry);
     uart_puts_local(b"\n");
 
-    // Simple run loop: inject pending, enter guest, handle exit
+    // Run loop: inject pending, enter guest, handle exit.
+    // Uses shared inject_pending_sgis/spis helpers (with re-queue on LR full).
     loop {
         // Ensure PPI 27 (virtual timer) stays enabled at the physical GICR
         hypervisor::vm::ensure_vtimer_enabled(cpu_id);
 
-        // Inject pending SGIs
-        let sgi_bits = hypervisor::global::PENDING_SGIS[cpu_id].swap(0, Ordering::Acquire);
-        if sgi_bits != 0 {
-            let arch = vcpu.arch_state_mut();
-            for sgi in 0..16u32 {
-                if sgi_bits & (1 << sgi) == 0 { continue; }
-                for lr in arch.ich_lr.iter_mut() {
-                    if (*lr >> LR_STATE_SHIFT) & LR_STATE_MASK == 0 {
-                        *lr = (GicV3VirtualInterface::LR_STATE_PENDING << LR_STATE_SHIFT)
-                            | LR_GROUP1_BIT
-                            | ((IRQ_DEFAULT_PRIORITY as u64) << LR_PRIORITY_SHIFT)
-                            | (sgi as u64);
-                        break;
-                    }
-                }
-            }
-        }
-
-        // Inject pending SPIs
-        let spi_bits = hypervisor::global::PENDING_SPIS[cpu_id].swap(0, Ordering::Acquire);
-        if spi_bits != 0 {
-            let arch = vcpu.arch_state_mut();
-            for bit in 0..32u32 {
-                if spi_bits & (1 << bit) == 0 { continue; }
-                let intid = bit + 32;
-                for lr in arch.ich_lr.iter_mut() {
-                    if (*lr >> LR_STATE_SHIFT) & LR_STATE_MASK == 0 {
-                        *lr = (GicV3VirtualInterface::LR_STATE_PENDING << LR_STATE_SHIFT)
-                            | LR_GROUP1_BIT
-                            | ((IRQ_DEFAULT_PRIORITY as u64) << LR_PRIORITY_SHIFT)
-                            | (intid as u64);
-                        break;
-                    }
-                }
-            }
-        }
+        // Inject pending SGIs and SPIs (shared with run_vcpu)
+        hypervisor::vm::inject_pending_sgis(&mut vcpu);
+        hypervisor::vm::inject_pending_spis(&mut vcpu);
 
         // Enter guest
         match vcpu.run() {
             Ok(()) => {
+                // Check for terminal PSCI exits (CPU_OFF, SYSTEM_OFF, SYSTEM_RESET)
+                if hypervisor::global::TERMINAL_EXIT[cpu_id]
+                    .compare_exchange(true, false, Ordering::Acquire, Ordering::Relaxed)
+                    .is_ok()
+                {
+                    uart_puts_local(b"[SMP] vCPU ");
+                    print_digit(cpu_id as u8);
+                    uart_puts_local(b" terminal exit\n");
+                    hypervisor::global::VCPU_ONLINE_MASK.fetch_and(!(1 << cpu_id), Ordering::Release);
+                    // Return to idle loop — pCPU can be reused for future CPU_ON
+                    break;
+                }
                 // Normal exit — loop back, re-enter guest
             }
             Err("WFI") => {
@@ -352,6 +332,7 @@ fn secondary_enter_guest(cpu_id: usize, entry: u64, ctx_id: u64) -> ! {
             }
         }
     }
+    // Returns to idle loop in rust_main_secondary for potential CPU_ON reuse
 }
 
 /// Print a single digit (0-9)
