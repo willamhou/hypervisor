@@ -75,11 +75,11 @@ Implements PSCI v0.2:
 | Function | ID | Action |
 |----------|-----|--------|
 | VERSION | 0x84000000 | Returns 0x00000002 (v0.2) |
-| CPU_ON | 0xC4000003 | Sets PENDING_CPU_ON atomics, returns false |
-| CPU_OFF | 0x84000002 | Returns false (exit vCPU) |
+| CPU_ON | 0xC4000003 | Validates target < SMP_CPUS, sets PENDING_CPU_ON atomics, returns false |
+| CPU_OFF | 0x84000002 | Sets TERMINAL_EXIT[vcpu_id], returns false |
 | AFFINITY_INFO | 0xC4000004 | Checks VCPU_ONLINE_MASK |
-| SYSTEM_OFF | 0x84000008 | Returns false |
-| SYSTEM_RESET | 0x84000009 | Returns false |
+| SYSTEM_OFF | 0x84000008 | Sets TERMINAL_EXIT[vcpu_id], returns false |
+| SYSTEM_RESET | 0x84000009 | Sets TERMINAL_EXIT[vcpu_id], returns false |
 | FEATURES | 0x8400000A | Returns SUCCESS for supported functions |
 | CPU_SUSPEND | 0x84000001 | Treated as no-op, returns SUCCESS |
 
@@ -183,9 +183,16 @@ Set in `exception::init()`:
 
 ## Exception Loop Prevention
 
-`EXCEPTION_COUNT` atomic tracks consecutive exceptions without reset:
-- Each successful handler resets to 0
-- If count exceeds `MAX_CONSECUTIVE_EXCEPTIONS` (100): halt system with diagnostic
+Consecutive exception count tracks rapid exception loops (e.g., stuck MMIO decode):
+
+- **Single-pCPU**: Global `EXCEPTION_COUNT` atomic
+- **Multi-pCPU**: Per-CPU counter in `PerCpuContext.exception_count` (via `this_cpu()`)
+
+Each successful handler resets the counter. If count exceeds `MAX_CONSECUTIVE_EXCEPTIONS` (100): halt system with diagnostic.
+
+## Terminal Exit Detection
+
+PSCI handlers (CPU_OFF, SYSTEM_OFF, SYSTEM_RESET) set per-vCPU `TERMINAL_EXIT[vcpu_id]` flags. This is needed because `enter_guest()` returns `Ok(())` for both normal IRQ exits (should loop) and terminal PSCI exits (should stop). The run loop checks `TERMINAL_EXIT` via `compare_exchange` to distinguish the two cases.
 
 ## Critical Rules
 
@@ -203,4 +210,5 @@ Set in `exception::init()`:
 | `src/arch/aarch64/hypervisor/decode.rs` | `MmioAccess::decode()` — instruction decoding for MMIO |
 | `src/arch/aarch64/regs.rs` | `VcpuContext`, `ExitReason`, `GpRegs` |
 | `src/arch/aarch64/defs.rs` | ESR_EC constants, HCR_EL2 bit definitions |
-| `src/global.rs` | `DEVICES`, `PENDING_CPU_ON`, `PREEMPTION_EXIT` |
+| `src/global.rs` | `DEVICES`, `PENDING_CPU_ON`, `PREEMPTION_EXIT`, `TERMINAL_EXIT` |
+| `src/percpu.rs` | `PerCpuContext` (per-CPU exception count in multi-pCPU mode) |

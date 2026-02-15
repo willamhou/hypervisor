@@ -81,7 +81,12 @@ Array-based: `devices: [Option<Device>; 8]`. On MMIO access, scan all devices fo
 
 ### Global Device Manager
 
-`GlobalDeviceManager` in `src/global.rs` wraps `DeviceManager` in an `UnsafeCell` for access from the exception handler (single-threaded, no concurrency).
+`GlobalDeviceManager` in `src/global.rs` wraps `DeviceManager` for access from exception handlers:
+
+- **Single-pCPU** (default): `UnsafeCell` — no locking needed, single-threaded access
+- **Multi-pCPU** (`multi_pcpu` feature): `SpinLock<DeviceManager>` — ticket-based spinlock protects concurrent MMIO from multiple pCPUs
+
+The UART RX path in multi-pCPU mode uses a lock-free ring buffer (`UART_RX`) between IRQ handler and run loop, then batches bytes into `VirtualUart` under a single lock acquisition to minimize contention.
 
 ## PL011 UART Emulation
 

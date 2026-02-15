@@ -12,7 +12,7 @@ The hypervisor uses ARM GICv3 hardware virtualization to provide interrupt servi
 
 | Component | Strategy | Purpose |
 |-----------|----------|---------|
-| GICD (0x08000000) | Passthrough + shadow | Guest writes directly; VirtualGicd shadows IROUTER for SPI routing |
+| GICD (0x08000000) | Trap + write-through | Guest writes trapped, forwarded to physical GICD + shadow state |
 | GICR (0x080A0000+) | Trap-and-emulate | Stage-2 unmapped (4KB pages); VirtualGicr emulates per-vCPU state |
 | ICC system regs | Virtual redirect | ICH_HCR_EL2.En=1 redirects ICC_* to ICV_* at EL1 |
 | ICC_SGI1R_EL1 | Trapped (TALL1) | Decoded for IPI emulation across vCPUs |
