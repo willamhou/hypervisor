@@ -94,6 +94,27 @@ pub extern "C" fn rust_main() -> ! {
     // Run the simple guest test
     tests::run_simple_guest_test();
 
+    // Run the MMIO instruction decode test
+    tests::run_decode_test();
+
+    // Run the GICD emulation test
+    tests::run_gicd_test();
+
+    // Run the GICR emulation test
+    tests::run_gicr_test();
+
+    // Run the global state test
+    tests::run_global_test();
+
+    // Run the interrupt queue test
+    tests::run_irq_test();
+
+    // Run the guest interrupt injection test
+    tests::run_guest_interrupt_test();
+
+    // Run the device manager routing test
+    tests::run_device_routing_test();
+
     // Check if we should boot a Zephyr guest
     #[cfg(feature = "guest")]
     {

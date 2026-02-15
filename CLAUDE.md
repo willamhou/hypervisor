@@ -175,27 +175,32 @@ Array-based routing: `devices: [Option<Device>; 8]`, scan for `dev.contains(addr
 
 ## Tests
 
-40 assertions across 12 test suites run automatically on `make run` (no feature flags). Orchestrated sequentially in `src/main.rs`. Located in `tests/`:
+~85 assertions across 19 test suites run automatically on `make run` (no feature flags). Orchestrated sequentially in `src/main.rs`. Located in `tests/`:
 
-| Test | Coverage |
-|------|----------|
-| `test_allocator` | Bump allocator page alloc/free |
-| `test_heap` | Global heap (Box, Vec) |
-| `test_dynamic_pagetable` | DynamicIdentityMapper 2MB mapping |
-| `test_multi_vcpu` | Multi-vCPU creation, VMPIDR |
-| `test_scheduler` | Round-robin scheduling, block/unblock |
-| `test_vm_scheduler` | VM-integrated scheduling lifecycle |
-| `test_gicv3_virt` | List Register injection, ELRSR |
-| `test_mmio` | MMIO device registration + routing |
-| `test_complete_interrupt` | End-to-end IRQ injection flow |
-| `test_guest` | Basic hypercall (HVC #0) |
-| `test_guest_loader` | GuestConfig for Zephyr/Linux |
-| `test_simple_guest` | Simple guest boot + exit |
+| Test | Coverage | Assertions |
+|------|----------|------------|
+| `test_allocator` | Bump allocator page alloc/free | 4 |
+| `test_heap` | Global heap (Box, Vec) | 4 |
+| `test_dynamic_pagetable` | DynamicIdentityMapper 2MB mapping + 4KB unmap | 6 |
+| `test_multi_vcpu` | Multi-vCPU creation, VMPIDR | 4 |
+| `test_scheduler` | Round-robin scheduling, block/unblock | 4 |
+| `test_vm_scheduler` | VM-integrated scheduling lifecycle | 5 |
+| `test_mmio` | MMIO device registration + guest UART access | 1 |
+| `test_gicv3_virt` | List Register injection, ELRSR | 6 |
+| `test_complete_interrupt` | End-to-end IRQ injection flow | 1 |
+| `test_guest` | Basic hypercall (HVC #0) | 1 |
+| `test_guest_loader` | GuestConfig for Zephyr/Linux | 3 |
+| `test_simple_guest` | Simple guest boot + exit | 1 |
+| `test_decode` | MmioAccess::decode() ISS + instruction paths | 9 |
+| `test_gicd` | VirtualGicd shadow state (CTLR, ISENABLER, IROUTER) | 8 |
+| `test_gicr` | VirtualGicr per-vCPU state (TYPER, WAKER, ISENABLER0) | 8 |
+| `test_global` | PendingCpuOn atomics + UartRxRing SPSC buffer | 6 |
+| `test_guest_irq` | PENDING_SGIS/PENDING_SPIS bitmask operations | 5 |
+| `test_guest_interrupt` | Guest interrupt injection + exception vector | 1 |
+| `test_device_routing` | DeviceManager registration, routing, accessors | 6 |
 
 Not wired into `main.rs` (exported but not called):
-- `test_timer` — timer interrupt detection
-- `test_guest_interrupt` — guest exception vector handling
-- `test_guest_irq` — placeholder (TODO)
+- `test_timer` — timer interrupt detection (requires manual timer setup)
 
 ## Critical Implementation Details
 
