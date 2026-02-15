@@ -230,8 +230,7 @@ pub extern "C" fn rust_main_secondary(cpu_id: usize) -> ! {
     gicv3::init();
 
     // 6. Set PerCpuContext
-    let percpu = hypervisor::percpu::this_cpu();
-    percpu.vcpu_id = cpu_id;
+    unsafe { (*hypervisor::percpu::this_cpu()).vcpu_id = cpu_id; }
 
     uart_puts_local(b"[SMP] pCPU ");
     print_digit(cpu_id as u8);

@@ -75,13 +75,38 @@ pub fn init() {
     }
 }
 
-// Exception loop prevention: track consecutive exceptions
+// Exception loop prevention: track consecutive exceptions.
+// In single-pCPU mode, a global atomic suffices.
+// In multi-pCPU mode, use per-CPU context to avoid cross-CPU interference.
+#[cfg(not(feature = "multi_pcpu"))]
 static EXCEPTION_COUNT: AtomicU32 = AtomicU32::new(0);
 const MAX_CONSECUTIVE_EXCEPTIONS: u32 = 100;
 
+/// Increment the exception counter and return the new value.
+#[inline]
+fn inc_exception_count() -> u32 {
+    #[cfg(not(feature = "multi_pcpu"))]
+    { EXCEPTION_COUNT.fetch_add(1, Ordering::Relaxed) + 1 }
+    #[cfg(feature = "multi_pcpu")]
+    unsafe {
+        let percpu = crate::percpu::this_cpu();
+        (*percpu).exception_count += 1;
+        (*percpu).exception_count
+    }
+}
+
+/// Reset the exception counter to zero.
+#[inline]
+fn reset_exception_count() {
+    #[cfg(not(feature = "multi_pcpu"))]
+    { EXCEPTION_COUNT.store(0, Ordering::Relaxed); }
+    #[cfg(feature = "multi_pcpu")]
+    unsafe { (*crate::percpu::this_cpu()).exception_count = 0; }
+}
+
 /// Reset all exception counters (call before entering a new guest)
 pub fn reset_exception_counters() {
-    EXCEPTION_COUNT.store(0, Ordering::Relaxed);
+    reset_exception_count();
     WFI_CONSECUTIVE_COUNT.store(0, Ordering::Relaxed);
     LAST_WFI_PC.store(0, Ordering::Relaxed);
 }
@@ -116,7 +141,7 @@ pub extern "C" fn handle_exception(context: &mut VcpuContext) -> bool {
     context.sys_regs.far_el2 = far;
 
     // Check for exception loop
-    let count = EXCEPTION_COUNT.fetch_add(1, Ordering::Relaxed) + 1;
+    let count = inc_exception_count();
     if count > MAX_CONSECUTIVE_EXCEPTIONS {
         uart_puts(b"\n[FATAL] Too many consecutive exceptions, halting system\n");
         uart_puts(b"[DEBUG] ESR_EL2=0x");
@@ -140,7 +165,7 @@ pub extern "C" fn handle_exception(context: &mut VcpuContext) -> bool {
     match exit_reason {
         ExitReason::WfiWfe => {
             // Reset exception counter on successful WFI handling
-            EXCEPTION_COUNT.store(0, Ordering::Relaxed);
+            reset_exception_count();
 
             // In SMP mode (multiple vCPUs online), always exit on WFI
             // so the scheduler can switch to another vCPU.
@@ -166,7 +191,7 @@ pub extern "C" fn handle_exception(context: &mut VcpuContext) -> bool {
 
         ExitReason::HvcCall => {
             // Reset exception counter on hypercall
-            EXCEPTION_COUNT.store(0, Ordering::Relaxed);
+            reset_exception_count();
             // HVC: Hypercall from guest
             // x0 contains the hypercall number
             let should_continue = handle_hypercall(context);
@@ -176,7 +201,7 @@ pub extern "C" fn handle_exception(context: &mut VcpuContext) -> bool {
 
         ExitReason::TrapMsrMrs => {
             // Reset exception counter on MSR/MRS handling
-            EXCEPTION_COUNT.store(0, Ordering::Relaxed);
+            reset_exception_count();
             handle_msr_mrs_trap(context, esr);
             context.pc += AARCH64_INSN_SIZE;
             true // Continue
@@ -376,7 +401,7 @@ pub extern "C" fn handle_exception(context: &mut VcpuContext) -> bool {
             // Try to handle as MMIO
             if handle_mmio_abort(context, addr) {
                 // Reset exception counter on successful MMIO
-                EXCEPTION_COUNT.store(0, Ordering::Relaxed);
+                reset_exception_count();
                 // Successfully handled, advance PC and continue
                 context.pc += AARCH64_INSN_SIZE;
 
@@ -466,7 +491,7 @@ pub extern "C" fn handle_irq_exception(_context: &mut VcpuContext) -> bool {
     use crate::arch::aarch64::peripherals::timer;
 
     // Reset sync exception counter (guest is making progress)
-    EXCEPTION_COUNT.store(0, Ordering::Relaxed);
+    reset_exception_count();
 
     // Acknowledge the physical interrupt
     let intid = GicV3SystemRegs::read_iar1();
@@ -998,7 +1023,7 @@ fn handle_psci(context: &mut VcpuContext, function_id: u64) -> bool {
             #[cfg(feature = "multi_pcpu")]
             {
                 let target_id = (target_cpu & 0xFF) as usize;
-                if target_id < crate::global::MAX_VCPUS {
+                if target_id < crate::platform::SMP_CPUS {
                     crate::global::PENDING_CPU_ON_PER_VCPU[target_id].request(entry_point, context_id);
                     // Wake the target pCPU from WFE
                     unsafe { core::arch::asm!("sev") };

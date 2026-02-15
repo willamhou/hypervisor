@@ -1,3 +1,4 @@
+use core::cell::UnsafeCell;
 use crate::platform::SMP_CPUS;
 
 pub struct PerCpuContext {
@@ -5,13 +6,19 @@ pub struct PerCpuContext {
     pub exception_count: u32,
 }
 
-static mut PER_CPU: [PerCpuContext; SMP_CPUS] = {
+/// Wrapper for per-CPU array with interior mutability.
+/// SAFETY: Each pCPU only accesses its own entry (indexed by MPIDR.Aff0),
+/// so no data races occur with fixed vCPU-to-pCPU affinity.
+struct PerCpuArray(UnsafeCell<[PerCpuContext; SMP_CPUS]>);
+unsafe impl Sync for PerCpuArray {}
+
+static PER_CPU: PerCpuArray = PerCpuArray(UnsafeCell::new({
     const INIT: PerCpuContext = PerCpuContext {
         vcpu_id: 0,
         exception_count: 0,
     };
     [INIT; SMP_CPUS]
-};
+}));
 
 /// Read current physical CPU ID from MPIDR_EL1.Aff0
 #[inline(always)]
@@ -21,10 +28,15 @@ pub fn current_cpu_id() -> usize {
     (mpidr & 0xFF) as usize
 }
 
-/// Get per-CPU context for current pCPU (mutable).
-/// SAFETY: Each pCPU only accesses its own entry — no data races possible
-/// with fixed vCPU-to-pCPU affinity.
-pub fn this_cpu() -> &'static mut PerCpuContext {
+/// Get per-CPU context for current pCPU.
+///
+/// Returns a raw pointer to avoid creating multiple `&'static mut` references
+/// (which would be UB under Rust aliasing rules). Callers should dereference
+/// the pointer locally and not hold long-lived references.
+///
+/// SAFETY: Each pCPU only accesses its own entry — no data races with 1:1 affinity.
+#[inline]
+pub fn this_cpu() -> *mut PerCpuContext {
     let id = current_cpu_id();
-    unsafe { &mut PER_CPU[id] }
+    unsafe { &raw mut (*PER_CPU.0.get())[id] }
 }
