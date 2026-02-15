@@ -1,6 +1,6 @@
 # ARM64 Hypervisor 开发计划
 
-**项目版本**: v0.7.0 (Phase 7 Complete)
+**项目版本**: v0.9.0 (Phase 9 Complete — Multi-pCPU)
 **计划制定日期**: 2026-01-26
 **最后更新**: 2026-02-13
 **计划类型**: 敏捷迭代，灵活调整
@@ -1030,11 +1030,13 @@ GitHub Actions配置：
 - [x] GICR2 workaround 移除 — 全部 4 个 GICR 均为 trap-and-emulate
 - **已完成**: 2026-02-14
 
-**选项 B**: 多 pCPU 支持
-- [ ] Per-pCPU run loop
-- [ ] vCPU affinity 和迁移
-- [ ] 跨 CPU IPI
-- **收益**: 真正并行执行，显著性能提升
+**选项 B**: 多 pCPU 支持 ✅ **已完成**
+- [x] Per-pCPU run loop (1:1 vCPU-to-pCPU affinity)
+- [x] PSCI CPU_ON boot for secondary pCPUs
+- [x] 跨 CPU IPI (physical SGI via ICC_SGI1R_EL1)
+- [x] Per-CPU context via TPIDR_EL2, SpinLock-protected DeviceManager
+- [x] Physical GICR programming for SGIs/PPIs
+- **已完成**: 2026-02-15
 
 **选项 C**: Virtio-net
 - [ ] 新增 virtio-mmio 网络设备
@@ -1071,6 +1073,7 @@ GitHub Actions配置：
 - Phase 6: 基础设施 (Allocator, 4KB pages, DeviceManager, UART RX)
 - Phase 7: GICR Trap-and-Emulate (VirtualGicr per-vCPU 状态)
 - Phase 8: GICD Full Trap-and-Emulate (write-through to physical GICD, GICR2 workaround 移除)
+- Phase 9: Multi-pCPU (4 vCPUs on 4 physical CPUs, PSCI boot, TPIDR_EL2, SpinLock devices)
 
 ---
 
