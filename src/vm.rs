@@ -366,6 +366,10 @@ impl Vm {
             // Drain physical UART RX bytes → VirtualUart → inject SPI 33
             crate::global::DEVICES.drain_uart_rx();
 
+            // Ensure PPI 27 (virtual timer) is enabled at the physical GICR.
+            // Guest's GICR writes are trapped → shadow only → physical stays disabled.
+            ensure_vtimer_enabled(vcpu_id);
+
             // Inject pending SGIs and SPIs
             let vcpu = self.vcpus[vcpu_id].as_mut().unwrap();
             inject_pending_sgis(vcpu);
@@ -627,6 +631,43 @@ fn wake_gicr(rd_base: u64) {
                 break;
             }
         }
+    }
+}
+
+/// Ensure SGIs (0-15) and PPI 27 (virtual timer) are enabled and Group 1
+/// at the physical GICR for the given pCPU.
+///
+/// In multi-pCPU mode, the guest's GICR writes are trapped and only update
+/// shadow state (VirtualGicr). The physical GICR never sees the guest's
+/// ISENABLER0 write, so PPIs stay disabled. Without PPI 27, the virtual
+/// timer can't generate a physical IRQ (WFI never wakes). Without SGIs
+/// 0-15, physical IPIs between pCPUs don't fire.
+///
+/// This function programs the **physical** GICR SGI frame at EL2
+/// (EL2 accesses bypass Stage-2 translation).
+#[cfg(feature = "multi_pcpu")]
+#[inline]
+pub fn ensure_vtimer_enabled(cpu_id: usize) {
+    // Bits to enable: SGIs 0-15 (for physical IPIs) + PPI 27 (vtimer)
+    const ENABLE_MASK: u32 = 0xFFFF | (1 << 27); // bits 0-15 + bit 27
+
+    let sgi_base = platform::GICR_RD_BASES[cpu_id] + 0x10000;
+    unsafe {
+        // IGROUPR0: ensure Group 1 for SGIs + PPI 27
+        let igroupr0 = core::ptr::read_volatile(
+            (sgi_base + platform::GICR_IGROUPR0_OFF) as *const u32,
+        );
+        if igroupr0 & ENABLE_MASK != ENABLE_MASK {
+            core::ptr::write_volatile(
+                (sgi_base + platform::GICR_IGROUPR0_OFF) as *mut u32,
+                igroupr0 | ENABLE_MASK,
+            );
+        }
+        // ISENABLER0: write-1-to-set (only sets our bits, doesn't affect others)
+        core::ptr::write_volatile(
+            (sgi_base + platform::GICR_ISENABLER0_OFF) as *mut u32,
+            ENABLE_MASK,
+        );
     }
 }
 

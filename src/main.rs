@@ -151,10 +151,10 @@ pub extern "C" fn rust_main() -> ! {
     }
 }
 
-/// Secondary pCPU entry point (called from boot.S after WFE/BOOT_READY wakeup).
+/// Secondary pCPU entry point (called from boot.S after PSCI CPU_ON start).
 ///
 /// Sets up EL2 state (VBAR, HCR, Stage-2, GIC) then enters an idle loop
-/// waiting for PSCI CPU_ON requests.
+/// waiting for guest PSCI CPU_ON requests.
 #[cfg(feature = "multi_pcpu")]
 #[no_mangle]
 pub extern "C" fn rust_main_secondary(cpu_id: usize) -> ! {
@@ -162,6 +162,19 @@ pub extern "C" fn rust_main_secondary(cpu_id: usize) -> ! {
     use hypervisor::arch::aarch64::peripherals::gicv3;
     use hypervisor::arch::aarch64::defs::*;
     use core::sync::atomic::Ordering;
+
+    // Early debug: write 'S' directly to UART via assembly
+    // This verifies the CPU actually entered rust_main_secondary
+    unsafe {
+        core::arch::asm!(
+            "mov x1, #0x09000000",
+            "mov w2, #0x53",  // 'S'
+            "strb w2, [x1]",
+            out("x1") _,
+            out("x2") _,
+            options(nostack),
+        );
+    }
 
     uart_puts_local(b"[SMP] pCPU ");
     print_digit(cpu_id as u8);
@@ -285,6 +298,9 @@ fn secondary_enter_guest(cpu_id: usize, entry: u64, ctx_id: u64) -> ! {
 
     // Simple run loop: inject pending, enter guest, handle exit
     loop {
+        // Ensure PPI 27 (virtual timer) stays enabled at the physical GICR
+        hypervisor::vm::ensure_vtimer_enabled(cpu_id);
+
         // Inject pending SGIs
         let sgi_bits = hypervisor::global::PENDING_SGIS[cpu_id].swap(0, Ordering::Acquire);
         if sgi_bits != 0 {

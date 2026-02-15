@@ -399,28 +399,73 @@ fn enable_physical_uart_irq() {
     uart_puts(b"[GUEST] Physical UART RX interrupt enabled (INTID 33)\n");
 }
 
-/// Wake secondary pCPUs by setting BOOT_READY flags and issuing SEV.
-/// Called from primary pCPU after all init is complete (Stage-2, devices, GIC).
+/// Wake secondary pCPUs via real PSCI CPU_ON SMC calls to QEMU firmware.
+///
+/// QEMU virt machine keeps secondary CPUs powered off at boot.
+/// We issue SMC PSCI_CPU_ON(target_mpidr, entry_point, context_id=0)
+/// to QEMU's built-in PSCI firmware, which starts each CPU at
+/// `secondary_entry` in boot.S (EL2, MMU off).
 #[cfg(feature = "multi_pcpu")]
 fn wake_secondary_pcpus() {
     use crate::uart_puts;
+    use crate::uart_put_hex;
     use crate::platform::SMP_CPUS;
 
+    // PSCI CPU_ON (64-bit): function_id=0xC4000003
+    const PSCI_CPU_ON_64: u64 = 0xC400_0003;
+    const PSCI_SUCCESS: u64 = 0;
+
     extern "C" {
-        static mut BOOT_READY: [u32; 4];
+        // secondary_entry symbol from boot.S — the address where
+        // QEMU firmware will start secondary CPUs
+        fn secondary_entry();
     }
 
-    uart_puts(b"[SMP] Waking secondary pCPUs...\n");
-    unsafe {
-        for i in 1..SMP_CPUS {
-            core::ptr::write_volatile(&mut BOOT_READY[i], 1);
+    let entry_addr = secondary_entry as *const () as usize as u64;
+    uart_puts(b"[SMP] Waking secondary pCPUs via PSCI CPU_ON...\n");
+    uart_puts(b"[SMP] secondary_entry = 0x");
+    uart_put_hex(entry_addr);
+    uart_puts(b"\n");
+
+    for cpu_id in 1..SMP_CPUS {
+        let target_mpidr = cpu_id as u64; // Aff0 = cpu_id
+
+        let ret: u64;
+        unsafe {
+            // SMC #0 with:
+            //   x0 = PSCI_CPU_ON_64 (function ID)
+            //   x1 = target CPU MPIDR
+            //   x2 = entry point address
+            //   x3 = context_id (unused, 0)
+            // Returns result in x0
+            core::arch::asm!(
+                "mov x0, {func_id}",
+                "mov x1, {target}",
+                "mov x2, {entry}",
+                "mov x3, #0",
+                "smc #0",
+                "mov {ret}, x0",
+                func_id = in(reg) PSCI_CPU_ON_64,
+                target = in(reg) target_mpidr,
+                entry = in(reg) entry_addr,
+                ret = out(reg) ret,
+                out("x0") _,
+                out("x1") _,
+                out("x2") _,
+                out("x3") _,
+                options(nostack, nomem),
+            );
         }
-        // Memory barrier + SEV to wake secondary CPUs from WFE
-        core::arch::asm!(
-            "dsb sy",
-            "sev",
-            options(nostack, nomem),
-        );
+
+        uart_puts(b"[SMP] PSCI CPU_ON for pCPU ");
+        uart_puts(&[b'0' + cpu_id as u8]);
+        if ret == PSCI_SUCCESS {
+            uart_puts(b" -> SUCCESS\n");
+        } else {
+            uart_puts(b" -> FAILED (0x");
+            uart_put_hex(ret);
+            uart_puts(b")\n");
+        }
     }
-    uart_puts(b"[SMP] Secondary pCPUs signaled\n");
+    uart_puts(b"[SMP] All secondary pCPUs signaled\n");
 }

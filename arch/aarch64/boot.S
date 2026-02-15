@@ -4,13 +4,14 @@
  * This file contains the entry point for the hypervisor.
  * It runs at EL2 (Hypervisor exception level).
  *
- * Multi-pCPU support: Secondary CPUs (Aff0 != 0) take a separate path.
- * They WFE until BOOT_READY[id] is set by the primary, then set up
- * their own stack and jump to rust_main_secondary(cpu_id).
+ * Multi-pCPU support: QEMU virt uses PSCI to start secondary CPUs.
+ * Secondary CPUs are powered off at boot; the primary issues real
+ * PSCI CPU_ON (SMC) to QEMU firmware with secondary_entry as the
+ * entry point. Each secondary reads MPIDR for its cpu_id, sets up
+ * a per-CPU stack, and calls rust_main_secondary(cpu_id).
  *
  * In single-pCPU mode, rust_main_secondary is a weak symbol that
- * resolves to halt — secondary CPUs never wake because BOOT_READY
- * is never set. The 48KB stack cost is the only overhead.
+ * resolves to halt — secondary CPUs are never powered on.
  */
 
 .section .text.boot
@@ -20,7 +21,7 @@ _start:
     // Read CPU ID from MPIDR_EL1.Aff0
     mrs     x19, MPIDR_EL1
     and     x19, x19, #0xFF        // x19 = cpu_id (preserved across calls)
-    cbnz    x19, secondary_wait    // Non-zero → secondary CPU path
+    cbnz    x19, halt              // Non-zero at initial boot = unexpected, halt
 
 primary_boot:
     // Set up stack
@@ -45,11 +46,16 @@ halt:
     wfe
     b       halt
 
-secondary_wait:
-    wfe
-    adr     x1, BOOT_READY
-    ldr     w2, [x1, x19, lsl #2]  // BOOT_READY[cpu_id] (u32)
-    cbz     w2, secondary_wait     // Not ready → keep waiting
+/*
+ * Secondary CPU entry point — called via real PSCI CPU_ON from QEMU firmware.
+ * QEMU starts the CPU at this address in EL2 with MMU off, caches off.
+ * We read MPIDR for cpu_id, set up a per-CPU stack, and jump to Rust.
+ */
+.global secondary_entry
+secondary_entry:
+    // Read CPU ID from MPIDR_EL1.Aff0
+    mrs     x19, MPIDR_EL1
+    and     x19, x19, #0xFF        // x19 = cpu_id
 
     // Set up per-pCPU stack: pcpu_stacks + cpu_id * 16KB (top)
     // CPU 1 → pcpu_stacks + 16KB, CPU 2 → pcpu_stacks + 32KB, etc.
@@ -69,18 +75,6 @@ secondary_wait:
 // Overridden by the Rust #[no_mangle] version when multi_pcpu is enabled.
 .weak rust_main_secondary
 .set rust_main_secondary, halt
-
-// Per-pCPU boot-ready flags (written by primary CPU, read by secondaries)
-// Each is a u32 (0 = not ready, 1 = ready). Indexed by cpu_id.
-// In single-pCPU mode these are never set, so secondaries never wake.
-.global BOOT_READY
-.section .data
-.align 4
-BOOT_READY:
-    .word 0     // CPU 0 (unused — primary doesn't wait)
-    .word 0     // CPU 1
-    .word 0     // CPU 2
-    .word 0     // CPU 3
 
 // Per-pCPU stacks for secondary CPUs (3 × 16KB)
 // CPU 0 uses the existing stack_top. CPUs 1-3 use these.

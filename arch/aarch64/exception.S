@@ -1,10 +1,10 @@
 /*
  * ARM64 Exception Vector Table for EL2
- * 
+ *
  * This file implements the exception vector table and VM entry/exit routines.
- * 
+ *
  * Exception Vector Table Layout (each entry is 0x80 bytes = 128 bytes):
- * 
+ *
  * VBAR_EL2 + 0x000: Synchronous exception from Current EL with SP_EL0
  * VBAR_EL2 + 0x080: IRQ from Current EL with SP_EL0
  * VBAR_EL2 + 0x100: FIQ from Current EL with SP_EL0
@@ -21,6 +21,10 @@
  * VBAR_EL2 + 0x680: IRQ from Lower EL (AArch32)
  * VBAR_EL2 + 0x700: FIQ from Lower EL (AArch32)
  * VBAR_EL2 + 0x780: SError from Lower EL (AArch32)
+ *
+ * Per-CPU context pointer: TPIDR_EL2 holds the current vCPU context pointer.
+ * Each physical CPU has its own TPIDR_EL2, so this is inherently per-CPU
+ * (no shared global needed for multi-pCPU).
  */
 
 .section .text.exception
@@ -58,19 +62,19 @@ exception_vector_table:
     vector_entry irq_current_el_sp0
     vector_entry fiq_current_el_sp0
     vector_entry serror_current_el_sp0
-    
+
     // Current EL with SP_ELx
     vector_entry sync_current_el_spx
     vector_entry irq_current_el_spx
     vector_entry fiq_current_el_spx
     vector_entry serror_current_el_spx
-    
+
     // Lower EL (AArch64) - This is where guest exceptions come from
     vector_entry sync_lower_el_aarch64
     vector_entry_irq irq_lower_el_aarch64
     vector_entry fiq_lower_el_aarch64
     vector_entry serror_lower_el_aarch64
-    
+
     // Lower EL (AArch32) - Not supported
     vector_entry sync_lower_el_aarch32
     vector_entry irq_lower_el_aarch32
@@ -79,7 +83,7 @@ exception_vector_table:
 
 /*
  * Exception Handler
- * 
+ *
  * When an exception occurs while the guest is running:
  * 1. Save guest context
  * 2. Call Rust handler
@@ -88,32 +92,29 @@ exception_vector_table:
  */
 exception_handler:
     // We need to save the guest context
-    // The context pointer should be in a known location
-    // For now, we'll use a global variable (not ideal for SMP)
+    // TPIDR_EL2 holds the per-CPU context pointer (set by enter_guest)
 
     // Save guest registers to stack temporarily
     stp     x0, x1, [sp, #-16]!
     stp     x2, x3, [sp, #-16]!
-    
-    // Load the context pointer (we'll store it before entering guest)
-    adrp    x0, current_vcpu_context
-    add     x0, x0, :lo12:current_vcpu_context
-    ldr     x0, [x0]
-    
+
+    // Load the context pointer from per-CPU TPIDR_EL2
+    mrs     x0, tpidr_el2
+
     // Check if context pointer is valid
     cbz     x0, exception_no_context
-    
+
     // Save general purpose registers to VcpuContext
     // VcpuContext layout: gp_regs (31*8 bytes), sys_regs, sp, pc
-    
+
     // Restore x2, x3 from stack and save to context
     ldp     x2, x3, [sp], #16
     stp     x2, x3, [x0, #16]   // x2, x3
-    
+
     // Restore x0, x1 from stack and save to context
     ldp     x2, x3, [sp], #16
     stp     x2, x3, [x0, #0]    // x0, x1
-    
+
     // Save x4-x30
     stp     x4, x5, [x0, #32]
     stp     x6, x7, [x0, #48]
@@ -129,26 +130,26 @@ exception_handler:
     stp     x26, x27, [x0, #208]
     stp     x28, x29, [x0, #224]
     str     x30, [x0, #240]      // x30 (LR)
-    
+
     // Save system registers (offset 248 = 31*8)
     // We'll save key system registers
     mrs     x2, sp_el1
     str     x2, [x0, #248]       // sp_el1
-    
+
     mrs     x2, elr_el1
     str     x2, [x0, #256]       // elr_el1
-    
+
     mrs     x2, spsr_el1
     str     x2, [x0, #264]       // spsr_el1
-    
+
     // Save SP and PC
     // Offset calculation:
     // GP regs: 31*8 = 248
-    // Sys regs: 17*8 = 136  
+    // Sys regs: 17*8 = 136
     // Total before sp: 248 + 136 = 384
     mov     x2, sp
     str     x2, [x0, #384]       // sp
-    
+
     mrs     x2, elr_el2
     str     x2, [x0, #392]       // pc
 
@@ -159,16 +160,14 @@ exception_handler:
     // Call Rust exception handler
     // x0 already contains context pointer
     bl      handle_exception
-    
+
     // Check return value: true (1) = continue, false (0) = exit
     cbz     w0, guest_exit
-    
+
     // Continue running guest - restore context and re-enter
-    // Load the context pointer again
-    adrp    x0, current_vcpu_context
-    add     x0, x0, :lo12:current_vcpu_context
-    ldr     x0, [x0]
-    
+    // Load the context pointer from per-CPU TPIDR_EL2
+    mrs     x0, tpidr_el2
+
     // Restore guest general purpose registers
     ldp     x2, x3, [x0, #16]
     ldp     x4, x5, [x0, #32]
@@ -185,21 +184,21 @@ exception_handler:
     ldp     x26, x27, [x0, #208]
     ldp     x28, x29, [x0, #224]
     ldr     x30, [x0, #240]
-    
+
     // Restore system registers
     ldr     x1, [x0, #248]       // sp_el1
     msr     sp_el1, x1
-    
+
     ldr     x1, [x0, #256]       // elr_el1
     msr     elr_el1, x1
-    
+
     ldr     x1, [x0, #264]       // spsr_el1
     msr     spsr_el1, x1
-    
+
     // Restore PC (into ELR_EL2 for ERET)
     ldr     x1, [x0, #392]       // pc (offset 392)
     msr     elr_el2, x1
-    
+
     // Restore SPSR_EL2 from context (may have been modified by handler)
     ldr     x1, [x0, #400]       // spsr_el2
     msr     spsr_el2, x1
@@ -213,7 +212,7 @@ exception_handler:
 guest_exit:
     // Guest wants to exit - return to enter_guest's caller
     // We need to restore the host context that was saved by enter_guest
-    
+
     // Check if this is a WFI exit (ExitReason::WfiWfe)
     // Read ESR_EL2 and check EC field
     mrs     x10, esr_el2
@@ -221,7 +220,7 @@ guest_exit:
     and     x10, x10, #0x3F
     cmp     x10, #0x1               // EC = 0x01 for WFI/WFE
     beq     guest_exit_wfi
-    
+
     // Normal exit (not WFI)
     // Restore host callee-saved registers
     ldp     x19, x20, [sp], #16
@@ -230,7 +229,7 @@ guest_exit:
     ldp     x25, x26, [sp], #16
     ldp     x27, x28, [sp], #16
     ldp     x29, x30, [sp], #16
-    
+
     // Return 0 (success) to enter_guest's caller
     mov     x0, #0
     ret
@@ -284,10 +283,8 @@ irq_exception_handler:
     stp     x0, x1, [sp, #-16]!
     stp     x2, x3, [sp, #-16]!
 
-    // Load the context pointer
-    adrp    x0, current_vcpu_context
-    add     x0, x0, :lo12:current_vcpu_context
-    ldr     x0, [x0]
+    // Load the context pointer from per-CPU TPIDR_EL2
+    mrs     x0, tpidr_el2
 
     // Check if context pointer is valid
     cbz     x0, exception_no_context
@@ -344,9 +341,7 @@ irq_exception_handler:
     cbz     w0, guest_exit_irq
 
     // Restore context and re-enter guest
-    adrp    x0, current_vcpu_context
-    add     x0, x0, :lo12:current_vcpu_context
-    ldr     x0, [x0]
+    mrs     x0, tpidr_el2
 
     ldp     x2, x3, [x0, #16]
     ldp     x4, x5, [x0, #32]
@@ -390,22 +385,21 @@ irq_exception_handler:
 
 /*
  * Enter Guest
- * 
+ *
  * extern "C" fn enter_guest(context: *mut VcpuContext) -> u64;
- * 
+ *
  * Arguments:
  *   x0 = pointer to VcpuContext
- * 
+ *
  * Returns:
  *   x0 = 0 (normal exit)
  */
 .global enter_guest
 enter_guest:
-    // Save the context pointer for exception handler
-    adrp    x1, current_vcpu_context
-    add     x1, x1, :lo12:current_vcpu_context
-    str     x0, [x1]
-    
+    // Save the context pointer in per-CPU TPIDR_EL2.
+    // Each physical CPU has its own TPIDR_EL2, so this is safe for multi-pCPU.
+    msr     tpidr_el2, x0
+
     // Save host context (callee-saved registers x19-x30, sp)
     stp     x29, x30, [sp, #-16]!
     stp     x27, x28, [sp, #-16]!
@@ -413,7 +407,7 @@ enter_guest:
     stp     x23, x24, [sp, #-16]!
     stp     x21, x22, [sp, #-16]!
     stp     x19, x20, [sp, #-16]!
-    
+
     // Restore guest general purpose registers
     ldp     x2, x3, [x0, #16]
     ldp     x4, x5, [x0, #32]
@@ -430,21 +424,21 @@ enter_guest:
     ldp     x26, x27, [x0, #208]
     ldp     x28, x29, [x0, #224]
     ldr     x30, [x0, #240]
-    
+
     // Restore system registers
     ldr     x1, [x0, #248]       // sp_el1
     msr     sp_el1, x1
-    
+
     ldr     x1, [x0, #256]       // elr_el1
     msr     elr_el1, x1
-    
+
     ldr     x1, [x0, #264]       // spsr_el1
     msr     spsr_el1, x1
-    
+
     // Restore PC (into ELR_EL2 for ERET)
     ldr     x1, [x0, #392]       // pc (offset 392)
     msr     elr_el2, x1
-    
+
     // Restore SPSR_EL2 from context (default 0x3c5 = DAIF masked + EL1h)
     ldr     x1, [x0, #400]       // spsr_el2
     msr     spsr_el2, x1
@@ -463,16 +457,7 @@ enter_guest:
     ldp     x25, x26, [sp], #16
     ldp     x27, x28, [sp], #16
     ldp     x29, x30, [sp], #16
-    
+
     // Return 0 (success)
     mov     x0, #0
     ret
-
-/*
- * Current vCPU context pointer
- * This is used to communicate between enter_guest and exception handlers
- */
-.section .bss
-.align 8
-current_vcpu_context:
-    .skip   8

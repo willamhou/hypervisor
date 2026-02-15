@@ -280,7 +280,18 @@ pub fn inject_spi(intid: u32) {
     }
     let bit = intid - 32;
 
-    // Read IROUTER to find target vCPU
+    // Read IROUTER to find target vCPU.
+    // In multi-pCPU mode, read the physical GICD_IROUTER directly (EL2 bypasses
+    // Stage-2) to avoid deadlock — inject_spi() may be called from inside the
+    // DEVICES lock (e.g., virtio-blk signal_interrupt → inject_spi).
+    #[cfg(feature = "multi_pcpu")]
+    let target = {
+        const GICD_IROUTER_BASE: u64 = crate::platform::GICD_BASE + 0x6100;
+        let irouter_addr = GICD_IROUTER_BASE + (intid as u64 - 32) * 8;
+        let irouter = unsafe { core::ptr::read_volatile(irouter_addr as *const u64) };
+        (irouter & 0xFF) as usize // Aff0 = vCPU ID
+    };
+    #[cfg(not(feature = "multi_pcpu"))]
     let target = DEVICES.route_spi(intid);
     if target < MAX_VCPUS {
         PENDING_SPIS[target].fetch_or(1 << bit, Ordering::Release);
