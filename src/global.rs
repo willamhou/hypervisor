@@ -284,6 +284,24 @@ pub fn inject_spi(intid: u32) {
     let target = DEVICES.route_spi(intid);
     if target < MAX_VCPUS {
         PENDING_SPIS[target].fetch_or(1 << bit, Ordering::Release);
+
+        // Multi-pCPU: if target is a remote pCPU, send physical SGI to wake it.
+        #[cfg(feature = "multi_pcpu")]
+        {
+            let current = crate::percpu::current_cpu_id();
+            if target != current {
+                // Send SGI 0 to target pCPU to wake it from WFI
+                let val: u64 = (1u64 << target); // TargetList only, INTID=0
+                unsafe {
+                    core::arch::asm!(
+                        "msr icc_sgi1r_el1, {val}",
+                        "isb",
+                        val = in(reg) val,
+                        options(nostack, nomem),
+                    );
+                }
+            }
+        }
     }
 }
 

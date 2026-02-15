@@ -478,20 +478,29 @@ pub extern "C" fn handle_irq_exception(_context: &mut VcpuContext) -> bool {
 
     match intid {
         0..=15 => {
-            // SGI (Software Generated Interrupt) arrived at pCPU 0.
-            // Physical SGIs targeting pCPU 0 are always for vCPU 0.
-            let current_vcpu = crate::global::current_vcpu_id();
-            if current_vcpu == 0 {
-                // vCPU 0 is running — inject directly via LR
-                let _ = GicV3VirtualInterface::inject_interrupt(intid, IRQ_DEFAULT_PRIORITY);
-            } else {
-                // vCPU 0 is NOT running — queue for later injection
-                crate::global::PENDING_SGIS[0].fetch_or(1 << intid, Ordering::Relaxed);
-            }
-            // ACK + deactivate the physical SGI (no HW linkage for SGIs)
+            // Physical SGI arrived.
             GicV3SystemRegs::write_eoir1(intid);
             GicV3SystemRegs::write_dir(intid);
-            return true; // continue guest
+
+            #[cfg(feature = "multi_pcpu")]
+            {
+                // Multi-pCPU: physical SGIs are hypervisor IPIs (wakeup).
+                // The virtual SGI is already queued in PENDING_SGIS by the
+                // sender. Exit to host so the run loop injects it.
+                return false;
+            }
+
+            #[cfg(not(feature = "multi_pcpu"))]
+            {
+                // Single-pCPU: physical SGI → inject into current vCPU.
+                let current_vcpu = crate::global::current_vcpu_id();
+                if current_vcpu == 0 {
+                    let _ = GicV3VirtualInterface::inject_interrupt(intid, IRQ_DEFAULT_PRIORITY);
+                } else {
+                    crate::global::PENDING_SGIS[0].fetch_or(1 << intid, Ordering::Relaxed);
+                }
+                return true; // continue guest
+            }
         }
         26 => {
             // EL2 hypervisor physical timer (CNTHP) — preemption watchdog.
@@ -758,16 +767,49 @@ fn handle_sgi_trap(value: u64) {
         }
     }
 
-    // Multi-pCPU: wake remote pCPUs that may be in WFI.
-    // SEV wakes all PEs from WFE but not WFI. For WFI, we need a
-    // physical SGI (IPI). For now, use SEV which works if the target
-    // is in WFE (idle loop before CPU_ON). After CPU_ON, the target
-    // pCPU runs with TWI=0 (WFI passthrough), so physical interrupts
-    // like the virtual timer will naturally wake it.
-    // TODO (Task 10): Send physical SGI for guaranteed cross-pCPU wakeup.
+    // Multi-pCPU: send physical SGI to wake remote pCPUs from WFI.
+    // The virtual SGI is already queued in PENDING_SGIS; the physical SGI
+    // just forces the target pCPU out of WFI so it can process the queue.
+    // We use SGI 0 as the wakeup IPI (INTID = 0, TargetList = bitmap).
     #[cfg(feature = "multi_pcpu")]
     if remote_queued {
-        unsafe { core::arch::asm!("sev", options(nostack, nomem)) };
+        // Build target bitmap: all target vCPUs that are remote
+        let mut target_bitmap: u64 = 0;
+        if irm == 1 {
+            let online = crate::global::VCPU_ONLINE_MASK.load(Ordering::Relaxed);
+            for id in 0..crate::global::MAX_VCPUS {
+                if id != current_vcpu && online & (1 << id) != 0 {
+                    target_bitmap |= 1 << id;
+                }
+            }
+        } else {
+            for bit in 0..crate::global::MAX_VCPUS {
+                if target_list & (1 << bit) != 0 && bit != current_vcpu {
+                    target_bitmap |= 1 << bit;
+                }
+            }
+        }
+        if target_bitmap != 0 {
+            send_physical_sgi(0, target_bitmap as u16);
+        }
+    }
+}
+
+/// Send a physical SGI (IPI) from EL2 to wake remote pCPUs.
+///
+/// Writes ICC_SGI1R_EL1 at EL2 (not subject to TALL1 trap).
+/// INTID is placed in bits [27:24], TargetList in bits [15:0].
+/// Assumes all PEs are in Aff1=0, Aff2=0, Aff3=0, RS=0.
+#[cfg(feature = "multi_pcpu")]
+fn send_physical_sgi(intid: u32, target_list: u16) {
+    let val: u64 = ((intid as u64 & 0xF) << 24) | (target_list as u64);
+    unsafe {
+        core::arch::asm!(
+            "msr icc_sgi1r_el1, {val}",
+            "isb",
+            val = in(reg) val,
+            options(nostack, nomem),
+        );
     }
 }
 
