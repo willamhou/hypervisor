@@ -151,6 +151,193 @@ pub extern "C" fn rust_main() -> ! {
     }
 }
 
+/// Secondary pCPU entry point (called from boot.S after WFE/BOOT_READY wakeup).
+///
+/// Sets up EL2 state (VBAR, HCR, Stage-2, GIC) then enters an idle loop
+/// waiting for PSCI CPU_ON requests.
+#[cfg(feature = "multi_pcpu")]
+#[no_mangle]
+pub extern "C" fn rust_main_secondary(cpu_id: usize) -> ! {
+    use hypervisor::arch::aarch64::hypervisor::exception;
+    use hypervisor::arch::aarch64::peripherals::gicv3;
+    use hypervisor::arch::aarch64::defs::*;
+    use core::sync::atomic::Ordering;
+
+    uart_puts_local(b"[SMP] pCPU ");
+    print_digit(cpu_id as u8);
+    uart_puts_local(b" started\n");
+
+    // 1. Set VBAR_EL2 (same exception vectors as primary)
+    exception::init();
+
+    // 2. Set VTTBR_EL2 / VTCR_EL2 (shared Stage-2 from primary)
+    let vttbr = hypervisor::global::SHARED_VTTBR.load(Ordering::Acquire);
+    let vtcr = hypervisor::global::SHARED_VTCR.load(Ordering::Acquire);
+    unsafe {
+        core::arch::asm!(
+            "msr vtcr_el2, {vtcr}",
+            "msr vttbr_el2, {vttbr}",
+            "isb",
+            vtcr = in(reg) vtcr,
+            vttbr = in(reg) vttbr,
+            options(nostack, nomem),
+        );
+    }
+
+    // 3. HCR_EL2 is set by exception::init(). Enable Stage-2 and clear TWI.
+    unsafe {
+        let mut hcr: u64;
+        core::arch::asm!("mrs {}, hcr_el2", out(reg) hcr);
+        hcr |= HCR_VM;     // Enable Stage-2
+        hcr &= !HCR_TWI;   // Don't trap WFI (multi-pCPU: WFI passthrough)
+        core::arch::asm!("msr hcr_el2, {}", "isb", in(reg) hcr);
+    }
+
+    // 4. Configure CPTR_EL2 / MDCR_EL2 (don't trap FP/SIMD/debug)
+    unsafe {
+        core::arch::asm!(
+            "mrs x0, cptr_el2",
+            "bic x0, x0, {cptr_tz}",
+            "bic x0, x0, {cptr_tfp}",
+            "bic x0, x0, {cptr_tsm}",
+            "bic x0, x0, {cptr_tcpac}",
+            "msr cptr_el2, x0",
+            "msr mdcr_el2, xzr",
+            "isb",
+            cptr_tz = const CPTR_TZ,
+            cptr_tfp = const CPTR_TFP,
+            cptr_tsm = const CPTR_TSM,
+            cptr_tcpac = const CPTR_TCPAC,
+            out("x0") _,
+            options(nostack),
+        );
+    }
+
+    // 5. Initialize per-pCPU GIC (system register interface + virtual interface)
+    gicv3::init();
+
+    // 6. Set PerCpuContext
+    let percpu = hypervisor::percpu::this_cpu();
+    percpu.vcpu_id = cpu_id;
+
+    uart_puts_local(b"[SMP] pCPU ");
+    print_digit(cpu_id as u8);
+    uart_puts_local(b" ready, waiting for CPU_ON\n");
+
+    // 7. Idle loop: WFE until PSCI CPU_ON sets our request
+    loop {
+        unsafe { core::arch::asm!("wfe") };
+        if let Some((entry, ctx)) =
+            hypervisor::global::PENDING_CPU_ON_PER_VCPU[cpu_id].take()
+        {
+            uart_puts_local(b"[SMP] pCPU ");
+            print_digit(cpu_id as u8);
+            uart_puts_local(b" got CPU_ON, entering guest\n");
+            secondary_enter_guest(cpu_id, entry, ctx);
+        }
+    }
+}
+
+/// Set up vCPU and enter guest loop for a secondary pCPU.
+/// This function never returns — the pCPU runs this vCPU forever (1:1 affinity).
+#[cfg(feature = "multi_pcpu")]
+fn secondary_enter_guest(cpu_id: usize, entry: u64, ctx_id: u64) -> ! {
+    use hypervisor::vcpu::Vcpu;
+    use hypervisor::arch::aarch64::defs::*;
+    use hypervisor::arch::aarch64::peripherals::gicv3::GicV3VirtualInterface;
+    use hypervisor::platform;
+    use core::sync::atomic::Ordering;
+
+    // Wake this CPU's GICR
+    if cpu_id < platform::GICR_RD_BASES.len() {
+        let rd_base = platform::GICR_RD_BASES[cpu_id];
+        let waker_addr = (rd_base + platform::GICR_WAKER_OFF) as *mut u32;
+        unsafe {
+            let mut waker = core::ptr::read_volatile(waker_addr);
+            waker &= !(1 << 1); // Clear ProcessorSleep
+            core::ptr::write_volatile(waker_addr, waker);
+            loop {
+                let w = core::ptr::read_volatile(waker_addr);
+                if w & (1 << 2) == 0 { break; }
+            }
+        }
+    }
+
+    // Create vCPU
+    let mut vcpu = Vcpu::new(cpu_id, entry, 0);
+    vcpu.context_mut().gp_regs.x0 = ctx_id;
+    vcpu.context_mut().spsr_el2 = SPSR_EL1H_DAIF_MASKED;
+    vcpu.arch_state_mut().sctlr_el1 = 0x30D0_0800;
+    vcpu.arch_state_mut().cpacr_el1 = 3 << 20;
+    vcpu.arch_state_mut().init_for_vcpu(cpu_id);
+
+    // Mark vCPU online (current_vcpu_id() uses MPIDR in multi_pcpu mode)
+    hypervisor::global::VCPU_ONLINE_MASK.fetch_or(1 << cpu_id, Ordering::Release);
+
+    // Reset exception counters for this pCPU
+    hypervisor::arch::aarch64::hypervisor::exception::reset_exception_counters();
+
+    uart_puts_local(b"[SMP] vCPU ");
+    print_digit(cpu_id as u8);
+    uart_puts_local(b" entering guest at 0x");
+    hypervisor::uart_put_hex(entry);
+    uart_puts_local(b"\n");
+
+    // Simple run loop: inject pending, enter guest, handle exit
+    loop {
+        // Inject pending SGIs
+        let sgi_bits = hypervisor::global::PENDING_SGIS[cpu_id].swap(0, Ordering::Acquire);
+        if sgi_bits != 0 {
+            let arch = vcpu.arch_state_mut();
+            for sgi in 0..16u32 {
+                if sgi_bits & (1 << sgi) == 0 { continue; }
+                for lr in arch.ich_lr.iter_mut() {
+                    if (*lr >> LR_STATE_SHIFT) & LR_STATE_MASK == 0 {
+                        *lr = (GicV3VirtualInterface::LR_STATE_PENDING << LR_STATE_SHIFT)
+                            | LR_GROUP1_BIT
+                            | ((IRQ_DEFAULT_PRIORITY as u64) << LR_PRIORITY_SHIFT)
+                            | (sgi as u64);
+                        break;
+                    }
+                }
+            }
+        }
+
+        // Inject pending SPIs
+        let spi_bits = hypervisor::global::PENDING_SPIS[cpu_id].swap(0, Ordering::Acquire);
+        if spi_bits != 0 {
+            let arch = vcpu.arch_state_mut();
+            for bit in 0..32u32 {
+                if spi_bits & (1 << bit) == 0 { continue; }
+                let intid = bit + 32;
+                for lr in arch.ich_lr.iter_mut() {
+                    if (*lr >> LR_STATE_SHIFT) & LR_STATE_MASK == 0 {
+                        *lr = (GicV3VirtualInterface::LR_STATE_PENDING << LR_STATE_SHIFT)
+                            | LR_GROUP1_BIT
+                            | ((IRQ_DEFAULT_PRIORITY as u64) << LR_PRIORITY_SHIFT)
+                            | (intid as u64);
+                        break;
+                    }
+                }
+            }
+        }
+
+        // Enter guest
+        match vcpu.run() {
+            Ok(()) => {
+                // Normal exit — loop back, re-enter guest
+            }
+            Err("WFI") => {
+                // WFI: execute real WFI — pCPU idles until next interrupt
+                unsafe { core::arch::asm!("wfi") };
+            }
+            Err(_) => {
+                // Other exit — loop back
+            }
+        }
+    }
+}
+
 /// Print a single digit (0-9)
 fn print_digit(digit: u8) {
     let ch = b'0' + digit;

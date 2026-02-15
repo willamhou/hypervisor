@@ -59,6 +59,9 @@ impl GlobalDeviceManager {
 use crate::sync::SpinLock;
 
 #[cfg(feature = "multi_pcpu")]
+use crate::devices::MmioDevice;
+
+#[cfg(feature = "multi_pcpu")]
 pub struct GlobalDeviceManager {
     devices: SpinLock<DeviceManager>,
 }
@@ -95,6 +98,25 @@ impl GlobalDeviceManager {
     pub fn uart_push_rx(&self, ch: u8) {
         if let Some(uart) = self.devices.lock().uart_mut() {
             uart.push_rx(ch);
+        }
+    }
+
+    /// Drain UART RX ring buffer and inject SPI 33 if needed.
+    /// Single lock acquisition for the entire drain + IRQ check.
+    pub fn drain_uart_rx(&self) {
+        let mut any = false;
+        while let Some(ch) = UART_RX.pop() {
+            if let Some(uart) = self.devices.lock().uart_mut() {
+                uart.push_rx(ch);
+                any = true;
+            }
+        }
+        if any {
+            if let Some(uart) = self.devices.lock().uart_mut() {
+                if uart.pending_irq().is_some() {
+                    inject_spi(33);
+                }
+            }
         }
     }
 }
@@ -201,11 +223,31 @@ pub static PENDING_CPU_ON_PER_VCPU: [PerVcpuCpuOnRequest; MAX_VCPUS] = [
 /// vCPU 0 is online by default
 pub static VCPU_ONLINE_MASK: AtomicU64 = AtomicU64::new(1);
 
+/// Shared Stage-2 translation configuration (set by primary, read by secondaries).
+/// VTTBR_EL2 and VTCR_EL2 must be identical on all pCPUs.
+#[cfg(feature = "multi_pcpu")]
+pub static SHARED_VTTBR: AtomicU64 = AtomicU64::new(0);
+#[cfg(feature = "multi_pcpu")]
+pub static SHARED_VTCR: AtomicU64 = AtomicU64::new(0);
+
 /// Maximum number of vCPUs (must match vm::MAX_VCPUS)
 pub const MAX_VCPUS: usize = 8;
 
-/// Currently running vCPU ID (set by run_smp before each vcpu.run())
+/// Currently running vCPU ID (set by run_smp before each vcpu.run()).
+/// In multi-pCPU mode, use `current_vcpu_id()` instead which reads MPIDR.
 pub static CURRENT_VCPU_ID: AtomicUsize = AtomicUsize::new(0);
+
+/// Get the current vCPU ID.
+/// - Single-pCPU: reads CURRENT_VCPU_ID (set by scheduler before each run).
+/// - Multi-pCPU: reads MPIDR_EL1.Aff0 (1:1 affinity, vCPU N = pCPU N).
+#[inline]
+pub fn current_vcpu_id() -> usize {
+    #[cfg(not(feature = "multi_pcpu"))]
+    { CURRENT_VCPU_ID.load(Ordering::Relaxed) }
+
+    #[cfg(feature = "multi_pcpu")]
+    { crate::percpu::current_cpu_id() }
+}
 
 /// Pending SGI bitmask per vCPU (bits 0-15 = SGI 0-15)
 pub static PENDING_SGIS: [AtomicU32; MAX_VCPUS] = [

@@ -480,7 +480,7 @@ pub extern "C" fn handle_irq_exception(_context: &mut VcpuContext) -> bool {
         0..=15 => {
             // SGI (Software Generated Interrupt) arrived at pCPU 0.
             // Physical SGIs targeting pCPU 0 are always for vCPU 0.
-            let current_vcpu = crate::global::CURRENT_VCPU_ID.load(Ordering::Relaxed);
+            let current_vcpu = crate::global::current_vcpu_id();
             if current_vcpu == 0 {
                 // vCPU 0 is running — inject directly via LR
                 let _ = GicV3VirtualInterface::inject_interrupt(intid, IRQ_DEFAULT_PRIORITY);
@@ -554,28 +554,30 @@ pub extern "C" fn handle_irq_exception(_context: &mut VcpuContext) -> bool {
 
             // DO NOT modify SPSR_EL2 (guest's saved PSTATE).
 
-            // Demand-driven preemption: exit to host only when another vCPU
-            // has pending SGIs. Time-based fallback is handled by CNTHP (INTID 26).
-            let online = crate::global::VCPU_ONLINE_MASK.load(Ordering::Relaxed);
-            let multi_vcpu = online != 0 && (online & (online - 1)) != 0;
-            if multi_vcpu {
-                let current = crate::global::CURRENT_VCPU_ID.load(Ordering::Relaxed);
-                // Check PENDING_SGIS for any non-current vCPU with queued SGIs
-                let mut needs_switch = false;
-                for id in 0..crate::global::MAX_VCPUS {
-                    if id != current
-                        && crate::global::PENDING_SGIS[id].load(Ordering::Relaxed) != 0
-                    {
-                        needs_switch = true;
-                        break;
+            // Single-pCPU only: demand-driven preemption — exit to host
+            // when another vCPU has pending SGIs. Multi-pCPU doesn't need this
+            // since each vCPU runs on its own pCPU.
+            #[cfg(not(feature = "multi_pcpu"))]
+            {
+                let online = crate::global::VCPU_ONLINE_MASK.load(Ordering::Relaxed);
+                let multi_vcpu = online != 0 && (online & (online - 1)) != 0;
+                if multi_vcpu {
+                    let current = crate::global::current_vcpu_id();
+                    let mut needs_switch = false;
+                    for id in 0..crate::global::MAX_VCPUS {
+                        if id != current
+                            && crate::global::PENDING_SGIS[id].load(Ordering::Relaxed) != 0
+                        {
+                            needs_switch = true;
+                            break;
+                        }
                     }
-                }
 
-                if needs_switch {
-                    crate::global::PREEMPTION_EXIT.store(true, Ordering::Release);
-                    GicV3SystemRegs::write_eoir1(intid);
-                    // No DIR for HW=1 — guest virtual EOI handles deactivation
-                    return false; // exit to host
+                    if needs_switch {
+                        crate::global::PREEMPTION_EXIT.store(true, Ordering::Release);
+                        GicV3SystemRegs::write_eoir1(intid);
+                        return false; // exit to host
+                    }
                 }
             }
 
@@ -720,9 +722,12 @@ fn handle_sgi_trap(value: u64) {
     let target_list = (value & 0xFFFF) as u32;          // bits [15:0]
     let intid = ((value >> 24) & 0xF) as u32;           // bits [27:24]
     let irm = (value >> 40) & 1;                        // bit [40]
-    let current_vcpu = crate::global::CURRENT_VCPU_ID.load(Ordering::Relaxed);
+    let current_vcpu = crate::global::current_vcpu_id();
 
 
+
+    #[allow(unused_mut, unused_assignments)]
+    let mut remote_queued = false;
 
     if irm == 1 {
         // IRM=1: target all PEs except self
@@ -730,12 +735,12 @@ fn handle_sgi_trap(value: u64) {
         for id in 0..crate::global::MAX_VCPUS {
             if id != current_vcpu && online & (1 << id) != 0 {
                 crate::global::PENDING_SGIS[id].fetch_or(1 << intid, Ordering::Release);
+                remote_queued = true;
             }
         }
     } else {
         // IRM=0: target based on TargetList bitmap (bits [15:0]).
         // Bit N of TargetList = PE with Aff0 = (RS * 16) + N.
-        // For our 2-vCPU system (RS=0, Aff1/2/3=0): bit 0 = vCPU 0, bit 1 = vCPU 1.
         for bit in 0..crate::global::MAX_VCPUS {
             if target_list & (1 << bit) == 0 {
                 continue;
@@ -748,8 +753,21 @@ fn handle_sgi_trap(value: u64) {
                 // Queue for target vCPU
                 crate::global::PENDING_SGIS[target_vcpu]
                     .fetch_or(1 << intid, Ordering::Release);
+                remote_queued = true;
             }
         }
+    }
+
+    // Multi-pCPU: wake remote pCPUs that may be in WFI.
+    // SEV wakes all PEs from WFE but not WFI. For WFI, we need a
+    // physical SGI (IPI). For now, use SEV which works if the target
+    // is in WFE (idle loop before CPU_ON). After CPU_ON, the target
+    // pCPU runs with TWI=0 (WFI passthrough), so physical interrupts
+    // like the virtual timer will naturally wake it.
+    // TODO (Task 10): Send physical SGI for guaranteed cross-pCPU wakeup.
+    #[cfg(feature = "multi_pcpu")]
+    if remote_queued {
+        unsafe { core::arch::asm!("sev", options(nostack, nomem)) };
     }
 }
 
@@ -1132,7 +1150,7 @@ fn handle_wfi_with_timer_injection(context: &mut VcpuContext) -> bool {
 fn flush_pending_spis_to_hardware() {
     use crate::arch::aarch64::peripherals::gicv3::GicV3VirtualInterface;
 
-    let vcpu_id = crate::global::CURRENT_VCPU_ID.load(Ordering::Relaxed);
+    let vcpu_id = crate::global::current_vcpu_id();
     if vcpu_id >= crate::global::MAX_VCPUS {
         return;
     }

@@ -236,6 +236,19 @@ impl Vm {
         let config = mapper.config();
         init_stage2_from_config(&config);
 
+        // Save VTTBR/VTCR for secondary pCPUs (they need the same Stage-2 config)
+        #[cfg(feature = "multi_pcpu")]
+        {
+            let vttbr: u64;
+            let vtcr: u64;
+            unsafe {
+                core::arch::asm!("mrs {}, vttbr_el2", out(reg) vttbr);
+                core::arch::asm!("mrs {}, vtcr_el2", out(reg) vtcr);
+            }
+            crate::global::SHARED_VTTBR.store(vttbr, Ordering::Release);
+            crate::global::SHARED_VTCR.store(vtcr, Ordering::Release);
+        }
+
         // Keep mapper alive — page tables are heap-allocated and must not be freed.
         // Leak it intentionally (we only create one per boot).
         core::mem::forget(mapper);
@@ -325,12 +338,58 @@ impl Vm {
     }
 
     /// Run a single vCPU on the current pCPU (multi-pCPU mode).
+    ///
     /// Each pCPU calls this with its own vcpu_id (1:1 affinity).
-    /// Stub — full implementation in Task 8.
+    /// The primary pCPU (pCPU 0) runs vCPU 0, secondary pCPUs create
+    /// their own vCPUs in `secondary_enter_guest()` (main.rs).
+    ///
+    /// This function only returns if the vCPU exits cleanly (HVC exit).
+    /// WFI executes real WFI on the physical CPU (no scheduler needed).
     #[cfg(feature = "multi_pcpu")]
-    pub fn run_vcpu(&mut self, _vcpu_id: usize) -> Result<(), &'static str> {
-        // TODO: Implement in Task 8
-        Err("run_vcpu not yet implemented")
+    #[allow(unreachable_code)]
+    pub fn run_vcpu(&mut self, vcpu_id: usize) -> Result<(), &'static str> {
+        use crate::uart_puts;
+
+        if self.state != VmState::Ready {
+            return Err("VM is not in Ready state");
+        }
+        let vcpu = self.vcpus[vcpu_id].as_mut().ok_or("vCPU not found")?;
+        let _ = vcpu; // drop borrow — re-borrow in loop
+
+        self.state = VmState::Running;
+        crate::global::CURRENT_VCPU_ID.store(vcpu_id, Ordering::Release);
+        crate::global::VCPU_ONLINE_MASK.fetch_or(1 << vcpu_id, Ordering::Release);
+
+        uart_puts(b"[VM] pCPU 0 entering run_vcpu loop for vCPU 0\n");
+
+        loop {
+            // Drain physical UART RX bytes → VirtualUart → inject SPI 33
+            crate::global::DEVICES.drain_uart_rx();
+
+            // Inject pending SGIs and SPIs
+            let vcpu = self.vcpus[vcpu_id].as_mut().unwrap();
+            inject_pending_sgis(vcpu);
+            inject_pending_spis(vcpu);
+
+            // Enter guest
+            match vcpu.run() {
+                Ok(()) => {
+                    // Normal exit — IRQ handler exited to host for processing
+                    // (e.g., UART RX data to drain). Loop back to re-enter.
+                }
+                Err("WFI") => {
+                    // WFI: execute real WFI on the physical CPU.
+                    // pCPU idles until next interrupt (SGI, SPI, timer).
+                    unsafe { core::arch::asm!("wfi") };
+                }
+                Err(_) => {
+                    // Other exit — loop back
+                }
+            }
+        }
+
+        self.state = VmState::Ready;
+        Ok(())
     }
 
     /// Run the VM with SMP scheduling (multiple vCPUs, round-robin on single pCPU)
@@ -452,7 +511,8 @@ impl Vm {
         Ok(())
     }
 
-    /// Boot a secondary vCPU via PSCI CPU_ON
+    /// Boot a secondary vCPU via PSCI CPU_ON (single-pCPU mode only)
+    #[cfg(not(feature = "multi_pcpu"))]
     fn boot_secondary_vcpu(&mut self, id: usize, entry: u64, ctx_id: u64) {
         // Wake up the target CPU's GICR so it accepts pending SGIs.
         // Without this, ICC_SGI1R_EL1 writes targeting this CPU are dropped
@@ -550,14 +610,9 @@ impl Vm {
 
 /// Wake up a GICR redistributor by clearing GICR_WAKER.ProcessorSleep.
 ///
-/// With TALL1 SGI trapping, the physical GICR isn't strictly needed for
-/// SGI delivery. But we still wake it so the redistributor is in a consistent
-/// state and can accept physical PPIs/SPIs if needed.
-///
-/// NOTE: Operates on physical GICR addresses at EL2, bypassing Stage-2.
-/// This works even for GICR0/1/3 whose Stage-2 entries are unmapped
-/// (for guest trap-and-emulate), because EL2 accesses are not subject
-/// to Stage-2 translation.
+/// Only used in single-pCPU mode (secondary vCPUs booted via PSCI CPU_ON).
+/// In multi-pCPU mode, each pCPU wakes its own GICR in secondary_enter_guest().
+#[cfg(not(feature = "multi_pcpu"))]
 fn wake_gicr(rd_base: u64) {
     let waker_addr = (rd_base + platform::GICR_WAKER_OFF) as *mut u32;
     unsafe {
@@ -576,15 +631,8 @@ fn wake_gicr(rd_base: u64) {
 }
 
 /// Ensure INTID 26 (CNTHP timer PPI) is enabled and Group 1 in GICR0.
-///
-/// Must be called before every vCPU entry because the guest may re-initialize
-/// its GIC (ICENABLER0 clears all, then re-enables only guest PPIs), which
-/// would disable our CNTHP timer interrupt.
-///
-/// NOTE: This writes directly to the **physical** GICR0 SGI frame at EL2,
-/// bypassing Stage-2 translation. The VirtualGicr emulator state for vCPU 0
-/// is NOT updated, but this is intentional: INTID 26 is a hypervisor-owned
-/// PPI (EL2 physical timer), not visible to the guest through VirtualGicr.
+/// Only needed in single-pCPU mode (for preemptive scheduling timer).
+#[cfg(not(feature = "multi_pcpu"))]
 #[inline]
 fn ensure_cnthp_enabled() {
     unsafe {
@@ -608,10 +656,8 @@ fn ensure_cnthp_enabled() {
 }
 
 /// Check for pending SGIs and unblock blocked vCPUs that have work.
-///
-/// This ensures blocked (WFI-ing) vCPUs wake up when they receive an IPI.
-/// SGIs are queued in PENDING_SGIS by the TALL1 trap handler when the guest
-/// writes ICC_SGI1R_EL1.
+/// Only used in single-pCPU mode (scheduler-based scheduling).
+#[cfg(not(feature = "multi_pcpu"))]
 fn wake_pending_vcpus(scheduler: &mut Scheduler, vcpus: &[Option<Vcpu>; MAX_VCPUS]) {
     for id in 0..MAX_VCPUS {
         if vcpus[id].is_none() {

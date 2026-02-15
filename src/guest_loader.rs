@@ -272,16 +272,30 @@ pub fn run_guest(config: &GuestConfig) -> Result<(), &'static str> {
         uart_puts(b"[GUEST] EL1/EL2 registers initialized\n");
     }
 
-    // For Linux guests: keep TWI set (trap WFI to EL2 for SMP scheduling),
-    // clear TWE only.
+    // For Linux guests: configure WFI/WFE trapping.
+    // Single-pCPU: keep TWI set (trap WFI for cooperative scheduling), clear TWE.
+    // Multi-pCPU: clear both TWI and TWE (WFI passthrough — real idle on pCPU).
     if config.guest_type == GuestType::Linux {
         unsafe {
+            #[cfg(not(feature = "multi_pcpu"))]
             core::arch::asm!(
                 "mrs x0, hcr_el2",
                 "bic x0, x0, {twe}",
                 "msr hcr_el2, x0",
                 "isb",
                 twe = const HCR_TWE,
+                out("x0") _,
+                options(nostack),
+            );
+            #[cfg(feature = "multi_pcpu")]
+            core::arch::asm!(
+                "mrs x0, hcr_el2",
+                "bic x0, x0, {twe}",
+                "bic x0, x0, {twi}",
+                "msr hcr_el2, x0",
+                "isb",
+                twe = const HCR_TWE,
+                twi = const HCR_TWI,
                 out("x0") _,
                 options(nostack),
             );
@@ -322,6 +336,9 @@ pub fn run_guest(config: &GuestConfig) -> Result<(), &'static str> {
     };
     #[cfg(feature = "multi_pcpu")]
     let result = if config.guest_type == GuestType::Linux {
+        // Wake secondary pCPUs now that all setup is complete.
+        // They will enter rust_main_secondary() and wait for PSCI CPU_ON.
+        wake_secondary_pcpus();
         vm.run_vcpu(0)
     } else {
         vm.run()
@@ -380,4 +397,30 @@ fn enable_physical_uart_irq() {
     }
 
     uart_puts(b"[GUEST] Physical UART RX interrupt enabled (INTID 33)\n");
+}
+
+/// Wake secondary pCPUs by setting BOOT_READY flags and issuing SEV.
+/// Called from primary pCPU after all init is complete (Stage-2, devices, GIC).
+#[cfg(feature = "multi_pcpu")]
+fn wake_secondary_pcpus() {
+    use crate::uart_puts;
+    use crate::platform::SMP_CPUS;
+
+    extern "C" {
+        static mut BOOT_READY: [u32; 4];
+    }
+
+    uart_puts(b"[SMP] Waking secondary pCPUs...\n");
+    unsafe {
+        for i in 1..SMP_CPUS {
+            core::ptr::write_volatile(&mut BOOT_READY[i], 1);
+        }
+        // Memory barrier + SEV to wake secondary CPUs from WFE
+        core::arch::asm!(
+            "dsb sy",
+            "sev",
+            options(nostack, nomem),
+        );
+    }
+    uart_puts(b"[SMP] Secondary pCPUs signaled\n");
 }
