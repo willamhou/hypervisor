@@ -2,7 +2,7 @@
 
 **项目版本**: v0.9.0 (Phase 9 Complete — Multi-pCPU)
 **计划制定日期**: 2026-01-26
-**最后更新**: 2026-02-13
+**最后更新**: 2026-02-15
 **计划类型**: 敏捷迭代，灵活调整
 
 ---
@@ -1042,7 +1042,7 @@ GitHub Actions配置：
 - [ ] 新增 virtio-mmio 网络设备
 - [ ] TX/RX virtqueue
 - [ ] TAP/网络后端
-- **收益**: Guest 网络功能
+- **收益**: Guest 网络功能 (ping, wget, ssh)
 
 **选项 D**: FF-A (Milestone 3)
 - [ ] FFA_VERSION / FFA_ID_GET / FFA_FEATURES
@@ -1051,10 +1051,61 @@ GitHub Actions配置：
 - **收益**: 进入安全扩展阶段
 
 **选项 E**: 完善测试覆盖
-- [ ] 接入 test_timer, test_guest_interrupt
+- [ ] 接入 test_timer, test_guest_interrupt (当前导出但未调用)
 - [ ] 为 GICR emulation, virtio-blk, UART RX 添加专项测试
-- [ ] QEMU integration test 框架
+- [ ] QEMU integration test 框架 (自动化 make run-linux 验证)
+- [ ] 消除 test_guest_irq.rs 的 TODO placeholder
 - **收益**: 提升质量保证
+
+**选项 F**: 多 VM 支持
+- [ ] 多个 VM 实例，独立 Stage-2 页表和 VMID
+- [ ] 跨 VM 内存隔离 (W^X, 权限分离)
+- [ ] Per-VM DeviceManager, 独立 virtio 设备
+- [ ] VM 生命周期管理 (create/destroy/suspend/resume)
+- **收益**: 真正的多租户隔离，向生产级 hypervisor 迈进
+
+**选项 G**: DTB 运行时解析 + 平台抽象
+- [ ] 从 DTB 动态发现 UART/GIC/RAM 地址 (取代 platform.rs 硬编码)
+- [ ] 动态 SMP_CPUS (从 DTB cpu 节点读取，取代编译期常量)
+- [ ] 动态 heap 大小 (基于可用 RAM)
+- [ ] 支持非 QEMU virt 平台 (Raspberry Pi 4, 树莓派 CM4)
+- **收益**: 可移植性，脱离 QEMU-only 限制
+
+**选项 H**: 性能优化 + 诊断
+- [ ] 结构化日志 (DEBUG/INFO/WARN/ERROR 级别，per-module 控制)
+- [ ] VMExit 性能计数器 (每类 exit 的次数和延迟)
+- [ ] panic handler 增强 (栈回溯、寄存器 dump)
+- [ ] 动态 preemption quantum (自适应调度时间片)
+- **收益**: 调试效率、性能可观测性
+
+**选项 I**: 完善系统寄存器仿真
+- [ ] 扩展 MSR/MRS trap 覆盖 (当前未处理的返回 RAZ/WI)
+- [ ] PMU 寄存器仿真 (基础 perf counter)
+- [ ] Debug 寄存器完整仿真 (BRK, Watchpoint)
+- [ ] SVE/SME context save/restore (当前仅跳过指令)
+- [ ] MTE (Memory Tagging Extension) tag save/restore
+- **收益**: Guest 兼容性，支持更多 Linux 功能
+
+**选项 J**: PSCI 完善 + 电源管理
+- [ ] CPU_SUSPEND 实际实现 (power state 管理)
+- [ ] SYSTEM_RESET 实际重启 (QEMU reset)
+- [ ] Multi-pCPU CPU_OFF 实际下电 (pCPU WFI 休眠)
+- [ ] PSCI MIGRATE 支持
+- **收益**: 真实电源管理，接近硬件行为
+
+**选项 K**: 指令解码扩展
+- [ ] LDP/STP (load/store pair) 解码 — Linux 常用于 MMIO
+- [ ] LDAR/STLR (load-acquire/store-release) 解码
+- [ ] ISV=0 fallback 增强 (当前仅 LDR/STR)
+- [ ] 错误 MMIO 指令的诊断报告 (当前静默 None)
+- **收益**: 减少 guest 异常，支持更多设备驱动
+
+**选项 L**: Stage-2 内存增强
+- [ ] 1GB huge page 支持 (减少 TLB miss)
+- [ ] Copy-on-Write (CoW) 页面 (内存效率)
+- [ ] Guest 内存 balloon (动态伸缩)
+- [ ] Stage-2 权限细化 (R/W/X 分离，W^X 保护)
+- **收益**: 内存效率、安全隔离
 
 ---
 
@@ -1063,6 +1114,7 @@ GitHub Actions配置：
 **Milestone 0** (2026-01-25): 项目启动 ✅
 **Milestone 1** (2026-01-26): MVP 基础虚拟化 ✅ — QEMU 启动 BusyBox
 **Milestone 2** (2026-02-13): 增强功能 ✅ — 4 vCPU Linux + virtio-blk + GIC emulation
+**Code Review** (2026-02-15): 8 issues fixed (CRITICAL+HIGH+MEDIUM) ✅ — TERMINAL_EXIT, SpinLock SEV, per-CPU state, LR re-queue
 
 **开发实现阶段**:
 - Phase 1: Initramfs (BusyBox, DTB chosen 节点)
