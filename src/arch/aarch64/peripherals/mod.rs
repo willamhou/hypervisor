@@ -8,6 +8,6 @@ pub mod gic;
 pub mod gicv3;
 pub mod timer;
 
-pub use gic::*;
+// Re-export GICv3 (primary) — gic module available as peripherals::gic for GICv2 fallback
 pub use gicv3::*;
 pub use timer::*;

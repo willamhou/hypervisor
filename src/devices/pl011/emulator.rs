@@ -42,14 +42,16 @@ const UART_PCELLID3: u64 = 0xFFC;
 
 const FR_TXFE: u32 = 1 << 7;     // Transmit FIFO empty
 const FR_RXFF: u32 = 1 << 6;     // Receive FIFO full
-const FR_TXFF: u32 = 1 << 5;     // Transmit FIFO full
+#[allow(dead_code)]
+const FR_TXFF: u32 = 1 << 5;     // Transmit FIFO full (reserved for TX flow control)
 const FR_RXFE: u32 = 1 << 4;     // Receive FIFO empty
 
 // ── Interrupt bits ──────────────────────────────────────────────────
 
 const INT_RX: u32 = 1 << 4;      // Receive interrupt
 const INT_TX: u32 = 1 << 5;      // Transmit interrupt
-const INT_RT: u32 = 1 << 6;      // Receive timeout interrupt
+#[allow(dead_code)]
+const INT_RT: u32 = 1 << 6;      // Receive timeout interrupt (reserved for timeout emulation)
 
 /// UART SPI: SPI 1 = INTID 33
 const UART_SPI_INTID: u32 = 33;

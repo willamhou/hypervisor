@@ -8,6 +8,7 @@ use crate::vcpu::Vcpu;
 use crate::arch::aarch64::{MemoryAttributes, init_stage2};
 use crate::arch::aarch64::defs::*;
 use crate::arch::aarch64::peripherals::gicv3::GicV3VirtualInterface;
+#[cfg(not(feature = "multi_pcpu"))]
 use crate::devices::MmioDevice;
 use crate::scheduler::Scheduler;
 use crate::platform;
@@ -136,13 +137,20 @@ impl Vm {
     #[cfg(not(feature = "linux_guest"))]
     fn init_memory_static(&self, start_aligned: u64, size_aligned: u64) {
         use crate::arch::aarch64::mm::IdentityMapper;
+        use core::cell::UnsafeCell;
 
-        static mut MAPPER: IdentityMapper = IdentityMapper::new();
+        // UnsafeCell wrapper to avoid `static mut` (Rust 2024 compatibility).
+        // SAFETY: Only called from single-threaded unit test path.
+        struct MapperCell(UnsafeCell<IdentityMapper>);
+        unsafe impl Sync for MapperCell {}
+
+        static MAPPER: MapperCell = MapperCell(UnsafeCell::new(IdentityMapper::new()));
         unsafe {
-            MAPPER.reset();
-            MAPPER.map_region(start_aligned, size_aligned, MemoryAttributes::NORMAL);
-            MAPPER.map_region(platform::GIC_REGION_BASE, platform::GIC_REGION_SIZE, MemoryAttributes::DEVICE);
-            init_stage2(&MAPPER);
+            let m = &mut *MAPPER.0.get();
+            m.reset();
+            m.map_region(start_aligned, size_aligned, MemoryAttributes::NORMAL);
+            m.map_region(platform::GIC_REGION_BASE, platform::GIC_REGION_SIZE, MemoryAttributes::DEVICE);
+            init_stage2(&*MAPPER.0.get());
         }
     }
 

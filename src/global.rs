@@ -302,7 +302,7 @@ pub fn inject_spi(intid: u32) {
             let current = crate::percpu::current_cpu_id();
             if target != current {
                 // Send SGI 0 to target pCPU to wake it from WFI
-                let val: u64 = (1u64 << target); // TargetList only, INTID=0
+                let val: u64 = 1u64 << target; // TargetList only, INTID=0
                 unsafe {
                     core::arch::asm!(
                         "msr icc_sgi1r_el1, {val}",

@@ -2,7 +2,6 @@
 ///!
 ///! This test demonstrates full interrupt handling with GICv3 List Registers
 
-use hypervisor::vm::Vm;
 use hypervisor::uart_puts;
 
 /// Simple test that verifies interrupt injection works

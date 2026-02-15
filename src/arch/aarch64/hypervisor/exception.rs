@@ -735,8 +735,8 @@ fn handle_sgi_trap(value: u64) {
 
 
 
-    #[allow(unused_mut, unused_assignments)]
-    let mut remote_queued = false;
+    #[allow(unused_mut)]
+    let mut _remote_queued = false;
 
     if irm == 1 {
         // IRM=1: target all PEs except self
@@ -744,7 +744,7 @@ fn handle_sgi_trap(value: u64) {
         for id in 0..crate::global::MAX_VCPUS {
             if id != current_vcpu && online & (1 << id) != 0 {
                 crate::global::PENDING_SGIS[id].fetch_or(1 << intid, Ordering::Release);
-                remote_queued = true;
+                _remote_queued = true;
             }
         }
     } else {
@@ -762,7 +762,7 @@ fn handle_sgi_trap(value: u64) {
                 // Queue for target vCPU
                 crate::global::PENDING_SGIS[target_vcpu]
                     .fetch_or(1 << intid, Ordering::Release);
-                remote_queued = true;
+                _remote_queued = true;
             }
         }
     }
@@ -772,7 +772,7 @@ fn handle_sgi_trap(value: u64) {
     // just forces the target pCPU out of WFI so it can process the queue.
     // We use SGI 0 as the wakeup IPI (INTID = 0, TargetList = bitmap).
     #[cfg(feature = "multi_pcpu")]
-    if remote_queued {
+    if _remote_queued {
         // Build target bitmap: all target vCPUs that are remote
         let mut target_bitmap: u64 = 0;
         if irm == 1 {

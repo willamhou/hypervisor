@@ -68,17 +68,17 @@ pub fn set_cval(cval: u64) {
 
 /// Read the virtual timer countdown value (ticks until interrupt)
 pub fn get_tval() -> u32 {
-    let tval: u32;
+    let tval: u64;
     unsafe {
-        asm!("mrs {}, cntv_tval_el0", out(reg) tval);
+        asm!("mrs {0:x}, cntv_tval_el0", out(reg) tval);
     }
-    tval
+    tval as u32
 }
 
 /// Write the virtual timer countdown value (ticks until interrupt)
 pub fn set_tval(tval: u32) {
     unsafe {
-        asm!("msr cntv_tval_el0, {}", in(reg) tval);
+        asm!("msr cntv_tval_el0, {0:x}", in(reg) tval as u64);
     }
 }
 
