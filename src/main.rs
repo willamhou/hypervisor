@@ -118,7 +118,9 @@ pub extern "C" fn rust_main() -> ! {
     tests::run_multi_vm_devices_test();
     tests::run_vm_activate_test();
 
-    // Run the guest interrupt injection test (LAST — this blocks forever)
+    // Run the guest interrupt injection test (LAST before guest boot — blocks forever)
+    // Skip when booting guests since it never returns.
+    #[cfg(not(any(feature = "linux_guest", feature = "guest")))]
     tests::run_guest_interrupt_test();
 
     // Check if we should boot a Zephyr guest
@@ -386,12 +388,43 @@ fn print_digit(digit: u8) {
 
 /// Panic handler - required for no_std
 #[panic_handler]
-fn panic(_info: &PanicInfo) -> ! {
+fn panic(info: &PanicInfo) -> ! {
     uart_puts_local(b"\n!!! PANIC !!!\n");
-    
+    if let Some(location) = info.location() {
+        uart_puts_local(b"  at ");
+        uart_puts_local(location.file().as_bytes());
+        uart_puts_local(b":");
+        print_u32(location.line());
+        uart_puts_local(b"\n");
+    }
+    if let Some(msg) = info.message().as_str() {
+        uart_puts_local(b"  ");
+        uart_puts_local(msg.as_bytes());
+        uart_puts_local(b"\n");
+    }
+
     loop {
         unsafe {
             core::arch::asm!("wfe");
         }
+    }
+}
+
+/// Print a u32 value in decimal
+fn print_u32(mut val: u32) {
+    if val == 0 {
+        uart_puts_local(b"0");
+        return;
+    }
+    let mut buf = [0u8; 10];
+    let mut i = 0;
+    while val > 0 {
+        buf[i] = b'0' + (val % 10) as u8;
+        val /= 10;
+        i += 1;
+    }
+    while i > 0 {
+        i -= 1;
+        uart_puts_local(&[buf[i]]);
     }
 }
