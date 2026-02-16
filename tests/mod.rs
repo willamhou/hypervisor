@@ -22,6 +22,10 @@ pub mod test_gicd;
 pub mod test_gicr;
 pub mod test_global;
 pub mod test_device_routing;
+pub mod test_vm_state_isolation;
+pub mod test_vmid_vttbr;
+pub mod test_multi_vm_devices;
+pub mod test_vm_activate;
 
 // Re-export test functions for easy access
 pub use test_guest::run_test as run_guest_test;
@@ -45,3 +49,7 @@ pub use test_gicr::run_gicr_test;
 pub use test_global::run_global_test;
 pub use test_guest_irq::run_irq_test;
 pub use test_device_routing::run_device_routing_test;
+pub use test_vm_state_isolation::run_vm_state_isolation_test;
+pub use test_vmid_vttbr::run_vmid_vttbr_test;
+pub use test_multi_vm_devices::run_multi_vm_devices_test;
+pub use test_vm_activate::run_vm_activate_test;

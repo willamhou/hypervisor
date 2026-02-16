@@ -64,7 +64,7 @@ pub fn run_guest_interrupt_test() {
     uart_puts(b"[IRQ TEST] Creating VM...\n");
     
     // Create VM
-    let mut vm = Vm::new(2);
+    let mut vm = Vm::new(0);
     
     // Get guest code and stack addresses
     let guest_entry = &GUEST_IRQ_CODE.code as *const _ as u64;

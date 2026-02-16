@@ -71,6 +71,12 @@ pub const GICR_ISPENDR0_OFF: u64 = 0x200;
 /// GICR_ICPENDR0 offset within SGI frame
 pub const GICR_ICPENDR0_OFF: u64 = 0x280;
 
+// ── VM 1 memory layout (multi-VM mode) ──────────────────────────────
+pub const VM1_GUEST_LOAD_ADDR: u64 = 0x6800_0000;
+pub const VM1_LINUX_DTB_ADDR: u64 = 0x6700_0000;
+pub const VM1_LINUX_MEM_SIZE: u64 = 256 * 1024 * 1024;
+pub const VM1_VIRTIO_DISK_ADDR: u64 = 0x7800_0000;
+
 // ── Heap ─────────────────────────────────────────────────────────────
 pub const HEAP_START: u64 = 0x4100_0000;
 pub const HEAP_SIZE: u64 = 0x100_0000; // 16MB

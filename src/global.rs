@@ -2,10 +2,22 @@
 ///
 /// This module contains global state that needs to be accessed
 /// from exception handlers and other low-level code.
+///
+/// Per-VM state is stored in `VM_STATE[vm_id]`. The exception handler
+/// reads `CURRENT_VM_ID` to index into the correct VM's state.
 
 use core::cell::UnsafeCell;
 use core::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, AtomicUsize, Ordering};
 use crate::devices::DeviceManager;
+
+/// Maximum number of VMs (compile-time constant)
+pub const MAX_VMS: usize = 2;
+
+/// Maximum number of vCPUs per VM (must match vm::MAX_VCPUS)
+pub const MAX_VCPUS: usize = 8;
+
+/// Currently running VM ID (set by outer scheduler before each VM time-slice)
+pub static CURRENT_VM_ID: AtomicUsize = AtomicUsize::new(0);
 
 // ── Single-pCPU GlobalDeviceManager (UnsafeCell, no locking) ──────
 
@@ -130,8 +142,103 @@ impl GlobalDeviceManager {
     }
 }
 
-/// Global device manager instance
-pub static DEVICES: GlobalDeviceManager = GlobalDeviceManager::new();
+/// Per-VM device managers.
+/// Exception handler indexes by CURRENT_VM_ID.
+pub static DEVICES: [GlobalDeviceManager; MAX_VMS] = [
+    GlobalDeviceManager::new(),
+    GlobalDeviceManager::new(),
+];
+
+/// Get the current VM's device manager.
+#[inline]
+pub fn current_devices() -> &'static GlobalDeviceManager {
+    &DEVICES[CURRENT_VM_ID.load(Ordering::Relaxed)]
+}
+
+// ── Per-VM Global State ──────────────────────────────────────────────
+
+/// Per-VM global state — exception handler indexes by CURRENT_VM_ID.
+///
+/// Contains all the per-vCPU atomics that were previously flat globals
+/// (PENDING_SGIS, PENDING_SPIS, TERMINAL_EXIT, etc.), now scoped per VM.
+pub struct VmGlobalState {
+    /// Per-vCPU pending SGI bitmask (bits 0-15 = SGI 0-15)
+    pub pending_sgis: [AtomicU32; MAX_VCPUS],
+    /// Per-vCPU pending SPI bitmask (bit N = INTID N+32)
+    pub pending_spis: [AtomicU32; MAX_VCPUS],
+    /// Per-vCPU terminal exit flag (PSCI CPU_OFF/SYSTEM_OFF/SYSTEM_RESET)
+    pub terminal_exit: [AtomicBool; MAX_VCPUS],
+    /// Bitmask of online vCPUs for this VM (bit N = vCPU N online)
+    pub vcpu_online_mask: AtomicU64,
+    /// Currently running vCPU ID within this VM
+    pub current_vcpu_id: AtomicUsize,
+    /// Pending PSCI CPU_ON for this VM (single-pCPU mode)
+    pub pending_cpu_on: PendingCpuOn,
+    /// Flag set by IRQ handler to signal preemptive vCPU exit
+    pub preemption_exit: AtomicBool,
+}
+
+impl VmGlobalState {
+    pub const fn new() -> Self {
+        Self {
+            pending_sgis: [
+                AtomicU32::new(0), AtomicU32::new(0),
+                AtomicU32::new(0), AtomicU32::new(0),
+                AtomicU32::new(0), AtomicU32::new(0),
+                AtomicU32::new(0), AtomicU32::new(0),
+            ],
+            pending_spis: [
+                AtomicU32::new(0), AtomicU32::new(0),
+                AtomicU32::new(0), AtomicU32::new(0),
+                AtomicU32::new(0), AtomicU32::new(0),
+                AtomicU32::new(0), AtomicU32::new(0),
+            ],
+            terminal_exit: [
+                AtomicBool::new(false), AtomicBool::new(false),
+                AtomicBool::new(false), AtomicBool::new(false),
+                AtomicBool::new(false), AtomicBool::new(false),
+                AtomicBool::new(false), AtomicBool::new(false),
+            ],
+            vcpu_online_mask: AtomicU64::new(0),
+            current_vcpu_id: AtomicUsize::new(0),
+            pending_cpu_on: PendingCpuOn::new(),
+            preemption_exit: AtomicBool::new(false),
+        }
+    }
+}
+
+/// Global array of per-VM state.
+/// VM 0 is the default — all existing single-VM code paths use VM_STATE[0].
+pub static VM_STATE: [VmGlobalState; MAX_VMS] = [
+    VmGlobalState::new(),
+    VmGlobalState::new(),
+];
+
+/// Get the current VM's global state.
+#[inline]
+pub fn current_vm_state() -> &'static VmGlobalState {
+    &VM_STATE[CURRENT_VM_ID.load(Ordering::Relaxed)]
+}
+
+/// Get a specific VM's global state.
+#[inline]
+pub fn vm_state(vm_id: usize) -> &'static VmGlobalState {
+    &VM_STATE[vm_id]
+}
+
+/// Get the current vCPU ID.
+/// - Single-pCPU: reads current_vm_state().current_vcpu_id.
+/// - Multi-pCPU: reads MPIDR_EL1.Aff0 (1:1 affinity, vCPU N = pCPU N).
+#[inline]
+pub fn current_vcpu_id() -> usize {
+    #[cfg(not(feature = "multi_pcpu"))]
+    { current_vm_state().current_vcpu_id.load(Ordering::Relaxed) }
+
+    #[cfg(feature = "multi_pcpu")]
+    { crate::percpu::current_cpu_id() }
+}
+
+// ── PSCI CPU_ON ──────────────────────────────────────────────────────
 
 /// Pending PSCI CPU_ON request from exception handler to run loop
 pub struct PendingCpuOn {
@@ -175,10 +282,6 @@ impl PendingCpuOn {
         }
     }
 }
-
-/// Global pending CPU_ON request (single-pCPU mode)
-#[cfg(not(feature = "multi_pcpu"))]
-pub static PENDING_CPU_ON: PendingCpuOn = PendingCpuOn::new();
 
 /// Per-vCPU PSCI CPU_ON request (multi-pCPU mode).
 /// Index = target vCPU ID. Each pCPU checks its own slot.
@@ -228,10 +331,6 @@ pub static PENDING_CPU_ON_PER_VCPU: [PerVcpuCpuOnRequest; MAX_VCPUS] = [
     PerVcpuCpuOnRequest::new(), PerVcpuCpuOnRequest::new(),
 ];
 
-/// Bitmask of online vCPUs (bit N = vCPU N is online)
-/// vCPU 0 is online by default
-pub static VCPU_ONLINE_MASK: AtomicU64 = AtomicU64::new(1);
-
 /// Shared Stage-2 translation configuration (set by primary, read by secondaries).
 /// VTTBR_EL2 and VTCR_EL2 must be identical on all pCPUs.
 #[cfg(feature = "multi_pcpu")]
@@ -239,58 +338,10 @@ pub static SHARED_VTTBR: AtomicU64 = AtomicU64::new(0);
 #[cfg(feature = "multi_pcpu")]
 pub static SHARED_VTCR: AtomicU64 = AtomicU64::new(0);
 
-/// Maximum number of vCPUs (must match vm::MAX_VCPUS)
-pub const MAX_VCPUS: usize = 8;
-
-/// Currently running vCPU ID (set by run_smp before each vcpu.run()).
-/// In multi-pCPU mode, use `current_vcpu_id()` instead which reads MPIDR.
-pub static CURRENT_VCPU_ID: AtomicUsize = AtomicUsize::new(0);
-
-/// Get the current vCPU ID.
-/// - Single-pCPU: reads CURRENT_VCPU_ID (set by scheduler before each run).
-/// - Multi-pCPU: reads MPIDR_EL1.Aff0 (1:1 affinity, vCPU N = pCPU N).
-#[inline]
-pub fn current_vcpu_id() -> usize {
-    #[cfg(not(feature = "multi_pcpu"))]
-    { CURRENT_VCPU_ID.load(Ordering::Relaxed) }
-
-    #[cfg(feature = "multi_pcpu")]
-    { crate::percpu::current_cpu_id() }
-}
-
-/// Pending SGI bitmask per vCPU (bits 0-15 = SGI 0-15)
-pub static PENDING_SGIS: [AtomicU32; MAX_VCPUS] = [
-    AtomicU32::new(0), AtomicU32::new(0), AtomicU32::new(0), AtomicU32::new(0),
-    AtomicU32::new(0), AtomicU32::new(0), AtomicU32::new(0), AtomicU32::new(0),
-];
-
-/// Flag set by IRQ handler to signal preemptive vCPU exit
-pub static PREEMPTION_EXIT: AtomicBool = AtomicBool::new(false);
-
-/// Per-vCPU terminal exit flag. Set by PSCI handler for CPU_OFF/SYSTEM_OFF/SYSTEM_RESET.
-/// Checked by run_vcpu()/secondary_enter_guest() to distinguish terminal exits from
-/// normal Ok(()) returns (e.g., IRQ-triggered host returns).
-pub static TERMINAL_EXIT: [AtomicBool; MAX_VCPUS] = [
-    AtomicBool::new(false), AtomicBool::new(false),
-    AtomicBool::new(false), AtomicBool::new(false),
-    AtomicBool::new(false), AtomicBool::new(false),
-    AtomicBool::new(false), AtomicBool::new(false),
-];
-
-/// Pending SPI bitmask per vCPU. Each bit represents an SPI INTID offset
-/// from 32 (bit 0 = INTID 32, bit 1 = INTID 33, ..., bit 31 = INTID 63).
-/// Only covers the first 32 SPIs (INTIDs 32-63), which is sufficient for
-/// UART (SPI 1 = INTID 33) and virtio (SPI 16 = INTID 48).
-pub static PENDING_SPIS: [AtomicU32; MAX_VCPUS] = [
-    AtomicU32::new(0), AtomicU32::new(0), AtomicU32::new(0), AtomicU32::new(0),
-    AtomicU32::new(0), AtomicU32::new(0), AtomicU32::new(0), AtomicU32::new(0),
-];
-
 /// Inject an SPI to the correct vCPU based on GICD_IROUTER.
 ///
 /// Called from exception handler or device completion path.
-/// Reads the IROUTER for the given SPI to determine the target vCPU,
-/// then queues the SPI bit in PENDING_SPIS for that vCPU.
+/// Routes via the current VM's device manager and pending SPI state.
 ///
 /// Only supports INTIDs 32-63 (first 32 SPIs).
 pub fn inject_spi(intid: u32) {
@@ -298,6 +349,8 @@ pub fn inject_spi(intid: u32) {
         return;
     }
     let bit = intid - 32;
+    let vm_id = CURRENT_VM_ID.load(Ordering::Relaxed);
+    let vs = &VM_STATE[vm_id];
 
     // Read IROUTER to find target vCPU.
     // In multi-pCPU mode, read the physical GICD_IROUTER directly (EL2 bypasses
@@ -311,9 +364,9 @@ pub fn inject_spi(intid: u32) {
         (irouter & 0xFF) as usize // Aff0 = vCPU ID
     };
     #[cfg(not(feature = "multi_pcpu"))]
-    let target = DEVICES.route_spi(intid);
+    let target = DEVICES[vm_id].route_spi(intid);
     if target < MAX_VCPUS {
-        PENDING_SPIS[target].fetch_or(1 << bit, Ordering::Release);
+        vs.pending_spis[target].fetch_or(1 << bit, Ordering::Release);
 
         // Multi-pCPU: if target is a remote pCPU, send physical SGI to wake it.
         #[cfg(feature = "multi_pcpu")]

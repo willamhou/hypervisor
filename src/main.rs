@@ -109,11 +109,17 @@ pub extern "C" fn rust_main() -> ! {
     // Run the interrupt queue test
     tests::run_irq_test();
 
-    // Run the guest interrupt injection test
-    tests::run_guest_interrupt_test();
-
     // Run the device manager routing test
     tests::run_device_routing_test();
+
+    // Run multi-VM tests
+    tests::run_vm_state_isolation_test();
+    tests::run_vmid_vttbr_test();
+    tests::run_multi_vm_devices_test();
+    tests::run_vm_activate_test();
+
+    // Run the guest interrupt injection test (LAST — this blocks forever)
+    tests::run_guest_interrupt_test();
 
     // Check if we should boot a Zephyr guest
     #[cfg(feature = "guest")]
@@ -140,8 +146,25 @@ pub extern "C" fn rust_main() -> ! {
         }
     }
 
-    // Check if we should boot a Linux guest
-    #[cfg(feature = "linux_guest")]
+    // Check if we should boot multiple VMs
+    #[cfg(feature = "multi_vm")]
+    {
+        uart_puts_local(b"\n[INIT] Booting multi-VM mode...\n");
+
+        match hypervisor::guest_loader::run_multi_vm_guests() {
+            Ok(()) => {
+                uart_puts_local(b"[INIT] Multi-VM exited normally\n");
+            }
+            Err(e) => {
+                uart_puts_local(b"[INIT] Multi-VM error: ");
+                uart_puts_local(e.as_bytes());
+                uart_puts_local(b"\n");
+            }
+        }
+    }
+
+    // Check if we should boot a Linux guest (single VM)
+    #[cfg(all(feature = "linux_guest", not(feature = "multi_vm")))]
     {
         use hypervisor::guest_loader::{GuestConfig, run_guest};
 
@@ -305,7 +328,7 @@ fn secondary_enter_guest(cpu_id: usize, entry: u64, ctx_id: u64) {
     vcpu.arch_state_mut().init_for_vcpu(cpu_id);
 
     // Mark vCPU online (current_vcpu_id() uses MPIDR in multi_pcpu mode)
-    hypervisor::global::VCPU_ONLINE_MASK.fetch_or(1 << cpu_id, Ordering::Release);
+    hypervisor::global::vm_state(0).vcpu_online_mask.fetch_or(1 << cpu_id, Ordering::Release);
 
     // Reset exception counters for this pCPU
     hypervisor::arch::aarch64::hypervisor::exception::reset_exception_counters();
@@ -330,14 +353,14 @@ fn secondary_enter_guest(cpu_id: usize, entry: u64, ctx_id: u64) {
         match vcpu.run() {
             Ok(()) => {
                 // Check for terminal PSCI exits (CPU_OFF, SYSTEM_OFF, SYSTEM_RESET)
-                if hypervisor::global::TERMINAL_EXIT[cpu_id]
+                if hypervisor::global::vm_state(0).terminal_exit[cpu_id]
                     .compare_exchange(true, false, Ordering::Acquire, Ordering::Relaxed)
                     .is_ok()
                 {
                     uart_puts_local(b"[SMP] vCPU ");
                     print_digit(cpu_id as u8);
                     uart_puts_local(b" terminal exit\n");
-                    hypervisor::global::VCPU_ONLINE_MASK.fetch_and(!(1 << cpu_id), Ordering::Release);
+                    hypervisor::global::vm_state(0).vcpu_online_mask.fetch_and(!(1 << cpu_id), Ordering::Release);
                     // Return to idle loop — pCPU can be reused for future CPU_ON
                     break;
                 }
