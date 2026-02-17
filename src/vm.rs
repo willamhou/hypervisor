@@ -55,6 +55,12 @@ pub struct Vm {
 
     /// Scheduler for multi-vCPU execution
     scheduler: Scheduler,
+
+    /// Saved VTTBR_EL2 (includes VMID in bits [63:48])
+    vttbr: u64,
+
+    /// Saved VTCR_EL2
+    vtcr: u64,
 }
 
 impl Vm {
@@ -64,16 +70,16 @@ impl Vm {
         // Reset and register default devices into the global device manager.
         // GlobalDeviceManager uses a static DeviceManager to avoid stack overflow
         // (VirtualGicd alone is ~10KB due to irouter[988]).
-        crate::global::DEVICES.reset();
-        crate::global::DEVICES.register_device(crate::devices::Device::Uart(
+        crate::global::DEVICES[id].reset();
+        crate::global::DEVICES[id].register_device(crate::devices::Device::Uart(
             crate::devices::pl011::VirtualUart::new(),
         ));
-        crate::global::DEVICES.register_device(crate::devices::Device::Gicd(
+        crate::global::DEVICES[id].register_device(crate::devices::Device::Gicd(
             crate::devices::gic::VirtualGicd::new(),
         ));
         #[cfg(feature = "linux_guest")]
-        crate::global::DEVICES.register_device(crate::devices::Device::Gicr(
-            crate::devices::gic::VirtualGicr::new(platform::SMP_CPUS),
+        crate::global::DEVICES[id].register_device(crate::devices::Device::Gicr(
+            crate::devices::gic::VirtualGicr::new(platform::num_cpus()),
         ));
 
         Self {
@@ -83,6 +89,8 @@ impl Vm {
             vcpu_count: 0,
             memory_initialized: false,
             scheduler: Scheduler::new(),
+            vttbr: 0,
+            vtcr: 0,
         }
     }
 
@@ -94,6 +102,30 @@ impl Vm {
     /// Get current state
     pub fn state(&self) -> VmState {
         self.state
+    }
+
+    /// Get saved VTTBR_EL2 value (includes VMID)
+    pub fn vttbr(&self) -> u64 {
+        self.vttbr
+    }
+
+    /// Get saved VTCR_EL2 value
+    pub fn vtcr(&self) -> u64 {
+        self.vtcr
+    }
+
+    /// Activate this VM's Stage-2 page tables by writing VTTBR_EL2.
+    ///
+    /// With distinct VMIDs per VM, TLB entries are tagged and no flush is needed.
+    pub fn activate_stage2(&self) {
+        unsafe {
+            core::arch::asm!(
+                "msr vttbr_el2, {vttbr}",
+                "isb",
+                vttbr = in(reg) self.vttbr,
+                options(nostack, nomem),
+            );
+        }
     }
 
     /// Get number of vCPUs
@@ -156,7 +188,7 @@ impl Vm {
 
     /// Dynamic mapper path for Linux guest (supports 4KB unmap for GICR trap)
     #[cfg(feature = "linux_guest")]
-    fn init_memory_dynamic(&self, start_aligned: u64, size_aligned: u64) {
+    fn init_memory_dynamic(&mut self, start_aligned: u64, size_aligned: u64) {
         use crate::uart_puts;
         use crate::arch::aarch64::mm::mmu::{DynamicIdentityMapper, MemoryAttribute, init_stage2_from_config};
 
@@ -222,14 +254,15 @@ impl Vm {
         // Guest GICD accesses trap as Data Aborts → VirtualGicd.
         // The hypervisor still accesses physical GICD at EL2 (bypasses Stage-2).
         for page in 0..16u64 {
-            let addr = platform::GICD_BASE + page * PAGE_SIZE_4KB;
+            let addr = crate::dtb::platform_info().gicd_base + page * PAGE_SIZE_4KB;
             mapper.unmap_4kb_page(addr)
                 .expect("Failed to unmap GICD page");
         }
         uart_puts(b"[VM] GICD unmapped (trap to EL2 via VirtualGicd)\n");
 
         // Unmap all GICR frames (each = 128KB = 32 × 4KB pages)
-        for &base in &platform::GICR_RD_BASES {
+        for cpu in 0..platform::num_cpus() {
+            let base = crate::dtb::gicr_rd_base(cpu);
             for page in 0..32u64 {
                 let addr = base + page * PAGE_SIZE_4KB;
                 mapper.unmap_4kb_page(addr)
@@ -240,8 +273,13 @@ impl Vm {
 
         // UART (0x09000000) is NOT mapped — all accesses trap to VirtualUart
 
-        // Install Stage-2 translation
-        let config = mapper.config();
+        // Install Stage-2 translation with VMID
+        let config = crate::arch::aarch64::mm::mmu::Stage2Config::new_with_vmid(
+            mapper.vttbr(),
+            self.id as u16,
+        );
+        self.vttbr = config.vttbr;
+        self.vtcr = config.vtcr;
         init_stage2_from_config(&config);
 
         // Save VTTBR/VTCR for secondary pCPUs (they need the same Stage-2 config)
@@ -365,14 +403,15 @@ impl Vm {
         let _ = vcpu; // drop borrow — re-borrow in loop
 
         self.state = VmState::Running;
-        crate::global::CURRENT_VCPU_ID.store(vcpu_id, Ordering::Release);
-        crate::global::VCPU_ONLINE_MASK.fetch_or(1 << vcpu_id, Ordering::Release);
+        let vs = crate::global::vm_state(self.id);
+        vs.current_vcpu_id.store(vcpu_id, Ordering::Release);
+        vs.vcpu_online_mask.fetch_or(1 << vcpu_id, Ordering::Release);
 
         uart_puts(b"[VM] pCPU 0 entering run_vcpu loop for vCPU 0\n");
 
         loop {
             // Drain physical UART RX bytes → VirtualUart → inject SPI 33
-            crate::global::DEVICES.drain_uart_rx();
+            crate::global::DEVICES[self.id].drain_uart_rx();
 
             // Ensure PPI 27 (virtual timer) is enabled at the physical GICR.
             // Guest's GICR writes are trapped → shadow only → physical stays disabled.
@@ -387,7 +426,7 @@ impl Vm {
             match vcpu.run() {
                 Ok(()) => {
                     // Check for terminal PSCI exits (CPU_OFF, SYSTEM_OFF, SYSTEM_RESET)
-                    if crate::global::TERMINAL_EXIT[vcpu_id]
+                    if vs.terminal_exit[vcpu_id]
                         .compare_exchange(true, false, Ordering::Acquire, Ordering::Relaxed)
                         .is_ok()
                     {
@@ -412,12 +451,113 @@ impl Vm {
         Ok(())
     }
 
+    /// Run one iteration of the VM scheduler: pick a vCPU, run it, handle exit.
+    ///
+    /// Returns `true` if the VM has no runnable vCPUs (all done or blocked).
+    /// Used by both `run_smp()` (single-VM loop) and `run_multi_vm()` (multi-VM).
+    #[cfg(not(feature = "multi_pcpu"))]
+    pub fn run_one_iteration(&mut self) -> bool {
+        let vs = crate::global::vm_state(self.id);
+
+        // Check for pending PSCI CPU_ON requests
+        if let Some((target, entry, ctx_id)) = vs.pending_cpu_on.take() {
+            let vcpu_id = (target & 0xFF) as usize;
+            if vcpu_id < MAX_VCPUS && self.vcpus[vcpu_id].is_none() {
+                crate::uart_puts(b"[VM] Booting secondary vCPU ");
+                crate::uart_put_hex(vcpu_id as u64);
+                crate::uart_puts(b" at entry=0x");
+                crate::uart_put_hex(entry);
+                crate::uart_puts(b"\n");
+                self.boot_secondary_vcpu(vcpu_id, entry, ctx_id);
+            }
+        }
+
+        // Unblock vCPUs with pending SGIs BEFORE scheduling
+        wake_pending_vcpus(&mut self.scheduler, &self.vcpus, self.id);
+
+        // Schedule next vCPU
+        let vcpu_id = match self.schedule() {
+            Some(id) => id,
+            None => {
+                // All vCPUs blocked (WFI). Unblock all online vCPUs so
+                // timers can fire and make progress.
+                let online = vs.vcpu_online_mask.load(Ordering::Relaxed);
+                let mut any = false;
+                for id in 0..MAX_VCPUS {
+                    if online & (1 << id) != 0 && self.vcpus[id].is_some() {
+                        self.scheduler.unblock(id);
+                        any = true;
+                    }
+                }
+                return !any; // true = no vCPUs at all → VM done
+            }
+        };
+
+        // Set current vCPU ID so IRQ/trap handler knows who's running
+        vs.current_vcpu_id.store(vcpu_id, Ordering::Release);
+
+        // Drain physical UART RX bytes into VirtualUart and inject SPI 33
+        while let Some(ch) = crate::global::UART_RX.pop() {
+            if let Some(uart) = crate::global::DEVICES[self.id].uart_mut() {
+                uart.push_rx(ch);
+            }
+        }
+        if let Some(uart) = crate::global::DEVICES[self.id].uart_mut() {
+            if uart.pending_irq().is_some() {
+                crate::global::inject_spi(33);
+            }
+        }
+
+        // Inject pending SGIs and SPIs into this vCPU's arch_state before run
+        inject_pending_sgis(self.vcpus[vcpu_id].as_mut().unwrap());
+        inject_pending_spis(self.vcpus[vcpu_id].as_mut().unwrap());
+
+        // Arm CNTHP preemption watchdog (10ms) in SMP mode
+        let online = vs.vcpu_online_mask.load(Ordering::Relaxed);
+        let multi_vcpu = online != 0 && (online & (online - 1)) != 0;
+        if multi_vcpu {
+            ensure_cnthp_enabled();
+            crate::arch::aarch64::peripherals::timer::arm_preemption_timer();
+        }
+
+        // Run it
+        let vcpu = self.vcpus[vcpu_id].as_mut().unwrap();
+        let result = vcpu.run();
+
+        match result {
+            Ok(()) => {
+                // Check terminal exit first (PSCI CPU_OFF, SYSTEM_OFF, SYSTEM_RESET)
+                if vs.terminal_exit[vcpu_id]
+                    .compare_exchange(true, false, Ordering::Acquire, Ordering::Relaxed)
+                    .is_ok()
+                {
+                    self.scheduler.remove_vcpu(vcpu_id);
+                } else if vs.pending_cpu_on.requested.load(Ordering::Relaxed) {
+                    self.scheduler.yield_current();
+                } else if vs.preemption_exit
+                    .compare_exchange(true, false, Ordering::Acquire, Ordering::Relaxed)
+                    .is_ok()
+                {
+                    self.scheduler.yield_current();
+                } else {
+                    // Normal exit to host (IRQ handler exit, MMIO handled) — yield
+                    self.scheduler.yield_current();
+                }
+            }
+            Err("WFI") => {
+                self.scheduler.block_current();
+            }
+            Err(_) => {
+                self.scheduler.yield_current();
+            }
+        }
+
+        false // VM still has runnable vCPUs
+    }
+
     /// Run the VM with SMP scheduling (multiple vCPUs, round-robin on single pCPU)
     #[cfg(not(feature = "multi_pcpu"))]
     pub fn run_smp(&mut self) -> Result<(), &'static str> {
-        use crate::uart_puts;
-        use crate::uart_put_hex;
-
         if self.state != VmState::Ready {
             return Err("VM is not in Ready state");
         }
@@ -426,104 +566,13 @@ impl Vm {
         }
 
         self.state = VmState::Running;
+        crate::global::CURRENT_VM_ID.store(self.id, Ordering::Release);
+        // Mark vCPU 0 as online (main branch had VCPU_ONLINE_MASK init'd to 1)
+        crate::global::vm_state(self.id).vcpu_online_mask.fetch_or(1, Ordering::Release);
 
         loop {
-            // Check for pending PSCI CPU_ON requests
-            if let Some((target, entry, ctx_id)) = crate::global::PENDING_CPU_ON.take() {
-                let vcpu_id = (target & 0xFF) as usize;
-                if vcpu_id < MAX_VCPUS && self.vcpus[vcpu_id].is_none() {
-                    uart_puts(b"[VM] Booting secondary vCPU ");
-                    uart_put_hex(vcpu_id as u64);
-                    uart_puts(b" at entry=0x");
-                    uart_put_hex(entry);
-                    uart_puts(b"\n");
-                    self.boot_secondary_vcpu(vcpu_id, entry, ctx_id);
-                }
-            }
-
-            // Unblock vCPUs with pending SGIs BEFORE scheduling, so the
-            // scheduler can immediately pick a vCPU that has work.
-            wake_pending_vcpus(&mut self.scheduler, &self.vcpus);
-
-            // Schedule next vCPU
-            let vcpu_id = match self.schedule() {
-                Some(id) => id,
-                None => {
-                    // All vCPUs blocked (WFI). Unblock all online vCPUs so
-                    // timers can fire and make progress.
-                    let online = crate::global::VCPU_ONLINE_MASK.load(Ordering::Relaxed);
-                    let mut any = false;
-                    for id in 0..MAX_VCPUS {
-                        if online & (1 << id) != 0 && self.vcpus[id].is_some() {
-                            self.scheduler.unblock(id);
-                            any = true;
-                        }
-                    }
-                    if !any {
-                        break; // No vCPUs at all
-                    }
-                    continue; // Retry scheduling
-                }
-            };
-
-            // Set current vCPU ID so IRQ/trap handler knows who's running
-            crate::global::CURRENT_VCPU_ID.store(vcpu_id, Ordering::Release);
-
-            // Drain physical UART RX bytes into VirtualUart and inject SPI 33
-            while let Some(ch) = crate::global::UART_RX.pop() {
-                if let Some(uart) = crate::global::DEVICES.uart_mut() {
-                    uart.push_rx(ch);
-                }
-            }
-            if let Some(uart) = crate::global::DEVICES.uart_mut() {
-                if uart.pending_irq().is_some() {
-                    crate::global::inject_spi(33);
-                }
-            }
-
-            // Inject pending SGIs and SPIs into this vCPU's arch_state before run
-            inject_pending_sgis(self.vcpus[vcpu_id].as_mut().unwrap());
-            inject_pending_spis(self.vcpus[vcpu_id].as_mut().unwrap());
-
-            // Arm CNTHP preemption watchdog (10ms) in SMP mode.
-            // This ensures preemption works even when the guest virtual timer
-            // is masked (e.g., during multi_cpu_stop with IRQs disabled).
-            let online = crate::global::VCPU_ONLINE_MASK.load(Ordering::Relaxed);
-            let multi_vcpu = online != 0 && (online & (online - 1)) != 0;
-            if multi_vcpu {
-                ensure_cnthp_enabled();
-                crate::arch::aarch64::peripherals::timer::arm_preemption_timer();
-            }
-
-            // Run it
-            let vcpu = self.vcpus[vcpu_id].as_mut().unwrap();
-            let result = vcpu.run();
-
-            match result {
-                Ok(()) => {
-                    // Normal exit - distinguish CPU_ON, preemption, or real termination
-                    if crate::global::PENDING_CPU_ON.requested.load(Ordering::Relaxed) {
-                        // CPU_ON exit: yield so we process the request at loop top
-                        self.scheduler.yield_current();
-                    } else if crate::global::PREEMPTION_EXIT
-                        .compare_exchange(true, false, Ordering::Acquire, Ordering::Relaxed)
-                        .is_ok()
-                    {
-                        // Preemptive timer exit: yield to let other vCPUs run
-                        self.scheduler.yield_current();
-                    } else {
-                        // Real exit (HVC #1 exit, SYSTEM_OFF, etc.) - remove from scheduler
-                        self.scheduler.remove_vcpu(vcpu_id);
-                    }
-                }
-                Err("WFI") => {
-                    // WFI - block until SGI/IPI wakes this vCPU
-                    self.scheduler.block_current();
-                }
-                Err(_) => {
-                    // Other error - yield
-                    self.scheduler.yield_current();
-                }
+            if self.run_one_iteration() {
+                break;
             }
         }
 
@@ -537,8 +586,8 @@ impl Vm {
         // Wake up the target CPU's GICR so it accepts pending SGIs.
         // Without this, ICC_SGI1R_EL1 writes targeting this CPU are dropped
         // by the physical GIC because GICR_WAKER.ProcessorSleep=1.
-        if id > 0 && id < platform::GICR_RD_BASES.len() {
-            wake_gicr(platform::GICR_RD_BASES[id]);
+        if id > 0 && id < platform::num_cpus() {
+            wake_gicr(crate::dtb::gicr_rd_base(id));
         }
         let mut vcpu = Vcpu::new(id, entry, 0);
         // PSCI CPU_ON: x0 = context_id, booting into EL1h with DAIF masked
@@ -552,7 +601,7 @@ impl Vm {
         self.vcpus[id] = Some(vcpu);
         self.vcpu_count += 1;
         self.scheduler.add_vcpu(id);
-        crate::global::VCPU_ONLINE_MASK.fetch_or(1 << id, Ordering::Release);
+        crate::global::vm_state(self.id).vcpu_online_mask.fetch_or(1 << id, Ordering::Release);
         // Reset exception counters so the new vCPU gets a clean slate
         crate::arch::aarch64::hypervisor::exception::reset_exception_counters();
     }
@@ -628,6 +677,53 @@ impl Vm {
     }
 }
 
+/// Run multiple VMs time-sliced on a single pCPU (round-robin).
+///
+/// Outer loop round-robins between VMs, inner loop runs one vCPU iteration
+/// per VM. Each VM gets its Stage-2 activated before running.
+/// UART RX is only delivered to VM 0. VM 1 has TX-only virtual UART.
+#[cfg(not(feature = "multi_pcpu"))]
+pub fn run_multi_vm(vms: &mut [Vm]) {
+    use crate::uart_puts;
+
+    // Mark all VMs as Running and vCPU 0 as online
+    for vm in vms.iter_mut() {
+        if vm.state != VmState::Ready {
+            uart_puts(b"[MULTI-VM] VM not ready, skipping\n");
+            continue;
+        }
+        vm.state = VmState::Running;
+        crate::global::vm_state(vm.id).vcpu_online_mask.fetch_or(1, Ordering::Release);
+    }
+
+    let mut done = [false; crate::global::MAX_VMS];
+    loop {
+        let mut all_done = true;
+        for vm in vms.iter_mut() {
+            if done[vm.id] {
+                continue;
+            }
+            all_done = false;
+
+            // Switch to this VM's context
+            crate::global::CURRENT_VM_ID.store(vm.id, Ordering::Release);
+            vm.activate_stage2();
+
+            // Run one iteration (pick vCPU, run, handle exit)
+            if vm.run_one_iteration() {
+                done[vm.id] = true;
+                vm.state = VmState::Ready;
+                uart_puts(b"[MULTI-VM] VM ");
+                crate::uart_put_hex(vm.id as u64);
+                uart_puts(b" finished\n");
+            }
+        }
+        if all_done {
+            break;
+        }
+    }
+}
+
 /// Wake up a GICR redistributor by clearing GICR_WAKER.ProcessorSleep.
 ///
 /// Only used in single-pCPU mode (secondary vCPUs booted via PSCI CPU_ON).
@@ -667,7 +763,7 @@ pub fn ensure_vtimer_enabled(cpu_id: usize) {
     // Bits to enable: SGIs 0-15 (for physical IPIs) + PPI 27 (vtimer)
     const ENABLE_MASK: u32 = 0xFFFF | (1 << 27); // bits 0-15 + bit 27
 
-    let sgi_base = platform::GICR_RD_BASES[cpu_id] + 0x10000;
+    let sgi_base = crate::dtb::gicr_sgi_base(cpu_id);
     unsafe {
         // IGROUPR0: ensure Group 1 for SGIs + PPI 27
         let igroupr0 = core::ptr::read_volatile(
@@ -693,7 +789,7 @@ pub fn ensure_vtimer_enabled(cpu_id: usize) {
 #[inline]
 fn ensure_cnthp_enabled() {
     unsafe {
-        let sgi_base = platform::GICR0_SGI_BASE;
+        let sgi_base = crate::dtb::gicr_sgi_base(0);
         // IGROUPR0: ensure Group 1 (read-modify-write)
         let igroupr0 = core::ptr::read_volatile(
             (sgi_base + platform::GICR_IGROUPR0_OFF) as *const u32,
@@ -715,13 +811,14 @@ fn ensure_cnthp_enabled() {
 /// Check for pending SGIs and unblock blocked vCPUs that have work.
 /// Only used in single-pCPU mode (scheduler-based scheduling).
 #[cfg(not(feature = "multi_pcpu"))]
-fn wake_pending_vcpus(scheduler: &mut Scheduler, vcpus: &[Option<Vcpu>; MAX_VCPUS]) {
+fn wake_pending_vcpus(scheduler: &mut Scheduler, vcpus: &[Option<Vcpu>; MAX_VCPUS], vm_id: usize) {
+    let vs = crate::global::vm_state(vm_id);
     for id in 0..MAX_VCPUS {
         if vcpus[id].is_none() {
             continue;
         }
-        if crate::global::PENDING_SGIS[id].load(Ordering::Relaxed) != 0
-            || crate::global::PENDING_SPIS[id].load(Ordering::Relaxed) != 0
+        if vs.pending_sgis[id].load(Ordering::Relaxed) != 0
+            || vs.pending_spis[id].load(Ordering::Relaxed) != 0
         {
             scheduler.unblock(id);
         }
@@ -737,8 +834,9 @@ fn wake_pending_vcpus(scheduler: &mut Scheduler, vcpus: &[Option<Vcpu>; MAX_VCPU
 /// `vcpu.run()` calls `arch_state.restore()` which overwrites hardware LRs.
 pub fn inject_pending_sgis(vcpu: &mut Vcpu) {
     let vcpu_id = vcpu.id();
+    let vs = crate::global::current_vm_state();
 
-    let all = crate::global::PENDING_SGIS[vcpu_id].swap(0, Ordering::Acquire);
+    let all = vs.pending_sgis[vcpu_id].swap(0, Ordering::Acquire);
     if all == 0 {
         return;
     }
@@ -763,7 +861,7 @@ pub fn inject_pending_sgis(vcpu: &mut Vcpu) {
         }
         if !injected {
             // No free LR — re-queue for next entry
-            crate::global::PENDING_SGIS[vcpu_id].fetch_or(1 << sgi, Ordering::Relaxed);
+            vs.pending_sgis[vcpu_id].fetch_or(1 << sgi, Ordering::Relaxed);
         }
     }
 }
@@ -774,8 +872,9 @@ pub fn inject_pending_sgis(vcpu: &mut Vcpu) {
 /// Bit N = SPI with INTID (N + 32).
 pub fn inject_pending_spis(vcpu: &mut Vcpu) {
     let vcpu_id = vcpu.id();
+    let vs = crate::global::current_vm_state();
 
-    let all = crate::global::PENDING_SPIS[vcpu_id].swap(0, Ordering::Acquire);
+    let all = vs.pending_spis[vcpu_id].swap(0, Ordering::Acquire);
     if all == 0 {
         return;
     }
@@ -798,7 +897,7 @@ pub fn inject_pending_spis(vcpu: &mut Vcpu) {
             }
         }
         if !injected {
-            crate::global::PENDING_SPIS[vcpu_id].fetch_or(1 << bit, Ordering::Relaxed);
+            vs.pending_spis[vcpu_id].fetch_or(1 << bit, Ordering::Relaxed);
         }
     }
 }

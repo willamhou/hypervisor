@@ -11,9 +11,12 @@
 
 use crate::devices::MmioDevice;
 
-/// GICD base address
-const GICD_BASE: u64 = 0x08000000;
 const GICD_SIZE: u64 = 0x10000;
+
+/// GICD base address (runtime, from DTB)
+fn gicd_base() -> u64 {
+    crate::dtb::platform_info().gicd_base
+}
 
 /// GICD_CTLR bit definitions
 const GICD_CTLR_ARE_NS: u32 = 1 << 4;  // Affinity Routing Enable, Non-Secure
@@ -89,7 +92,7 @@ impl VirtualGicd {
             ispendr: [0; 32],
             isactiver: [0; 32],
             irouter: [0; 988],
-            num_cpus: crate::platform::SMP_CPUS as u32,
+            num_cpus: crate::platform::num_cpus() as u32,
         }
     }
 
@@ -253,7 +256,7 @@ impl MmioDevice for VirtualGicd {
             // SAFETY: GICD_BASE is valid MMIO at EL2 (bypasses Stage-2).
             // GIC registers are naturally aligned; single-threaded access.
             unsafe {
-                let phys = GICD_BASE + offset;
+                let phys = gicd_base() + offset;
                 match size {
                     1 => core::ptr::write_volatile(phys as *mut u8, fwd_value as u8),
                     2 => core::ptr::write_volatile(phys as *mut u16, fwd_value as u16),
@@ -356,7 +359,7 @@ impl MmioDevice for VirtualGicd {
     }
 
     fn base_address(&self) -> u64 {
-        GICD_BASE
+        gicd_base()
     }
 
     fn size(&self) -> u64 {

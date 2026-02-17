@@ -32,34 +32,19 @@ pub const VIRTIO_DISK_ADDR: u64 = 0x5800_0000;
 pub const VIRTIO_DISK_SIZE: u64 = 2 * 1024 * 1024;
 
 // ── SMP ──────────────────────────────────────────────────────────────
-/// Number of vCPUs for the Linux guest (must match QEMU -smp and DTB)
+/// Maximum CPUs supported (compile-time capacity for array sizing)
+pub const MAX_SMP_CPUS: usize = 8;
+/// Default CPU count (used when DTB is not available)
 pub const SMP_CPUS: usize = 4;
+/// Runtime CPU count from DTB (falls back to SMP_CPUS default)
+pub fn num_cpus() -> usize {
+    crate::dtb::platform_info().num_cpus
+}
 
-// ── GICR redistributor frames ────────────────────────────────────────
-/// GICR 0 RD base
-pub const GICR0_RD_BASE: u64 = 0x080A_0000;
-/// GICR 1 RD base
-pub const GICR1_RD_BASE: u64 = 0x080C_0000;
-/// GICR 0 SGI frame: RD base + 0x10000
-pub const GICR0_SGI_BASE: u64 = 0x080B_0000;
-/// GICR 1 SGI frame: RD base + 0x10000
-pub const GICR1_SGI_BASE: u64 = 0x080D_0000;
-/// GICR 2 RD base
-pub const GICR2_RD_BASE: u64 = 0x080E_0000;
-/// GICR 2 SGI frame: RD base + 0x10000
-pub const GICR2_SGI_BASE: u64 = 0x080F_0000;
-/// GICR 3 RD base
-pub const GICR3_RD_BASE: u64 = 0x0810_0000;
-/// GICR 3 SGI frame: RD base + 0x10000
-pub const GICR3_SGI_BASE: u64 = 0x0811_0000;
-
-/// GICR RD base addresses indexed by vCPU ID
-pub const GICR_RD_BASES: [u64; SMP_CPUS] = [
-    GICR0_RD_BASE,
-    GICR1_RD_BASE,
-    GICR2_RD_BASE,
-    GICR3_RD_BASE,
-];
+// ── GICR redistributor offsets ───────────────────────────────────────
+// Per-CPU GICR bases are now computed at runtime from DTB:
+//   crate::dtb::gicr_rd_base(cpu_id)  → RD frame
+//   crate::dtb::gicr_sgi_base(cpu_id) → SGI frame
 /// GICR_WAKER offset from RD base
 pub const GICR_WAKER_OFF: u64 = 0x014;
 /// GICR_IGROUPR0 offset within SGI frame (interrupt group)
@@ -70,6 +55,12 @@ pub const GICR_ISENABLER0_OFF: u64 = 0x100;
 pub const GICR_ISPENDR0_OFF: u64 = 0x200;
 /// GICR_ICPENDR0 offset within SGI frame
 pub const GICR_ICPENDR0_OFF: u64 = 0x280;
+
+// ── VM 1 memory layout (multi-VM mode) ──────────────────────────────
+pub const VM1_GUEST_LOAD_ADDR: u64 = 0x6800_0000;
+pub const VM1_LINUX_DTB_ADDR: u64 = 0x6700_0000;
+pub const VM1_LINUX_MEM_SIZE: u64 = 256 * 1024 * 1024;
+pub const VM1_VIRTIO_DISK_ADDR: u64 = 0x7800_0000;
 
 // ── Heap ─────────────────────────────────────────────────────────────
 pub const HEAP_START: u64 = 0x4100_0000;

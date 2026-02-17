@@ -4,7 +4,7 @@
 //! used for cross-vCPU interrupt delivery.
 
 use core::sync::atomic::Ordering;
-use hypervisor::global::{PENDING_SGIS, PENDING_SPIS, MAX_VCPUS};
+use hypervisor::global::{vm_state, MAX_VCPUS};
 use hypervisor::uart_puts;
 
 pub fn run_irq_test() {
@@ -14,14 +14,14 @@ pub fn run_irq_test() {
 
     // Reset state
     for i in 0..MAX_VCPUS {
-        PENDING_SGIS[i].store(0, Ordering::Relaxed);
-        PENDING_SPIS[i].store(0, Ordering::Relaxed);
+        vm_state(0).pending_sgis[i].store(0, Ordering::Relaxed);
+        vm_state(0).pending_spis[i].store(0, Ordering::Relaxed);
     }
 
     // Test 1: Queue SGI 1 to vCPU 2
     uart_puts(b"[IRQ Q] Test 1: Queue SGI...\n");
-    PENDING_SGIS[2].fetch_or(1 << 1, Ordering::Release);
-    let pending = PENDING_SGIS[2].load(Ordering::Acquire);
+    vm_state(0).pending_sgis[2].fetch_or(1 << 1, Ordering::Release);
+    let pending = vm_state(0).pending_sgis[2].load(Ordering::Acquire);
     if pending != 0x02 {
         uart_puts(b"[IRQ Q] FAILED: SGI bit not set\n");
         return;
@@ -30,9 +30,9 @@ pub fn run_irq_test() {
 
     // Test 2: Queue multiple SGIs
     uart_puts(b"[IRQ Q] Test 2: Multiple SGIs...\n");
-    PENDING_SGIS[2].fetch_or(1 << 0, Ordering::Release); // SGI 0
-    PENDING_SGIS[2].fetch_or(1 << 7, Ordering::Release); // SGI 7
-    let pending = PENDING_SGIS[2].load(Ordering::Acquire);
+    vm_state(0).pending_sgis[2].fetch_or(1 << 0, Ordering::Release); // SGI 0
+    vm_state(0).pending_sgis[2].fetch_or(1 << 7, Ordering::Release); // SGI 7
+    let pending = vm_state(0).pending_sgis[2].load(Ordering::Acquire);
     if pending != 0x83 { // bits 0,1,7
         uart_puts(b"[IRQ Q] FAILED: expected 0x83\n");
         return;
@@ -41,12 +41,12 @@ pub fn run_irq_test() {
 
     // Test 3: Consume SGIs via swap
     uart_puts(b"[IRQ Q] Test 3: Consume SGIs...\n");
-    let consumed = PENDING_SGIS[2].swap(0, Ordering::AcqRel);
+    let consumed = vm_state(0).pending_sgis[2].swap(0, Ordering::AcqRel);
     if consumed != 0x83 {
         uart_puts(b"[IRQ Q] FAILED: swap should return 0x83\n");
         return;
     }
-    let after = PENDING_SGIS[2].load(Ordering::Acquire);
+    let after = vm_state(0).pending_sgis[2].load(Ordering::Acquire);
     if after != 0 {
         uart_puts(b"[IRQ Q] FAILED: should be 0 after swap\n");
         return;
@@ -56,8 +56,8 @@ pub fn run_irq_test() {
     // Test 4: Queue SPI — bit encoding (INTID 48 = bit 16)
     uart_puts(b"[IRQ Q] Test 4: Queue SPI...\n");
     let spi_bit = 48u32 - 32; // bit 16
-    PENDING_SPIS[0].fetch_or(1 << spi_bit, Ordering::Release);
-    let pending = PENDING_SPIS[0].load(Ordering::Acquire);
+    vm_state(0).pending_spis[0].fetch_or(1 << spi_bit, Ordering::Release);
+    let pending = vm_state(0).pending_spis[0].load(Ordering::Acquire);
     if pending != (1 << 16) {
         uart_puts(b"[IRQ Q] FAILED: SPI bit not set\n");
         return;
@@ -66,8 +66,8 @@ pub fn run_irq_test() {
 
     // Test 5: vCPU isolation — vCPU 1 unaffected
     uart_puts(b"[IRQ Q] Test 5: vCPU isolation...\n");
-    let vcpu1_sgis = PENDING_SGIS[1].load(Ordering::Acquire);
-    let vcpu1_spis = PENDING_SPIS[1].load(Ordering::Acquire);
+    let vcpu1_sgis = vm_state(0).pending_sgis[1].load(Ordering::Acquire);
+    let vcpu1_spis = vm_state(0).pending_spis[1].load(Ordering::Acquire);
     if vcpu1_sgis != 0 || vcpu1_spis != 0 {
         uart_puts(b"[IRQ Q] FAILED: vCPU 1 should have no pending\n");
         return;
@@ -76,8 +76,8 @@ pub fn run_irq_test() {
 
     // Clean up
     for i in 0..MAX_VCPUS {
-        PENDING_SGIS[i].store(0, Ordering::Relaxed);
-        PENDING_SPIS[i].store(0, Ordering::Relaxed);
+        vm_state(0).pending_sgis[i].store(0, Ordering::Relaxed);
+        vm_state(0).pending_spis[i].store(0, Ordering::Relaxed);
     }
 
     uart_puts(b"========================================\n");

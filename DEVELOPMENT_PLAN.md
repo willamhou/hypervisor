@@ -20,9 +20,9 @@ M4: Secure EL2        ░░░░░░░░░░░░░░░░░░░�
 M5: RME & CCA         ░░░░░░░░░░░░░░░░░░░░   0% ⏸️
 ```
 
-**测试覆盖**: ~85 assertions / 19 test suites (100% pass)
+**测试覆盖**: ~105 assertions / 23 test suites (100% pass)
 **代码量**: ~10000+ 行
-**Linux启动**: 4 vCPU, BusyBox shell, virtio-blk
+**Linux启动**: 4 vCPU, BusyBox shell, virtio-blk, multi-VM
 **编译警告**: 最小化
 
 ---
@@ -1059,12 +1059,15 @@ GitHub Actions配置：
 - [ ] QEMU integration test 框架 (自动化 make run-linux 验证) — 留待后续
 - **结果**: 12→19 test suites, 40→~85 assertions
 
-**选项 F**: 多 VM 支持
-- [ ] 多个 VM 实例，独立 Stage-2 页表和 VMID
-- [ ] 跨 VM 内存隔离 (W^X, 权限分离)
-- [ ] Per-VM DeviceManager, 独立 virtio 设备
-- [ ] VM 生命周期管理 (create/destroy/suspend/resume)
-- **收益**: 真正的多租户隔离，向生产级 hypervisor 迈进
+**选项 F**: 多 VM 支持 ✅ **已完成**
+- [x] 多个 VM 实例，独立 Stage-2 页表和 VMID (VTTBR_EL2 bits[63:48])
+- [x] 跨 VM 内存隔离 (VM0: 0x48000000-256MB, VM1: 0x68000000-256MB)
+- [x] Per-VM DeviceManager (`DEVICES[MAX_VMS]`), 独立 virtio-blk
+- [x] Per-VM global state (`VmGlobalState`: SGIs, SPIs, online mask)
+- [x] Two-level scheduler: 外层 VM 轮转 + 内层 vCPU 轮转
+- [x] `multi_vm` feature flag + `make run-multi-vm` target
+- [x] 4 new test suites: vm_state_isolation, vmid_vttbr, multi_vm_devices, vm_activate
+- **已完成**: 2026-02-16
 
 **选项 G**: DTB 运行时解析 + 平台抽象
 - [ ] 从 DTB 动态发现 UART/GIC/RAM 地址 (取代 platform.rs 硬编码)

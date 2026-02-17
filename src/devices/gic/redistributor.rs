@@ -8,14 +8,10 @@
 
 use crate::devices::MmioDevice;
 
-/// GICR base address (first redistributor = GICR0)
-const GICR_BASE: u64 = 0x080A_0000;
 /// Size per redistributor (RD + SGI frames)
 const GICR_PER_CPU: u64 = 0x20000; // 128KB
-/// Maximum vCPUs supported (matches platform::SMP_CPUS)
-const MAX_VCPUS: usize = crate::platform::SMP_CPUS;
-/// Total GICR region size
-const GICR_TOTAL_SIZE: u64 = GICR_PER_CPU * MAX_VCPUS as u64; // 512KB
+/// Maximum vCPUs supported (compile-time capacity)
+const MAX_VCPUS: usize = crate::platform::MAX_SMP_CPUS;
 
 // ── RD frame register offsets ────────────────────────────────────────
 const GICR_CTLR: u64 = 0x0000;
@@ -221,10 +217,10 @@ impl MmioDevice for VirtualGicr {
     }
 
     fn base_address(&self) -> u64 {
-        GICR_BASE
+        crate::dtb::platform_info().gicr_base
     }
 
     fn size(&self) -> u64 {
-        GICR_TOTAL_SIZE
+        GICR_PER_CPU * self.num_vcpus as u64
     }
 }

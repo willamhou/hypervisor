@@ -17,15 +17,41 @@ fn uart_puts_local(s: &[u8]) {
 }
 
 /// Rust entry point called from boot.S
+/// `dtb_addr` is the host DTB address passed by QEMU in x0, preserved by boot.S in x20.
 #[no_mangle]
-pub extern "C" fn rust_main() -> ! {
+pub extern "C" fn rust_main(dtb_addr: usize) -> ! {
     uart_puts_local(b"========================================\n");
     uart_puts_local(b"  ARM64 Hypervisor - Sprint 2.4\n");
     uart_puts_local(b"  API Documentation\n");
     uart_puts_local(b"========================================\n");
     uart_puts_local(b"\n");
     uart_puts_local(b"[INIT] Initializing at EL2...\n");
-    
+
+    // Parse host DTB (before heap init — fdt crate does zero-copy parsing)
+    uart_puts_local(b"[INIT] Parsing host DTB at 0x");
+    hypervisor::uart_put_hex(dtb_addr as u64);
+    uart_puts_local(b"...\n");
+    hypervisor::dtb::init(dtb_addr);
+    if hypervisor::dtb::is_initialized() {
+        let pi = hypervisor::dtb::platform_info();
+        uart_puts_local(b"[INIT] DTB: cpus=");
+        print_digit(pi.num_cpus as u8);
+        uart_puts_local(b" ram=0x");
+        hypervisor::uart_put_hex(pi.ram_base);
+        uart_puts_local(b"+0x");
+        hypervisor::uart_put_hex(pi.ram_size);
+        uart_puts_local(b" uart=0x");
+        hypervisor::uart_put_hex(pi.uart_base);
+        uart_puts_local(b"\n");
+        uart_puts_local(b"[INIT] DTB: gicd=0x");
+        hypervisor::uart_put_hex(pi.gicd_base);
+        uart_puts_local(b" gicr=0x");
+        hypervisor::uart_put_hex(pi.gicr_base);
+        uart_puts_local(b"\n");
+    } else {
+        uart_puts_local(b"[INIT] DTB: parse failed, using defaults\n");
+    }
+
     // Initialize exception handling
     uart_puts_local(b"[INIT] Setting up exception vector table...\n");
     exception::init();
@@ -57,6 +83,9 @@ pub extern "C" fn rust_main() -> ! {
     uart_puts_local(b"[INIT] Initializing heap...\n");
     unsafe { hypervisor::mm::heap::init(); }
     uart_puts_local(b"[INIT] Heap initialized (16MB at 0x41000000)\n\n");
+
+    // Run the DTB parsing test (validates DTB init above)
+    tests::run_dtb_test();
 
     // Run the allocator test
     tests::run_allocator_test();
@@ -109,11 +138,19 @@ pub extern "C" fn rust_main() -> ! {
     // Run the interrupt queue test
     tests::run_irq_test();
 
-    // Run the guest interrupt injection test
-    tests::run_guest_interrupt_test();
-
     // Run the device manager routing test
     tests::run_device_routing_test();
+
+    // Run multi-VM tests
+    tests::run_vm_state_isolation_test();
+    tests::run_vmid_vttbr_test();
+    tests::run_multi_vm_devices_test();
+    tests::run_vm_activate_test();
+
+    // Run the guest interrupt injection test (LAST before guest boot — blocks forever)
+    // Skip when booting guests since it never returns.
+    #[cfg(not(any(feature = "linux_guest", feature = "guest")))]
+    tests::run_guest_interrupt_test();
 
     // Check if we should boot a Zephyr guest
     #[cfg(feature = "guest")]
@@ -140,8 +177,25 @@ pub extern "C" fn rust_main() -> ! {
         }
     }
 
-    // Check if we should boot a Linux guest
-    #[cfg(feature = "linux_guest")]
+    // Check if we should boot multiple VMs
+    #[cfg(feature = "multi_vm")]
+    {
+        uart_puts_local(b"\n[INIT] Booting multi-VM mode...\n");
+
+        match hypervisor::guest_loader::run_multi_vm_guests() {
+            Ok(()) => {
+                uart_puts_local(b"[INIT] Multi-VM exited normally\n");
+            }
+            Err(e) => {
+                uart_puts_local(b"[INIT] Multi-VM error: ");
+                uart_puts_local(e.as_bytes());
+                uart_puts_local(b"\n");
+            }
+        }
+    }
+
+    // Check if we should boot a Linux guest (single VM)
+    #[cfg(all(feature = "linux_guest", not(feature = "multi_vm")))]
     {
         use hypervisor::guest_loader::{GuestConfig, run_guest};
 
@@ -282,8 +336,8 @@ fn secondary_enter_guest(cpu_id: usize, entry: u64, ctx_id: u64) {
     use core::sync::atomic::Ordering;
 
     // Wake this CPU's GICR
-    if cpu_id < platform::GICR_RD_BASES.len() {
-        let rd_base = platform::GICR_RD_BASES[cpu_id];
+    if cpu_id < platform::num_cpus() {
+        let rd_base = hypervisor::dtb::gicr_rd_base(cpu_id);
         let waker_addr = (rd_base + platform::GICR_WAKER_OFF) as *mut u32;
         unsafe {
             let mut waker = core::ptr::read_volatile(waker_addr);
@@ -305,7 +359,7 @@ fn secondary_enter_guest(cpu_id: usize, entry: u64, ctx_id: u64) {
     vcpu.arch_state_mut().init_for_vcpu(cpu_id);
 
     // Mark vCPU online (current_vcpu_id() uses MPIDR in multi_pcpu mode)
-    hypervisor::global::VCPU_ONLINE_MASK.fetch_or(1 << cpu_id, Ordering::Release);
+    hypervisor::global::vm_state(0).vcpu_online_mask.fetch_or(1 << cpu_id, Ordering::Release);
 
     // Reset exception counters for this pCPU
     hypervisor::arch::aarch64::hypervisor::exception::reset_exception_counters();
@@ -330,14 +384,14 @@ fn secondary_enter_guest(cpu_id: usize, entry: u64, ctx_id: u64) {
         match vcpu.run() {
             Ok(()) => {
                 // Check for terminal PSCI exits (CPU_OFF, SYSTEM_OFF, SYSTEM_RESET)
-                if hypervisor::global::TERMINAL_EXIT[cpu_id]
+                if hypervisor::global::vm_state(0).terminal_exit[cpu_id]
                     .compare_exchange(true, false, Ordering::Acquire, Ordering::Relaxed)
                     .is_ok()
                 {
                     uart_puts_local(b"[SMP] vCPU ");
                     print_digit(cpu_id as u8);
                     uart_puts_local(b" terminal exit\n");
-                    hypervisor::global::VCPU_ONLINE_MASK.fetch_and(!(1 << cpu_id), Ordering::Release);
+                    hypervisor::global::vm_state(0).vcpu_online_mask.fetch_and(!(1 << cpu_id), Ordering::Release);
                     // Return to idle loop — pCPU can be reused for future CPU_ON
                     break;
                 }
@@ -363,12 +417,43 @@ fn print_digit(digit: u8) {
 
 /// Panic handler - required for no_std
 #[panic_handler]
-fn panic(_info: &PanicInfo) -> ! {
+fn panic(info: &PanicInfo) -> ! {
     uart_puts_local(b"\n!!! PANIC !!!\n");
-    
+    if let Some(location) = info.location() {
+        uart_puts_local(b"  at ");
+        uart_puts_local(location.file().as_bytes());
+        uart_puts_local(b":");
+        print_u32(location.line());
+        uart_puts_local(b"\n");
+    }
+    if let Some(msg) = info.message().as_str() {
+        uart_puts_local(b"  ");
+        uart_puts_local(msg.as_bytes());
+        uart_puts_local(b"\n");
+    }
+
     loop {
         unsafe {
             core::arch::asm!("wfe");
         }
+    }
+}
+
+/// Print a u32 value in decimal
+fn print_u32(mut val: u32) {
+    if val == 0 {
+        uart_puts_local(b"0");
+        return;
+    }
+    let mut buf = [0u8; 10];
+    let mut i = 0;
+    while val > 0 {
+        buf[i] = b'0' + (val % 10) as u8;
+        val /= 10;
+        i += 1;
+    }
+    while i > 0 {
+        i -= 1;
+        uart_puts_local(&[buf[i]]);
     }
 }

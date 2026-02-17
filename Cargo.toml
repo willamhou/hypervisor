@@ -13,7 +13,7 @@ name = "hypervisor"
 path = "src/main.rs"
 
 [dependencies]
-# 裸机开发，暂无依赖
+fdt = "0.1.5"
 
 [profile.dev]
 panic = "abort"
@@ -24,6 +24,7 @@ default = []
 guest = []
 linux_guest = []
 multi_pcpu = ["linux_guest"]
+multi_vm = ["linux_guest"]
 
 [profile.release]
 panic = "abort"

@@ -4,15 +4,16 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Overview
 
-ARM64 Type-1 bare-metal hypervisor written in Rust (no_std) with ARM64 assembly. Runs at EL2 (hypervisor exception level) and manages guest VMs at EL1. Targets QEMU virt machine. Boots Linux 6.12.12 to BusyBox shell with 4 vCPUs and virtio-blk storage.
+ARM64 Type-1 bare-metal hypervisor written in Rust (no_std) with ARM64 assembly. Runs at EL2 (hypervisor exception level) and manages guest VMs at EL1. Targets QEMU virt machine. Boots Linux 6.12.12 to BusyBox shell with 4 vCPUs and virtio-blk storage. Supports multi-VM with per-VM Stage-2, VMID-tagged TLBs, and two-level scheduling.
 
 ## Build Commands
 
 ```bash
 make              # Build hypervisor
-make run          # Build + run in QEMU — runs 43 unit tests automatically (exit: Ctrl+A then X)
+make run          # Build + run in QEMU — runs 23 test suites automatically (exit: Ctrl+A then X)
 make run-linux    # Build + boot Linux guest (--features linux_guest, 4 vCPUs on 1 pCPU, virtio-blk)
 make run-linux-smp # Build + boot Linux guest (--features multi_pcpu, 4 vCPUs on 4 pCPUs)
+make run-multi-vm # Build + boot 2 Linux VMs time-sliced (--features multi_vm)
 make run-guest GUEST_ELF=/path/to/zephyr.elf  # Boot Zephyr guest (--features guest)
 make debug        # Build + run with GDB server on port 1234
 make clean        # Clean build artifacts
@@ -26,6 +27,7 @@ make fmt          # Format code
 - `guest` — Zephyr guest loading
 - `linux_guest` — Linux guest with DynamicIdentityMapper, GICR trap-and-emulate, virtio-blk
 - `multi_pcpu` — Multi-pCPU support (implies `linux_guest`): 1:1 vCPU-to-pCPU affinity, PSCI boot, TPIDR_EL2 context, SpinLock devices
+- `multi_vm` — Multi-VM support (implies `linux_guest`): 2 VMs time-sliced on 1 pCPU, per-VM Stage-2/VMID, per-VM DeviceManager
 
 **Toolchain requirements**: Rust nightly, `aarch64-linux-gnu-gcc`, `aarch64-linux-gnu-ar`, `aarch64-linux-gnu-objcopy`, `qemu-system-aarch64`
 
@@ -95,6 +97,22 @@ Feature: `multi_pcpu` (implies `linux_guest`). Target: `make run-linux-smp`.
 
 **WFI Passthrough**: TWI cleared in multi-pCPU mode — real WFI on physical CPU, woken by physical interrupts.
 
+### Multi-VM (2 Linux VMs Time-Sliced)
+
+Feature: `multi_vm` (implies `linux_guest`). Target: `make run-multi-vm`.
+
+**Architecture**: 2 VMs round-robin time-sliced on a single pCPU. Each VM has 4 vCPUs scheduled via the inner `run_one_iteration()` loop.
+
+**Per-VM Global State**: `VmGlobalState` struct (indexed by `CURRENT_VM_ID`) replaces flat globals. Each VM has its own `pending_sgis`, `pending_spis`, `vcpu_online_mask`, `current_vcpu_id`, and `preemption_exit`.
+
+**Per-VM DeviceManager**: `DEVICES: [GlobalDeviceManager; MAX_VMS]` array. Exception handler uses `CURRENT_VM_ID` to dispatch MMIO to the correct VM's devices.
+
+**VMID-Tagged Stage-2**: `Stage2Config::new_with_vmid()` encodes VMID in VTTBR_EL2 bits [63:48] for TLB isolation. `Vm::activate_stage2()` writes VTTBR_EL2/VTCR_EL2 before guest entry.
+
+**Two-Level Scheduler**: `run_multi_vm()` → outer VM round-robin → `CURRENT_VM_ID.store()` → `activate_stage2()` → `run_one_iteration()` → inner vCPU round-robin.
+
+**Memory Partitioning**: VM 0 at 0x48000000 (256MB), VM 1 at 0x68000000 (256MB). Each VM gets separate kernel, DTB, initramfs, and virtio-blk disk image loaded by QEMU.
+
 ### GIC Emulation
 
 | Component | Address | Mode | Implementation |
@@ -127,11 +145,15 @@ Full trap-and-emulate (Stage-2 unmapped). TX: guest writes UARTDR → `output_ch
 |--------|---------|---------|
 | Hypervisor code | 0x40000000 | Linker base (RAM start) |
 | Heap | 0x41000000 (16MB) | Page table allocation, `BumpAllocator` |
-| DTB | 0x47000000 | Device tree blob |
-| Kernel | 0x48000000 | Linux Image load address |
-| Initramfs | 0x54000000 | BusyBox initramfs |
-| Disk image | 0x58000000 | virtio-blk backing store |
-| Guest RAM | 0x48000000-0x68000000 | 512MB declared to Linux |
+| DTB (VM 0) | 0x47000000 | Device tree blob |
+| Kernel (VM 0) | 0x48000000 | Linux Image load address |
+| Initramfs (VM 0) | 0x54000000 | BusyBox initramfs |
+| Disk image (VM 0) | 0x58000000 | virtio-blk backing store |
+| VM 0 RAM | 0x48000000-0x58000000 | 256MB (single-VM: 0x48000000-0x68000000 = 512MB) |
+| DTB (VM 1) | 0x67000000 | Device tree blob (multi_vm only) |
+| Kernel (VM 1) | 0x68000000 | Linux Image load address (multi_vm only) |
+| VM 1 RAM | 0x68000000-0x78000000 | 256MB (multi_vm only) |
+| Disk image (VM 1) | 0x78000000 | virtio-blk backing store (multi_vm only) |
 
 **Stage-2 mappers**:
 - `IdentityMapper` (static, 2MB-only) — used by unit tests (`make run`)
@@ -143,16 +165,15 @@ Full trap-and-emulate (Stage-2 unmapped). TX: guest writes UARTDR → `output_ch
 
 | Global | Type | Purpose |
 |--------|------|---------|
-| `DEVICES` | `GlobalDeviceManager` | Exception handler MMIO dispatch (UnsafeCell single-pCPU / SpinLock multi-pCPU) |
+| `DEVICES` | `[GlobalDeviceManager; MAX_VMS]` | Per-VM MMIO dispatch (UnsafeCell single-pCPU / SpinLock multi-pCPU) |
+| `VM_STATE` | `[VmGlobalState; MAX_VMS]` | Per-VM state: SGIs, SPIs, online mask, vCPU ID, preemption |
+| `CURRENT_VM_ID` | `AtomicUsize` | Which VM is currently active |
 | `PENDING_CPU_ON` | `PendingCpuOn` (atomics) | PSCI CPU_ON signaling (single-pCPU mode) |
 | `PENDING_CPU_ON_PER_VCPU` | `[PerVcpuCpuOnRequest; 8]` | Per-vCPU PSCI CPU_ON (multi-pCPU mode) |
 | `SHARED_VTTBR` / `SHARED_VTCR` | `AtomicU64` | Stage-2 config shared from primary to secondaries (multi-pCPU) |
-| `VCPU_ONLINE_MASK` | `AtomicU64` | Bit N = vCPU N online |
-| `CURRENT_VCPU_ID` | `AtomicUsize` | Which vCPU is currently executing |
-| `PENDING_SGIS` | `[AtomicU32; MAX_VCPUS]` | Per-vCPU pending SGI bitmask |
-| `PENDING_SPIS` | `[AtomicU32; MAX_VCPUS]` | Per-vCPU pending SPI bitmask |
-| `PREEMPTION_EXIT` | `AtomicBool` | CNTHP timer fired, yield to scheduler |
 | `UART_RX` | `UartRxRing` | Lock-free ring buffer, IRQ handler → run loop |
+
+`VmGlobalState` contains per-VM: `pending_sgis[MAX_VCPUS]`, `pending_spis[MAX_VCPUS]`, `vcpu_online_mask`, `current_vcpu_id`, `preemption_exit`. Accessed via `vm_state(vm_id)` helper.
 
 ### Device Manager Pattern
 
@@ -175,7 +196,7 @@ Array-based routing: `devices: [Option<Device>; 8]`, scan for `dev.contains(addr
 
 ## Tests
 
-~85 assertions across 19 test suites run automatically on `make run` (no feature flags). Orchestrated sequentially in `src/main.rs`. Located in `tests/`:
+~105 assertions across 23 test suites run automatically on `make run` (no feature flags). Orchestrated sequentially in `src/main.rs`. Located in `tests/`:
 
 | Test | Coverage | Assertions |
 |------|----------|------------|
@@ -195,9 +216,13 @@ Array-based routing: `devices: [Option<Device>; 8]`, scan for `dev.contains(addr
 | `test_gicd` | VirtualGicd shadow state (CTLR, ISENABLER, IROUTER) | 8 |
 | `test_gicr` | VirtualGicr per-vCPU state (TYPER, WAKER, ISENABLER0) | 8 |
 | `test_global` | PendingCpuOn atomics + UartRxRing SPSC buffer | 6 |
-| `test_guest_irq` | PENDING_SGIS/PENDING_SPIS bitmask operations | 5 |
-| `test_guest_interrupt` | Guest interrupt injection + exception vector | 1 |
+| `test_guest_irq` | Per-VM PENDING_SGIS/PENDING_SPIS bitmask operations | 5 |
 | `test_device_routing` | DeviceManager registration, routing, accessors | 6 |
+| `test_vm_state_isolation` | Per-VM SGI/SPI/online_mask/vcpu_id independence | 4 |
+| `test_vmid_vttbr` | VMID 0/1 encoding in VTTBR_EL2 bits [63:48] | 2 |
+| `test_multi_vm_devices` | DEVICES[0]/DEVICES[1] registration + MMIO isolation | 3 |
+| `test_vm_activate` | Vm initial VTTBR/VTCR state | 2 |
+| `test_guest_interrupt` | Guest interrupt injection + exception vector (blocks) | 1 |
 
 Not wired into `main.rs` (exported but not called):
 - `test_timer` — timer interrupt detection (requires manual timer setup)

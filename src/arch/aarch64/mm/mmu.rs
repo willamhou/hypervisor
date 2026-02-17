@@ -157,8 +157,15 @@ pub struct Stage2Config {
 }
 
 impl Stage2Config {
-    /// Create Stage-2 configuration
+    /// Create Stage-2 configuration (VMID 0)
     pub fn new(page_table_addr: u64) -> Self {
+        Self::new_with_vmid(page_table_addr, 0)
+    }
+
+    /// Create Stage-2 configuration with explicit VMID
+    ///
+    /// VTTBR_EL2 format: VMID in bits [63:48], page table base in bits [47:1]
+    pub fn new_with_vmid(page_table_addr: u64, vmid: u16) -> Self {
         // VTCR_EL2 configuration for 4KB granule, 48-bit IPA
         let vtcr = VTCR_T0SZ_48BIT
             | VTCR_SL0_LEVEL0
@@ -168,8 +175,9 @@ impl Stage2Config {
             | VTCR_TG0_4KB
             | VTCR_PS_48BIT;
 
-        // VTTBR_EL2: Page table base address
-        let vttbr = page_table_addr & 0x0000_FFFF_FFFF_FFFE;
+        // VTTBR_EL2: VMID[63:48] | page table base[47:1]
+        let vttbr = (page_table_addr & 0x0000_FFFF_FFFF_FFFE)
+            | ((vmid as u64) << 48);
 
         Self { vttbr, vtcr }
     }
