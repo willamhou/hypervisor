@@ -10,7 +10,7 @@ ARM64 Type-1 bare-metal hypervisor written in Rust (no_std) with ARM64 assembly.
 
 ```bash
 make              # Build hypervisor
-make run          # Build + run in QEMU — runs 23 test suites automatically (exit: Ctrl+A then X)
+make run          # Build + run in QEMU — runs 24 test suites automatically (exit: Ctrl+A then X)
 make run-linux    # Build + boot Linux guest (--features linux_guest, 4 vCPUs on 1 pCPU, virtio-blk)
 make run-linux-smp # Build + boot Linux guest (--features multi_pcpu, 4 vCPUs on 4 pCPUs)
 make run-multi-vm # Build + boot 2 Linux VMs time-sliced (--features multi_vm)
@@ -28,6 +28,8 @@ make fmt          # Format code
 - `linux_guest` — Linux guest with DynamicIdentityMapper, GICR trap-and-emulate, virtio-blk
 - `multi_pcpu` — Multi-pCPU support (implies `linux_guest`): 1:1 vCPU-to-pCPU affinity, PSCI boot, TPIDR_EL2 context, SpinLock devices
 - `multi_vm` — Multi-VM support (implies `linux_guest`): 2 VMs time-sliced on 1 pCPU, per-VM Stage-2/VMID, per-VM DeviceManager
+
+**Note**: `multi_pcpu` and `multi_vm` are mutually exclusive — both imply `linux_guest` but use different scheduling models.
 
 **Toolchain requirements**: Rust nightly, `aarch64-linux-gnu-gcc`, `aarch64-linux-gnu-ar`, `aarch64-linux-gnu-objcopy`, `qemu-system-aarch64`
 
@@ -49,6 +51,7 @@ make fmt          # Format code
 | `DeviceManager` | `src/devices/mod.rs` | Enum-dispatch MMIO routing to emulated devices |
 | `Scheduler` | `src/scheduler.rs` | Round-robin vCPU scheduler with block/unblock |
 | `ExitReason` | `src/arch/aarch64/regs.rs` | VM exit causes: WfiWfe, HvcCall, DataAbort, etc. |
+| `PlatformInfo` | `src/dtb.rs` | Runtime DTB parsing: UART, GIC, RAM, CPU count discovery |
 
 ### Exception Handling Flow
 ```
@@ -68,16 +71,18 @@ ERET back to guest
 
 ### SMP / Multi-vCPU
 
-The `run_smp()` loop in `src/vm.rs` runs all vCPUs on a single physical CPU via cooperative + preemptive scheduling:
+`run_smp()` calls `run_one_iteration()` in a loop. Each iteration runs one vCPU on a single physical CPU via cooperative + preemptive scheduling:
 
-1. Check `PENDING_CPU_ON` atomics → `boot_secondary_vcpu()` (PSCI CPU_ON)
+1. Check per-VM `pending_cpu_on` → `boot_secondary_vcpu()` (PSCI CPU_ON)
 2. Wake vCPUs with pending SGIs/SPIs → `scheduler.unblock()`
-3. Pick next vCPU (round-robin) → set `CURRENT_VCPU_ID`
+3. Pick next vCPU (round-robin) → set `current_vcpu_id`
 4. Drain UART RX ring → inject SPI 33
 5. Inject pending SGIs/SPIs into `arch_state.ich_lr[]`
-6. Arm CNTHP preemption timer (10ms, INTID 26)
+6. Arm CNTHP preemption timer (10ms, INTID 26) — only when 2+ vCPUs online
 7. `vcpu.run()` → save/restore arch state → `enter_guest()` → ERET
-8. Handle exit: WFI→block, preemption→yield, real exit→remove
+8. Handle exit: terminal→remove, CPU_ON/preemption→yield, WFI→block, other→yield
+
+**Important**: `vcpu_online_mask` must include vCPU 0 at boot — without it, preemption timer never activates.
 
 **SGI/IPI emulation**: ICC_SGI1R_EL1 trapped via ICH_HCR_EL2.TALL1=1 → decoded (TargetList[15:0], Aff1[23:16], INTID[27:24]) → `PENDING_SGIS[vcpu_id]` atomics → injected before next entry.
 
@@ -139,6 +144,21 @@ Guest writes QueueNotify → `process_request()` → read/write disk image via `
 
 Full trap-and-emulate (Stage-2 unmapped). TX: guest writes UARTDR → `output_char()` to physical UART. RX: physical IRQ (INTID 33) → `UART_RX` ring buffer → `VirtualUart.push_rx()` → inject SPI 33. Linux amba-pl011 probe requires PeriphID/PrimeCellID registers.
 
+### DTB Runtime Parsing (`src/dtb.rs`)
+
+At boot, QEMU passes the host DTB address in x0. `boot.S` preserves it in callee-saved x20, then passes to `rust_main(dtb_addr: usize)`. `dtb::init()` uses the `fdt` crate (v0.1.5, zero-copy, no-alloc) to discover platform hardware:
+
+- **UART**: `arm,pl011` compatible → `uart_base`
+- **GIC**: `arm,gic-v3` compatible → `gicd_base`, `gicr_base`, `gicr_size`
+- **RAM**: `/memory` node → `ram_base`, `ram_size`
+- **CPUs**: `cpus` node → `num_cpus`
+
+Helpers: `gicr_rd_base(cpu_id) = gicr_base + cpu_id * 0x20000`, `gicr_sgi_base(cpu_id) = gicr_rd_base + 0x10000`.
+
+Falls back to QEMU virt defaults if DTB parse fails (e.g., QEMU passes addr=0 with `-kernel`). `platform::num_cpus()` reads DTB at runtime; `MAX_SMP_CPUS = 8` is the compile-time array capacity.
+
+**Pre-DTB code** (`uart_puts` in `lib.rs`, GICD/GICC statics in `gic.rs`) still uses hardcoded `platform::UART_BASE`/`GICD_BASE` because they run before DTB init or require `const` for Rust `static`.
+
 ### Memory Layout
 
 | Region | Address | Purpose |
@@ -166,14 +186,13 @@ Full trap-and-emulate (Stage-2 unmapped). TX: guest writes UARTDR → `output_ch
 | Global | Type | Purpose |
 |--------|------|---------|
 | `DEVICES` | `[GlobalDeviceManager; MAX_VMS]` | Per-VM MMIO dispatch (UnsafeCell single-pCPU / SpinLock multi-pCPU) |
-| `VM_STATE` | `[VmGlobalState; MAX_VMS]` | Per-VM state: SGIs, SPIs, online mask, vCPU ID, preemption |
+| `VM_STATE` | `[VmGlobalState; MAX_VMS]` | Per-VM state (see below) |
 | `CURRENT_VM_ID` | `AtomicUsize` | Which VM is currently active |
-| `PENDING_CPU_ON` | `PendingCpuOn` (atomics) | PSCI CPU_ON signaling (single-pCPU mode) |
-| `PENDING_CPU_ON_PER_VCPU` | `[PerVcpuCpuOnRequest; 8]` | Per-vCPU PSCI CPU_ON (multi-pCPU mode) |
+| `PENDING_CPU_ON_PER_VCPU` | `[PerVcpuCpuOnRequest; 8]` | Per-vCPU PSCI CPU_ON (multi-pCPU mode only) |
 | `SHARED_VTTBR` / `SHARED_VTCR` | `AtomicU64` | Stage-2 config shared from primary to secondaries (multi-pCPU) |
 | `UART_RX` | `UartRxRing` | Lock-free ring buffer, IRQ handler → run loop |
 
-`VmGlobalState` contains per-VM: `pending_sgis[MAX_VCPUS]`, `pending_spis[MAX_VCPUS]`, `vcpu_online_mask`, `current_vcpu_id`, `preemption_exit`. Accessed via `vm_state(vm_id)` helper.
+`VmGlobalState` contains per-VM: `pending_sgis[MAX_VCPUS]`, `pending_spis[MAX_VCPUS]`, `terminal_exit[MAX_VCPUS]`, `vcpu_online_mask`, `current_vcpu_id`, `pending_cpu_on`, `preemption_exit`. Accessed via `vm_state(vm_id)` or `current_vm_state()`.
 
 ### Device Manager Pattern
 
@@ -196,10 +215,11 @@ Array-based routing: `devices: [Option<Device>; 8]`, scan for `dev.contains(addr
 
 ## Tests
 
-~105 assertions across 23 test suites run automatically on `make run` (no feature flags). Orchestrated sequentially in `src/main.rs`. Located in `tests/`:
+113 assertions across 24 test suites run automatically on `make run` (no feature flags). Orchestrated sequentially in `src/main.rs`. Located in `tests/`:
 
 | Test | Coverage | Assertions |
 |------|----------|------------|
+| `test_dtb` | DTB parsing, PlatformInfo defaults, GICR helpers | 8 |
 | `test_allocator` | Bump allocator page alloc/free | 4 |
 | `test_heap` | Global heap (Box, Vec) | 4 |
 | `test_dynamic_pagetable` | DynamicIdentityMapper 2MB mapping + 4KB unmap | 6 |
@@ -259,4 +279,4 @@ Secondary physical CPUs start powered off — they do NOT execute `_start`. Must
 Guest GICR writes only update `VirtualGicr` shadow state. `ensure_vtimer_enabled()` programs physical GICR ISENABLER0 for SGIs 0-15 + PPI 27 before every guest entry.
 
 ### Platform Constants
-All board-specific addresses are centralized in `src/platform.rs`. `SMP_CPUS` is the single source of truth for vCPU count — must match QEMU `-smp` and DTB cpu nodes.
+Guest-specific addresses (heap, kernel load, virtio disk) are in `src/platform.rs`. Host hardware addresses (UART, GIC, RAM, CPU count) are discovered at runtime from DTB via `src/dtb.rs` — use `platform::num_cpus()` and `dtb::platform_info()` instead of hardcoded constants. `MAX_SMP_CPUS = 8` is the compile-time array capacity; `SMP_CPUS = 4` is the fallback default.

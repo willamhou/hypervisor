@@ -1,6 +1,6 @@
 # ARM64 Hypervisor
 
-A bare-metal Type-1 hypervisor for ARM64 (AArch64) written in Rust. Runs at EL2 and manages guest VMs at EL1, targeting QEMU virt machine. Successfully boots Linux 6.12 (Debian arm64).
+A bare-metal Type-1 hypervisor for ARM64 (AArch64) written in Rust. Runs at EL2 and manages guest VMs at EL1, targeting QEMU virt machine. Boots Linux 6.12.12 to BusyBox shell with 4 vCPUs, virtio-blk storage, and multi-VM support.
 
 ## Project Goals
 
@@ -11,20 +11,21 @@ A bare-metal Type-1 hypervisor for ARM64 (AArch64) written in Rust. Runs at EL2 
 
 ## Features
 
-- **vCPU Management**: Complete virtual CPU abstraction with state machine, context save/restore, multi-vCPU scheduling
-- **Stage-2 Memory**: Dynamic page table allocation (bump allocator + heap), 2MB block identity mapping, NORMAL/DEVICE attributes
-- **GICv3 Virtual Interface**: List Register-based interrupt injection with HW=1 linking, EOImode=1 for correct deactivation
-- **Timer Virtualization**: Virtual timer (PPI 27) with physical-virtual HW linking, automatic EOI via guest virtual EOI
-- **Device Emulation**: Trap-and-emulate MMIO framework with PL011 UART and GIC Distributor
-- **GIC Passthrough**: Guest direct access to GICD/GICR, virtual ICC registers via ICH_HCR_EL2
-- **Linux Guest Boot**: Boots Linux 6.12 (Debian arm64) with full kernel initialization
-- **Architecture Traits**: Portable trait abstractions for future RISC-V support
+- **Multi-VM**: 2 Linux VMs time-sliced on 1 pCPU with per-VM Stage-2, VMID-tagged TLBs, independent device managers
+- **Multi-pCPU**: 4 vCPUs on 4 physical CPUs (1:1 affinity) with PSCI boot, TPIDR_EL2 per-CPU context
+- **SMP Scheduling**: 4 vCPUs on 1 pCPU with cooperative (WFI) + preemptive (10ms CNTHP timer) scheduling
+- **DTB Runtime Parsing**: Discovers UART, GIC, RAM, CPU count from host device tree at boot
+- **Virtio-blk**: Block device via virtio-mmio transport with in-memory disk image backend
+- **GICv3 Emulation**: Full GICD/GICR trap-and-emulate with write-through, List Register injection, SGI/IPI emulation
+- **Device Emulation**: PL011 UART (TX+RX), GIC Distributor/Redistributor, virtio-mmio
+- **Stage-2 Memory**: Dynamic page tables (2MB blocks + 4KB pages), VMID-tagged TLBs, heap gap protection
+- **Linux Guest Boot**: Boots Linux 6.12.12 (custom defconfig) to BusyBox shell with 4 CPUs and virtio-blk
 
 ## Current Status
 
-**Progress**: Milestone 1 complete, Milestone 2 (Sprint 2.1-2.4) complete, code refactored
-**Tests**: 15 test files, all passing
-**Code**: ~7,000 lines (src + tests)
+**Progress**: Milestones 0-2 complete, multi-VM + multi-pCPU + DTB parsing implemented
+**Tests**: 24 test suites (~113 assertions), all passing
+**Code**: ~10,000 lines (src + tests)
 
 ### Milestone Overview
 
@@ -43,10 +44,11 @@ M5: RME & CCA             ░░░░░░░░░░░░░░░░░░
 
 ### Latest Updates
 
-- **Code Refactoring**: Extracted ~200 magic numbers into named constants (`defs.rs`, `platform.rs`), removed dead code, converted `static mut` to atomics, added architecture-portable traits
-- **Linux Boot**: Linux 6.12 (Debian arm64) boots fully under the hypervisor with HW=1 timer virtualization (reaches "VFS: Unable to mount root fs" — expected without rootfs)
-- **GICv3**: List Register-based interrupt injection, HW bit linking for timer auto-deactivation
-- **Multi-vCPU**: Round-robin scheduler, up to 8 vCPUs per VM
+- **Multi-VM**: 2 Linux VMs time-sliced on 1 pCPU, both boot to BusyBox shell
+- **Multi-pCPU**: 4 vCPUs on 4 physical CPUs with PSCI boot and physical IPI delivery
+- **DTB Runtime Parsing**: Hardware discovery from host device tree (UART, GIC, RAM, CPU count)
+- **Virtio-blk**: Block storage via virtio-mmio transport with in-memory disk backend
+- **Linux Boot**: Linux 6.12.12 boots to BusyBox shell with 4 CPUs, virtio-blk, full userspace
 
 ## Quick Start
 
@@ -64,12 +66,14 @@ sudo apt install qemu-system-arm gcc-aarch64-linux-gnu
 ### Build & Run
 
 ```bash
-make              # Build hypervisor
-make run          # Build and run tests in QEMU (exit: Ctrl+A then X)
-make run-linux    # Boot Linux guest (requires kernel Image + DTB)
-make debug        # Run with GDB server on port 1234
-make clippy       # Run linter
-make fmt          # Format code
+make                # Build hypervisor
+make run            # Build and run tests in QEMU (exit: Ctrl+A then X)
+make run-linux      # Boot Linux guest (4 vCPUs on 1 pCPU, virtio-blk)
+make run-linux-smp  # Boot Linux guest (4 vCPUs on 4 pCPUs)
+make run-multi-vm   # Boot 2 Linux VMs time-sliced on 1 pCPU
+make debug          # Run with GDB server on port 1234
+make clippy         # Run linter
+make fmt            # Format code
 ```
 
 ### Debugging
@@ -142,6 +146,9 @@ Restore context → ERET back to guest
 | Arch Constants | `src/arch/aarch64/defs.rs` | ARM64 named constants |
 | Board Constants | `src/platform.rs` | QEMU virt platform constants |
 | Arch Traits | `src/arch/traits.rs` | Portable trait definitions |
+| DTB Parser | `src/dtb.rs` | Runtime hardware discovery from host DTB |
+| Virtio-blk | `src/devices/virtio/` | virtio-mmio transport + block device backend |
+| Global State | `src/global.rs` | Per-VM atomics, UART RX ring, pending SGIs/SPIs |
 | Guest Loader | `src/guest_loader.rs` | Linux/Zephyr boot configuration |
 
 ### Memory Layout
@@ -149,7 +156,7 @@ Restore context → ERET back to guest
 - **IPA Space**: 48-bit, 4KB granule, 2MB block mapping
 - **Stage-2**: Identity mapping (GPA == HPA)
 - **Guest RAM**: 0x40000000 (base), 0x48000000 (kernel load address)
-- **GIC**: 0x08000000 (GICD), 0x080A0000 (GICR) — passthrough
+- **GIC**: 0x08000000 (GICD), 0x080A0000 (GICR) — trap-and-emulate
 - **UART**: 0x09000000 (PL011) — emulated
 - **Heap**: 0x41000000, 16MB bump allocator
 
@@ -162,7 +169,7 @@ Restore context → ERET back to guest
 
 ## Testing
 
-All tests run automatically on `make run`. 15 test files covering:
+24 test suites (~113 assertions) run automatically on `make run`:
 
 | Test | Description |
 |------|-------------|
@@ -174,35 +181,18 @@ All tests run automatically on `make run`. 15 test files covering:
 | `test_vm_scheduler` | VM-integrated scheduling |
 | `test_gicv3_virt` | GICv3 virtual interface and List Registers |
 | `test_guest` | Basic guest execution and hypercall |
-| `test_timer` | Timer interrupt detection at EL2 |
 | `test_mmio` | MMIO device emulation |
 | `test_complete_interrupt` | End-to-end interrupt flow with GICv3 LRs |
-| `test_guest_irq` | Guest interrupt handling |
-| `test_guest_interrupt` | Guest interrupt injection |
+| `test_guest_irq` | SGI/SPI pending bitmask operations |
 | `test_guest_loader` | Guest loader configuration |
 | `test_simple_guest` | Simple guest boot and exit |
-
-```
-$ make run
-...
-[TEST] Allocator Test PASSED
-[TEST] Heap Test PASSED
-[TEST] Dynamic Page Table Test PASSED
-[TEST] Multi-vCPU Test PASSED
-[TEST] Scheduler Test PASSED
-[TEST] VM Scheduler Test PASSED
-[TEST] GICv3 Virtualization Test PASSED
-[TEST] Guest Execution Test PASSED
-[TEST] Timer Interrupt Test PASSED
-[TEST] MMIO Device Test PASSED
-[TEST] Complete Interrupt Test PASSED
-[TEST] Guest Loader Test PASSED
-[TEST] Simple Guest Test PASSED
-
-========================================
-All Sprints Complete (2.1-2.4)
-========================================
-```
+| `test_decode` | MMIO instruction decode (ISS + instruction paths) |
+| `test_gicd` | GICD shadow state (CTLR, ISENABLER, IROUTER) |
+| `test_gicr` | GICR per-vCPU state (TYPER, WAKER, ISENABLER0) |
+| `test_global` | PendingCpuOn atomics + UartRxRing SPSC buffer |
+| `test_device_routing` | DeviceManager registration, routing, accessors |
+| `test_dtb` | DTB runtime parsing validation |
+| `test_guest_interrupt` | Guest interrupt injection + exception vector |
 
 ## Roadmap
 
@@ -211,7 +201,10 @@ All Sprints Complete (2.1-2.4)
 - M0: Project setup, QEMU boot, UART output
 - M1: vCPU framework, Stage-2 MMU, exception handling, device emulation, interrupt injection
 - M2: GICv3 virtual interface, dynamic memory, multi-vCPU scheduler, API documentation
-- Linux 6.12 guest boot with HW=1 timer virtualization
+- Linux 6.12.12 guest boot to BusyBox shell with 4 vCPUs and virtio-blk
+- Multi-pCPU: 4 vCPUs on 4 physical CPUs with PSCI boot, TPIDR_EL2, physical IPI
+- Multi-VM: 2 Linux VMs time-sliced on 1 pCPU with per-VM Stage-2 and VMID TLBs
+- DTB runtime parsing: hardware discovery from host device tree
 - Code refactoring: named constants, dead code removal, architecture traits
 
 ### Planned

@@ -1070,11 +1070,13 @@ GitHub Actions配置：
 - **已完成**: 2026-02-16
 
 **选项 G**: DTB 运行时解析 + 平台抽象
-- [ ] 从 DTB 动态发现 UART/GIC/RAM 地址 (取代 platform.rs 硬编码)
-- [ ] 动态 SMP_CPUS (从 DTB cpu 节点读取，取代编译期常量)
+- [x] 从 DTB 动态发现 UART/GIC/RAM 地址 (取代 platform.rs 硬编码) — `src/dtb.rs` (fdt crate v0.1.5)
+- [x] 动态 SMP_CPUS (从 DTB cpu 节点读取) — `platform::num_cpus()`, `MAX_SMP_CPUS=8` 编译期容量
+- [x] `gicr_rd_base(cpu_id)` / `gicr_sgi_base(cpu_id)` 运行时计算 GICR 帧地址
+- [x] DTB test suite (`test_dtb`, 8 assertions)
 - [ ] 动态 heap 大小 (基于可用 RAM)
 - [ ] 支持非 QEMU virt 平台 (Raspberry Pi 4, 树莓派 CM4)
-- **收益**: 可移植性，脱离 QEMU-only 限制
+- **已完成 (核心)**: 2026-02-17 — 剩余: 动态 heap + 非 QEMU 平台
 
 **选项 H**: 性能优化 + 诊断
 - [ ] 结构化日志 (DEBUG/INFO/WARN/ERROR 级别，per-module 控制)
