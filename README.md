@@ -191,6 +191,10 @@ Restore context → ERET back to guest
 | `test_gicr` | GICR per-vCPU state (TYPER, WAKER, ISENABLER0) |
 | `test_global` | PendingCpuOn atomics + UartRxRing SPSC buffer |
 | `test_device_routing` | DeviceManager registration, routing, accessors |
+| `test_vm_state_isolation` | Per-VM state isolation |
+| `test_vmid_vttbr` | VMID encoding in VTTBR |
+| `test_multi_vm_devices` | Per-VM device manager isolation |
+| `test_vm_activate` | VM Stage-2 activation |
 | `test_dtb` | DTB runtime parsing validation |
 | `test_guest_interrupt` | Guest interrupt injection + exception vector |
 
