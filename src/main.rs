@@ -17,15 +17,41 @@ fn uart_puts_local(s: &[u8]) {
 }
 
 /// Rust entry point called from boot.S
+/// `dtb_addr` is the host DTB address passed by QEMU in x0, preserved by boot.S in x20.
 #[no_mangle]
-pub extern "C" fn rust_main() -> ! {
+pub extern "C" fn rust_main(dtb_addr: usize) -> ! {
     uart_puts_local(b"========================================\n");
     uart_puts_local(b"  ARM64 Hypervisor - Sprint 2.4\n");
     uart_puts_local(b"  API Documentation\n");
     uart_puts_local(b"========================================\n");
     uart_puts_local(b"\n");
     uart_puts_local(b"[INIT] Initializing at EL2...\n");
-    
+
+    // Parse host DTB (before heap init — fdt crate does zero-copy parsing)
+    uart_puts_local(b"[INIT] Parsing host DTB at 0x");
+    hypervisor::uart_put_hex(dtb_addr as u64);
+    uart_puts_local(b"...\n");
+    hypervisor::dtb::init(dtb_addr);
+    if hypervisor::dtb::is_initialized() {
+        let pi = hypervisor::dtb::platform_info();
+        uart_puts_local(b"[INIT] DTB: cpus=");
+        print_digit(pi.num_cpus as u8);
+        uart_puts_local(b" ram=0x");
+        hypervisor::uart_put_hex(pi.ram_base);
+        uart_puts_local(b"+0x");
+        hypervisor::uart_put_hex(pi.ram_size);
+        uart_puts_local(b" uart=0x");
+        hypervisor::uart_put_hex(pi.uart_base);
+        uart_puts_local(b"\n");
+        uart_puts_local(b"[INIT] DTB: gicd=0x");
+        hypervisor::uart_put_hex(pi.gicd_base);
+        uart_puts_local(b" gicr=0x");
+        hypervisor::uart_put_hex(pi.gicr_base);
+        uart_puts_local(b"\n");
+    } else {
+        uart_puts_local(b"[INIT] DTB: parse failed, using defaults\n");
+    }
+
     // Initialize exception handling
     uart_puts_local(b"[INIT] Setting up exception vector table...\n");
     exception::init();
@@ -57,6 +83,9 @@ pub extern "C" fn rust_main() -> ! {
     uart_puts_local(b"[INIT] Initializing heap...\n");
     unsafe { hypervisor::mm::heap::init(); }
     uart_puts_local(b"[INIT] Heap initialized (16MB at 0x41000000)\n\n");
+
+    // Run the DTB parsing test (validates DTB init above)
+    tests::run_dtb_test();
 
     // Run the allocator test
     tests::run_allocator_test();
@@ -307,8 +336,8 @@ fn secondary_enter_guest(cpu_id: usize, entry: u64, ctx_id: u64) {
     use core::sync::atomic::Ordering;
 
     // Wake this CPU's GICR
-    if cpu_id < platform::GICR_RD_BASES.len() {
-        let rd_base = platform::GICR_RD_BASES[cpu_id];
+    if cpu_id < platform::num_cpus() {
+        let rd_base = hypervisor::dtb::gicr_rd_base(cpu_id);
         let waker_addr = (rd_base + platform::GICR_WAKER_OFF) as *mut u32;
         unsafe {
             let mut waker = core::ptr::read_volatile(waker_addr);

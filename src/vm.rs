@@ -79,7 +79,7 @@ impl Vm {
         ));
         #[cfg(feature = "linux_guest")]
         crate::global::DEVICES[id].register_device(crate::devices::Device::Gicr(
-            crate::devices::gic::VirtualGicr::new(platform::SMP_CPUS),
+            crate::devices::gic::VirtualGicr::new(platform::num_cpus()),
         ));
 
         Self {
@@ -254,14 +254,15 @@ impl Vm {
         // Guest GICD accesses trap as Data Aborts → VirtualGicd.
         // The hypervisor still accesses physical GICD at EL2 (bypasses Stage-2).
         for page in 0..16u64 {
-            let addr = platform::GICD_BASE + page * PAGE_SIZE_4KB;
+            let addr = crate::dtb::platform_info().gicd_base + page * PAGE_SIZE_4KB;
             mapper.unmap_4kb_page(addr)
                 .expect("Failed to unmap GICD page");
         }
         uart_puts(b"[VM] GICD unmapped (trap to EL2 via VirtualGicd)\n");
 
         // Unmap all GICR frames (each = 128KB = 32 × 4KB pages)
-        for &base in &platform::GICR_RD_BASES {
+        for cpu in 0..platform::num_cpus() {
+            let base = crate::dtb::gicr_rd_base(cpu);
             for page in 0..32u64 {
                 let addr = base + page * PAGE_SIZE_4KB;
                 mapper.unmap_4kb_page(addr)
@@ -576,8 +577,8 @@ impl Vm {
         // Wake up the target CPU's GICR so it accepts pending SGIs.
         // Without this, ICC_SGI1R_EL1 writes targeting this CPU are dropped
         // by the physical GIC because GICR_WAKER.ProcessorSleep=1.
-        if id > 0 && id < platform::GICR_RD_BASES.len() {
-            wake_gicr(platform::GICR_RD_BASES[id]);
+        if id > 0 && id < platform::num_cpus() {
+            wake_gicr(crate::dtb::gicr_rd_base(id));
         }
         let mut vcpu = Vcpu::new(id, entry, 0);
         // PSCI CPU_ON: x0 = context_id, booting into EL1h with DAIF masked
@@ -752,7 +753,7 @@ pub fn ensure_vtimer_enabled(cpu_id: usize) {
     // Bits to enable: SGIs 0-15 (for physical IPIs) + PPI 27 (vtimer)
     const ENABLE_MASK: u32 = 0xFFFF | (1 << 27); // bits 0-15 + bit 27
 
-    let sgi_base = platform::GICR_RD_BASES[cpu_id] + 0x10000;
+    let sgi_base = crate::dtb::gicr_sgi_base(cpu_id);
     unsafe {
         // IGROUPR0: ensure Group 1 for SGIs + PPI 27
         let igroupr0 = core::ptr::read_volatile(
@@ -778,7 +779,7 @@ pub fn ensure_vtimer_enabled(cpu_id: usize) {
 #[inline]
 fn ensure_cnthp_enabled() {
     unsafe {
-        let sgi_base = platform::GICR0_SGI_BASE;
+        let sgi_base = crate::dtb::gicr_sgi_base(0);
         // IGROUPR0: ensure Group 1 (read-modify-write)
         let igroupr0 = core::ptr::read_volatile(
             (sgi_base + platform::GICR_IGROUPR0_OFF) as *const u32,

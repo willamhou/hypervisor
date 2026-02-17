@@ -925,7 +925,7 @@ fn handle_jailhouse_debug_console(context: &mut VcpuContext) -> bool {
         }
         JAILHOUSE_HC_DEBUG_CONSOLE_GETC => {
             // Input character - read from real UART
-            let uart_base = crate::platform::UART_BASE;
+            let uart_base = crate::dtb::platform_info().uart_base as usize;
             let uart_fr = uart_base + 0x18; // Flag register
 
             unsafe {
@@ -1023,7 +1023,7 @@ fn handle_psci(context: &mut VcpuContext, function_id: u64) -> bool {
             #[cfg(feature = "multi_pcpu")]
             {
                 let target_id = (target_cpu & 0xFF) as usize;
-                if target_id < crate::platform::SMP_CPUS {
+                if target_id < crate::platform::num_cpus() {
                     crate::global::PENDING_CPU_ON_PER_VCPU[target_id].request(entry_point, context_id);
                     // Wake the target pCPU from WFE
                     unsafe { core::arch::asm!("sev") };

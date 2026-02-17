@@ -1,5 +1,5 @@
 use core::cell::UnsafeCell;
-use crate::platform::SMP_CPUS;
+use crate::platform::MAX_SMP_CPUS;
 
 pub struct PerCpuContext {
     pub vcpu_id: usize,
@@ -9,7 +9,7 @@ pub struct PerCpuContext {
 /// Wrapper for per-CPU array with interior mutability.
 /// SAFETY: Each pCPU only accesses its own entry (indexed by MPIDR.Aff0),
 /// so no data races occur with fixed vCPU-to-pCPU affinity.
-struct PerCpuArray(UnsafeCell<[PerCpuContext; SMP_CPUS]>);
+struct PerCpuArray(UnsafeCell<[PerCpuContext; MAX_SMP_CPUS]>);
 unsafe impl Sync for PerCpuArray {}
 
 static PER_CPU: PerCpuArray = PerCpuArray(UnsafeCell::new({
@@ -17,7 +17,7 @@ static PER_CPU: PerCpuArray = PerCpuArray(UnsafeCell::new({
         vcpu_id: 0,
         exception_count: 0,
     };
-    [INIT; SMP_CPUS]
+    [INIT; MAX_SMP_CPUS]
 }));
 
 /// Read current physical CPU ID from MPIDR_EL1.Aff0

@@ -24,6 +24,9 @@ _start:
     cbnz    x19, halt              // Non-zero at initial boot = unexpected, halt
 
 primary_boot:
+    // Save DTB address from QEMU (passed in x0) before stack/BSS setup
+    mov     x20, x0                    // x20 = DTB address (callee-saved)
+
     // Set up stack (adrp+add for >1MB BSS distance)
     adrp    x0, stack_top
     add     x0, x0, :lo12:stack_top
@@ -41,7 +44,8 @@ clear_bss:
     b       clear_bss
 clear_bss_done:
 
-    // Jump to Rust main function
+    // Pass DTB address as first argument to rust_main
+    mov     x0, x20
     bl      rust_main
 
 halt:

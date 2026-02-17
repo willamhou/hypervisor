@@ -383,7 +383,7 @@ pub fn run_guest(config: &GuestConfig) -> Result<(), &'static str> {
     // Debug: check UART state after guest exits
     uart_puts(b"\n[GUEST] Guest exited, checking UART state...\n");
     unsafe {
-        let uart_base = platform::UART_BASE;
+        let uart_base = crate::dtb::platform_info().uart_base as usize;
         let uartfr = core::ptr::read_volatile((uart_base + 0x18) as *const u32);
         uart_puts(b"[GUEST] UART FR: 0x");
         let fr_bytes = [
@@ -445,8 +445,6 @@ fn enable_physical_uart_irq() {
 fn wake_secondary_pcpus() {
     use crate::uart_puts;
     use crate::uart_put_hex;
-    use crate::platform::SMP_CPUS;
-
     // PSCI CPU_ON (64-bit): function_id=0xC4000003
     const PSCI_CPU_ON_64: u64 = 0xC400_0003;
     const PSCI_SUCCESS: u64 = 0;
@@ -457,13 +455,14 @@ fn wake_secondary_pcpus() {
         fn secondary_entry();
     }
 
+    let num_cpus = crate::platform::num_cpus();
     let entry_addr = secondary_entry as *const () as usize as u64;
     uart_puts(b"[SMP] Waking secondary pCPUs via PSCI CPU_ON...\n");
     uart_puts(b"[SMP] secondary_entry = 0x");
     uart_put_hex(entry_addr);
     uart_puts(b"\n");
 
-    for cpu_id in 1..SMP_CPUS {
+    for cpu_id in 1..num_cpus {
         let target_mpidr = cpu_id as u64; // Aff0 = cpu_id
 
         let ret: u64;

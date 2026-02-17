@@ -7,9 +7,12 @@
 
 use crate::devices::MmioDevice;
 
-/// UART base address (same as physical UART in QEMU virt machine)
-const UART_BASE: u64 = 0x09000000;
 const UART_SIZE: u64 = 0x1000;
+
+/// UART base address (runtime, from DTB)
+fn uart_base() -> u64 {
+    crate::dtb::platform_info().uart_base
+}
 
 // ── Register offsets ────────────────────────────────────────────────
 
@@ -97,7 +100,7 @@ impl VirtualUart {
     /// Write a character to the physical UART.
     fn output_char(&self, ch: u8) {
         unsafe {
-            let uart_base = UART_BASE as usize;
+            let uart_base = uart_base() as usize;
             core::arch::asm!(
                 "str {val:w}, [{addr}]",
                 addr = in(reg) uart_base,
@@ -226,7 +229,7 @@ impl MmioDevice for VirtualUart {
         }
     }
 
-    fn base_address(&self) -> u64 { UART_BASE }
+    fn base_address(&self) -> u64 { uart_base() }
     fn size(&self) -> u64 { UART_SIZE }
 
     fn pending_irq(&self) -> Option<u32> {

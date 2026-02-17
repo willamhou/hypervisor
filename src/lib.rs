@@ -13,6 +13,7 @@ pub mod scheduler;
 pub mod guest_loader;
 pub mod sync;
 pub mod percpu;
+pub mod dtb;
 
 // Note: println! macro is exported at the crate root via #[macro_export]
 // It can be used as: use hypervisor::println;

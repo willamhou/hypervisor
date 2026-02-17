@@ -358,8 +358,8 @@ pub fn inject_spi(intid: u32) {
     // DEVICES lock (e.g., virtio-blk signal_interrupt → inject_spi).
     #[cfg(feature = "multi_pcpu")]
     let target = {
-        const GICD_IROUTER_BASE: u64 = crate::platform::GICD_BASE + 0x6100;
-        let irouter_addr = GICD_IROUTER_BASE + (intid as u64 - 32) * 8;
+        let gicd_irouter_base = crate::dtb::platform_info().gicd_base + 0x6100;
+        let irouter_addr = gicd_irouter_base + (intid as u64 - 32) * 8;
         let irouter = unsafe { core::ptr::read_volatile(irouter_addr as *const u64) };
         (irouter & 0xFF) as usize // Aff0 = vCPU ID
     };
