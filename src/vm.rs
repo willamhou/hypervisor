@@ -526,7 +526,13 @@ impl Vm {
 
         match result {
             Ok(()) => {
-                if vs.pending_cpu_on.requested.load(Ordering::Relaxed) {
+                // Check terminal exit first (PSCI CPU_OFF, SYSTEM_OFF, SYSTEM_RESET)
+                if vs.terminal_exit[vcpu_id]
+                    .compare_exchange(true, false, Ordering::Acquire, Ordering::Relaxed)
+                    .is_ok()
+                {
+                    self.scheduler.remove_vcpu(vcpu_id);
+                } else if vs.pending_cpu_on.requested.load(Ordering::Relaxed) {
                     self.scheduler.yield_current();
                 } else if vs.preemption_exit
                     .compare_exchange(true, false, Ordering::Acquire, Ordering::Relaxed)
@@ -534,7 +540,8 @@ impl Vm {
                 {
                     self.scheduler.yield_current();
                 } else {
-                    self.scheduler.remove_vcpu(vcpu_id);
+                    // Normal exit to host (IRQ handler exit, MMIO handled) — yield
+                    self.scheduler.yield_current();
                 }
             }
             Err("WFI") => {
@@ -560,6 +567,8 @@ impl Vm {
 
         self.state = VmState::Running;
         crate::global::CURRENT_VM_ID.store(self.id, Ordering::Release);
+        // Mark vCPU 0 as online (main branch had VCPU_ONLINE_MASK init'd to 1)
+        crate::global::vm_state(self.id).vcpu_online_mask.fetch_or(1, Ordering::Release);
 
         loop {
             if self.run_one_iteration() {
@@ -677,13 +686,14 @@ impl Vm {
 pub fn run_multi_vm(vms: &mut [Vm]) {
     use crate::uart_puts;
 
-    // Mark all VMs as Running
+    // Mark all VMs as Running and vCPU 0 as online
     for vm in vms.iter_mut() {
         if vm.state != VmState::Ready {
             uart_puts(b"[MULTI-VM] VM not ready, skipping\n");
             continue;
         }
         vm.state = VmState::Running;
+        crate::global::vm_state(vm.id).vcpu_online_mask.fetch_or(1, Ordering::Release);
     }
 
     let mut done = [false; crate::global::MAX_VMS];
