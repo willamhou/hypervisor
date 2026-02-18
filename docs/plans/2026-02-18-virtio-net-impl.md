@@ -177,7 +177,7 @@ use core::sync::atomic::{AtomicUsize, Ordering};
 /// Maximum Ethernet frame size (no jumbo frames)
 pub const MAX_FRAME_SIZE: usize = 1514;
 /// Ring buffer depth per port
-const NET_RX_RING_SIZE: usize = 8;
+const NET_RX_RING_SIZE: usize = 9; // 8 usable + 1 sentinel slot for SPSC full detection
 /// Maximum number of ports (matches MAX_VMS)
 const MAX_PORTS: usize = 2;
 
@@ -215,10 +215,9 @@ impl NetRxRing {
     pub const fn new() -> Self {
         Self {
             frames: UnsafeCell::new([
-                FrameSlot::new(), FrameSlot::new(),
-                FrameSlot::new(), FrameSlot::new(),
-                FrameSlot::new(), FrameSlot::new(),
-                FrameSlot::new(), FrameSlot::new(),
+                FrameSlot::new(), FrameSlot::new(), FrameSlot::new(),
+                FrameSlot::new(), FrameSlot::new(), FrameSlot::new(),
+                FrameSlot::new(), FrameSlot::new(), FrameSlot::new(),
             ]),
             head: AtomicUsize::new(0),
             tail: AtomicUsize::new(0),
@@ -992,11 +991,10 @@ impl VirtioMmioTransport<super::net::VirtioNet> {
         // virtio_net_hdr_v1: 12 bytes, all zeroed except num_buffers=1
         let hdr: [u8; 12] = [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0]; // num_buffers=1 (LE u16 at offset 10)
 
-        let total_len = 12 + frame.len();
+        let combined_len = hdr.len() + frame.len();
 
         // Write header + frame into descriptor buffer(s)
         let mut written = 0usize;
-        let combined_len = hdr.len() + frame.len();
 
         for i in 0..chain.count {
             let desc = &chain.descs[i];
@@ -1020,7 +1018,12 @@ impl VirtioMmioTransport<super::net::VirtioNet> {
             }
         }
 
-        rx_queue.put_used(chain.head, total_len as u32);
+        // Only complete if we wrote the full header+frame — don't advertise
+        // unwritten bytes to the guest (undersized descriptor chain).
+        if written < combined_len {
+            return false;
+        }
+        rx_queue.put_used(chain.head, written as u32);
         self.signal_interrupt();
         true
     }
