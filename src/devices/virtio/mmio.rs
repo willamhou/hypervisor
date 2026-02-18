@@ -339,36 +339,52 @@ impl VirtioMmioTransport<super::net::VirtioNet> {
 
         let combined_len = hdr.len() + frame.len();
 
-        // Write header + frame into descriptor buffer(s)
+        // Check total writable capacity before writing
+        let mut total_cap = 0usize;
+        for i in 0..chain.count {
+            let desc = &chain.descs[i];
+            if desc.flags & super::queue::VIRTQ_DESC_F_WRITE != 0 {
+                total_cap += desc.len as usize;
+            }
+        }
+        if total_cap < combined_len {
+            // Descriptor chain too small — return it with len=0 so guest can reuse
+            rx_queue.put_used(chain.head, 0);
+            return false;
+        }
+
+        // Write header + frame into descriptor buffer(s) using bulk copies
         let mut written = 0usize;
 
         for i in 0..chain.count {
             let desc = &chain.descs[i];
-            // Only write to device-writable descriptors (WRITE flag set)
             if desc.flags & super::queue::VIRTQ_DESC_F_WRITE == 0 {
                 continue;
             }
             let buf_addr = desc.addr as *mut u8;
             let buf_cap = desc.len as usize;
-            let mut buf_written = 0usize;
+            let remaining = combined_len - written;
+            let to_write = if remaining < buf_cap { remaining } else { buf_cap };
 
-            while written < combined_len && buf_written < buf_cap {
-                let byte = if written < 12 {
-                    hdr[written]
+            unsafe {
+                let dst = buf_addr;
+                // Determine how much of header vs frame goes into this descriptor
+                if written < 12 {
+                    let hdr_remaining = 12 - written;
+                    let hdr_bytes = if hdr_remaining < to_write { hdr_remaining } else { to_write };
+                    core::ptr::copy_nonoverlapping(hdr.as_ptr().add(written), dst, hdr_bytes);
+                    if to_write > hdr_bytes {
+                        let frame_bytes = to_write - hdr_bytes;
+                        core::ptr::copy_nonoverlapping(frame.as_ptr(), dst.add(hdr_bytes), frame_bytes);
+                    }
                 } else {
-                    frame[written - 12]
-                };
-                unsafe { core::ptr::write_volatile(buf_addr.add(buf_written), byte); }
-                written += 1;
-                buf_written += 1;
+                    let frame_offset = written - 12;
+                    core::ptr::copy_nonoverlapping(frame.as_ptr().add(frame_offset), dst, to_write);
+                }
             }
+            written += to_write;
         }
 
-        // Only complete if we wrote the full header+frame — don't advertise
-        // unwritten bytes to the guest (undersized descriptor chain).
-        if written < combined_len {
-            return false;
-        }
         rx_queue.put_used(chain.head, written as u32);
         self.signal_interrupt();
         true

@@ -715,10 +715,8 @@ pub fn run_multi_vm(vms: &mut [Vm]) {
             crate::global::CURRENT_VM_ID.store(vm.id, Ordering::Release);
             vm.activate_stage2();
 
-            // Drain network RX for this VM (CURRENT_VM_ID already set above)
-            drain_net_rx(vm.id);
-
             // Run one iteration (pick vCPU, run, handle exit)
+            // Note: drain_net_rx is called inside run_one_iteration()
             if vm.run_one_iteration() {
                 done[vm.id] = true;
                 vm.state = VmState::Ready;
