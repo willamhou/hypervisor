@@ -63,6 +63,20 @@ impl GlobalDeviceManager {
     pub fn uart_mut(&self) -> Option<&mut crate::devices::pl011::VirtualUart> {
         unsafe { (*self.devices.get()).uart_mut() }
     }
+
+    pub fn attach_virtio_net(&self, vm_id: usize) {
+        unsafe { (*self.devices.get()).attach_virtio_net(vm_id); }
+    }
+
+    pub fn inject_net_rx(&self, frame: &[u8]) -> bool {
+        unsafe {
+            if let Some(transport) = (*self.devices.get()).virtio_net_mut() {
+                transport.inject_rx(frame)
+            } else {
+                false
+            }
+        }
+    }
 }
 
 // ── Multi-pCPU GlobalDeviceManager (SpinLock protected) ───────────
@@ -138,6 +152,18 @@ impl GlobalDeviceManager {
                 drop(guard); // Release lock before inject_spi (may re-lock)
                 inject_spi(33);
             }
+        }
+    }
+
+    pub fn attach_virtio_net(&self, vm_id: usize) {
+        self.devices.lock().attach_virtio_net(vm_id);
+    }
+
+    pub fn inject_net_rx(&self, frame: &[u8]) -> bool {
+        if let Some(transport) = self.devices.lock().virtio_net_mut() {
+            transport.inject_rx(frame)
+        } else {
+            false
         }
     }
 }

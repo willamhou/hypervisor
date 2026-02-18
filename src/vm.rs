@@ -413,6 +413,9 @@ impl Vm {
             // Drain physical UART RX bytes → VirtualUart → inject SPI 33
             crate::global::DEVICES[self.id].drain_uart_rx();
 
+            // Drain pending network RX frames
+            drain_net_rx(self.id);
+
             // Ensure PPI 27 (virtual timer) is enabled at the physical GICR.
             // Guest's GICR writes are trapped → shadow only → physical stays disabled.
             ensure_vtimer_enabled(vcpu_id);
@@ -507,6 +510,9 @@ impl Vm {
                 crate::global::inject_spi(33);
             }
         }
+
+        // Drain pending network RX frames
+        drain_net_rx(self.id);
 
         // Inject pending SGIs and SPIs into this vCPU's arch_state before run
         inject_pending_sgis(self.vcpus[vcpu_id].as_mut().unwrap());
@@ -709,6 +715,9 @@ pub fn run_multi_vm(vms: &mut [Vm]) {
             crate::global::CURRENT_VM_ID.store(vm.id, Ordering::Release);
             vm.activate_stage2();
 
+            // Drain network RX for this VM (CURRENT_VM_ID already set above)
+            drain_net_rx(vm.id);
+
             // Run one iteration (pick vCPU, run, handle exit)
             if vm.run_one_iteration() {
                 done[vm.id] = true;
@@ -899,6 +908,22 @@ pub fn inject_pending_spis(vcpu: &mut Vcpu) {
         if !injected {
             vs.pending_spis[vcpu_id].fetch_or(1 << bit, Ordering::Relaxed);
         }
+    }
+}
+
+/// Drain pending network RX frames from PORT_RX into the guest's
+/// virtio-net RX queue via DEVICES[vm_id].inject_net_rx().
+///
+/// Precondition: CURRENT_VM_ID must be set (inject_net_rx -> inject_spi
+/// reads it to route the SPI to the correct VM).
+fn drain_net_rx(vm_id: usize) {
+    use crate::vswitch::{PORT_RX, MAX_FRAME_SIZE};
+    if PORT_RX[vm_id].is_empty() {
+        return; // fast path
+    }
+    let mut buf = [0u8; MAX_FRAME_SIZE];
+    while let Some(len) = PORT_RX[vm_id].take(&mut buf) {
+        crate::global::DEVICES[vm_id].inject_net_rx(&buf[..len]);
     }
 }
 

@@ -346,6 +346,11 @@ pub fn run_guest(config: &GuestConfig) -> Result<(), &'static str> {
         );
     }
 
+    // Attach virtio-net device
+    if config.guest_type == GuestType::Linux {
+        crate::global::DEVICES[0].attach_virtio_net(0);
+    }
+
     // Enable physical UART RX interrupt (INTID 33) so the hypervisor
     // can deliver keyboard input to the guest via VirtualUart.
     if config.guest_type == GuestType::Linux {
@@ -550,6 +555,7 @@ pub fn run_multi_vm_guests() -> Result<(), &'static str> {
         platform::VIRTIO_DISK_ADDR,
         platform::VIRTIO_DISK_SIZE,
     );
+    crate::global::DEVICES[0].attach_virtio_net(0);
 
     // --- VM 1 setup ---
     let config1 = GuestConfig::linux_vm1();
@@ -585,6 +591,7 @@ pub fn run_multi_vm_guests() -> Result<(), &'static str> {
         platform::VM1_VIRTIO_DISK_ADDR,
         platform::VIRTIO_DISK_SIZE,
     );
+    crate::global::DEVICES[1].attach_virtio_net(1);
 
     // Restore VM 0's Stage-2 as active (run_multi_vm will switch as needed)
     unsafe {
