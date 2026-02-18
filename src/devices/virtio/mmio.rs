@@ -312,3 +312,65 @@ impl<D: VirtioDevice> MmioDevice for VirtioMmioTransport<D> {
         0x200 // 512 bytes per virtio-mmio spec
     }
 }
+
+/// Specialized methods for VirtioNet transport (RX injection).
+impl VirtioMmioTransport<super::net::VirtioNet> {
+    /// Inject a received frame into the guest's RX virtqueue.
+    ///
+    /// Writes a 12-byte virtio_net_hdr (zeroed, num_buffers=1) followed by
+    /// the Ethernet frame data into the first available RX descriptor.
+    /// Signals an interrupt (inject_spi) after writing.
+    ///
+    /// Returns false if no RX descriptor is available (guest hasn't
+    /// replenished its RX queue).
+    pub fn inject_rx(&mut self, frame: &[u8]) -> bool {
+        let rx_queue = &mut self.queues[0];
+        let chain = match rx_queue.get_avail_desc() {
+            Some(c) => c,
+            None => return false, // No available RX buffer
+        };
+
+        if chain.count == 0 {
+            return false;
+        }
+
+        // virtio_net_hdr_v1: 12 bytes, all zeroed except num_buffers=1
+        let hdr: [u8; 12] = [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0]; // num_buffers=1 (LE u16 at offset 10)
+
+        let combined_len = hdr.len() + frame.len();
+
+        // Write header + frame into descriptor buffer(s)
+        let mut written = 0usize;
+
+        for i in 0..chain.count {
+            let desc = &chain.descs[i];
+            // Only write to device-writable descriptors (WRITE flag set)
+            if desc.flags & super::queue::VIRTQ_DESC_F_WRITE == 0 {
+                continue;
+            }
+            let buf_addr = desc.addr as *mut u8;
+            let buf_cap = desc.len as usize;
+            let mut buf_written = 0usize;
+
+            while written < combined_len && buf_written < buf_cap {
+                let byte = if written < 12 {
+                    hdr[written]
+                } else {
+                    frame[written - 12]
+                };
+                unsafe { core::ptr::write_volatile(buf_addr.add(buf_written), byte); }
+                written += 1;
+                buf_written += 1;
+            }
+        }
+
+        // Only complete if we wrote the full header+frame — don't advertise
+        // unwritten bytes to the guest (undersized descriptor chain).
+        if written < combined_len {
+            return false;
+        }
+        rx_queue.put_used(chain.head, written as u32);
+        self.signal_interrupt();
+        true
+    }
+}
