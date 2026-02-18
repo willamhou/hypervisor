@@ -1,15 +1,15 @@
 # ARM64 Hypervisor 开发计划
 
-**项目版本**: v0.9.0 (Phase 9 Complete — Multi-pCPU)
+**项目版本**: v0.12.0 (Phase 12 Complete — Virtio-net + VSwitch)
 **计划制定日期**: 2026-01-26
-**最后更新**: 2026-02-15
+**最后更新**: 2026-02-18
 **计划类型**: 敏捷迭代，灵活调整
 
 ---
 
 ## 📊 当前进度概览
 
-**整体完成度**: 🟢 **55%** (Milestone 0-2 已完成)
+**整体完成度**: 🟢 **60%** (Milestone 0-2 + Options A-G 已完成)
 
 ```
 M0: 项目启动          ████████████████████ 100% ✅
@@ -20,9 +20,9 @@ M4: Secure EL2        ░░░░░░░░░░░░░░░░░░░�
 M5: RME & CCA         ░░░░░░░░░░░░░░░░░░░░   0% ⏸️
 ```
 
-**测试覆盖**: ~105 assertions / 23 test suites (100% pass)
-**代码量**: ~10000+ 行
-**Linux启动**: 4 vCPU, BusyBox shell, virtio-blk, multi-VM
+**测试覆盖**: ~127 assertions / 26 test suites (100% pass)
+**代码量**: ~11000+ 行
+**Linux启动**: 4 vCPU, BusyBox shell, virtio-blk, virtio-net, multi-VM
 **编译警告**: 最小化
 
 ---
@@ -413,10 +413,10 @@ M5: RME & CCA         ░░░░░░░░░░░░░░░░░░░�
 **M2 附加完成项** (超出原计划):
 - DynamicIdentityMapper: 堆分配 4KB 页表，split_2mb_block()
 - Free-list allocator (BumpAllocator + free_head)
-- DeviceManager enum dispatch (Device enum: Uart, Gicd, Gicr, VirtioBlk)
+- DeviceManager enum dispatch (Device enum: Uart, Gicd, Gicr, VirtioBlk, VirtioNet)
 - VirtualGicr per-vCPU 状态仿真
 - Custom kernel build via Docker (debian:bookworm-slim)
-- ~85 test assertions / 19 test suites
+- ~127 test assertions / 26 test suites
 
 ---
 
@@ -987,7 +987,7 @@ GitHub Actions配置：
 
 **总计**: 约12-14个月（灵活调整）
 **当前进度**: 18周 / 52-56周 = **约33%** (按预估周数)
-**实际开发时长**: ~3周 (2026-01-25 至 2026-02-13)
+**实际开发时长**: ~4周 (2026-01-25 至 2026-02-18)
 
 ---
 
@@ -996,7 +996,7 @@ GitHub Actions配置：
 ### 8.1 技术成功标准
 
 - [x] **M1 MVP**: QEMU启动busybox ✅ **已完成 2026-01-26**
-- [x] **M2 增强**: 4 vCPU Linux + virtio-blk + UART RX + GIC emulation ✅ **已完成 2026-02-13**
+- [x] **M2 增强**: 4 vCPU Linux + virtio-blk + virtio-net + UART RX + GIC emulation ✅ **已完成 2026-02-13**
 - [ ] **M3 FF-A**: VM与SP内存共享成功 ⏸️ **未开始**
 - [ ] **M4 TEE**: OP-TEE运行并可调用TA ⏸️ **未开始**
 - [ ] **M5 CCA**: Realm VM启动Guest OS ⏸️ **未开始**
@@ -1038,11 +1038,21 @@ GitHub Actions配置：
 - [x] Physical GICR programming for SGIs/PPIs
 - **已完成**: 2026-02-15
 
-**选项 C**: Virtio-net
-- [ ] 新增 virtio-mmio 网络设备
-- [ ] TX/RX virtqueue
-- [ ] TAP/网络后端
-- **收益**: Guest 网络功能 (ping, wget, ssh)
+**选项 C**: Virtio-net + VSwitch ✅ **已完成**
+- [x] VirtioMmioTransport<VirtioNet> @ 0x0a000200 (SPI 17, INTID 49)
+- [x] TX/RX virtqueue, 12-byte virtio_net_hdr_v1, process_tx/inject_rx
+- [x] L2 VSwitch: MAC 学习 (16 entries), 广播/多播泛洪, 无自回环
+- [x] NetRxRing SPSC ring buffer (9 slots, Acquire/Release atomics)
+- [x] virtio_slot(n) MMIO 槽位抽象 (slot 0=blk, slot 1=net, stride=0x200)
+- [x] Per-VM MAC (52:54:00:00:00:{id+1}), auto-IP (10.0.0.{id+1}/24 via ifconfig)
+- [x] drain_net_rx() in run loops, inject_net_rx() in GlobalDeviceManager
+- [x] Guest DTB: virtio_mmio@a000200 节点 (SPI 0x11, edge-triggered)
+- [x] 3 new test suites: test_net_rx_ring (8), test_vswitch (6), test_virtio_net (8)
+- [x] 修复: inject_rx descriptor 泄漏 (undersized → used ring len=0)
+- [x] 修复: inject_rx 性能 (byte-by-byte → copy_nonoverlapping)
+- [x] 修复: initramfs auto-IP (busybox ifconfig symlink + shell arithmetic)
+- [x] 修复: 链接脚本丢失 (build.rs + relocation-model=static)
+- **已完成**: 2026-02-18
 
 **选项 D**: FF-A (Milestone 3)
 - [ ] FFA_VERSION / FFA_ID_GET / FFA_FEATURES
@@ -1133,6 +1143,9 @@ GitHub Actions配置：
 - Phase 7: GICR Trap-and-Emulate (VirtualGicr per-vCPU 状态)
 - Phase 8: GICD Full Trap-and-Emulate (write-through to physical GICD, GICR2 workaround 移除)
 - Phase 9: Multi-pCPU (4 vCPUs on 4 physical CPUs, PSCI boot, TPIDR_EL2, SpinLock devices)
+- Phase 10: Multi-VM (per-VM Stage-2/VMID, two-level scheduler, per-VM DeviceManager)
+- Phase 11: DTB Runtime Parsing (fdt crate, PlatformInfo, gicr_rd_base/sgi_base helpers)
+- Phase 12: Virtio-net + VSwitch (L2 switch, NetRxRing SPSC, auto-IP, 3 test suites)
 
 ---
 
