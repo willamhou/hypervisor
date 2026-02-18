@@ -15,7 +15,7 @@ pub fn run_ffa_test() {
     {
         let mut ctx = VcpuContext::default();
         ctx.gp_regs.x0 = ffa::FFA_VERSION;
-        ctx.gp_regs.x1 = ffa::FFA_VERSION_1_1 as u64; // caller version
+        ctx.gp_regs.x1 = ffa::FFA_VERSION_1_1 as u64;
         let cont = ffa::proxy::handle_ffa_call(&mut ctx);
         if cont && ctx.gp_regs.x0 == ffa::FFA_VERSION_1_1 as u64 {
             hypervisor::uart_puts(b"  [PASS] FFA_VERSION returns 0x00010001\n");
@@ -31,8 +31,6 @@ pub fn run_ffa_test() {
         let mut ctx = VcpuContext::default();
         ctx.gp_regs.x0 = ffa::FFA_ID_GET;
         let cont = ffa::proxy::handle_ffa_call(&mut ctx);
-        // In test mode (no VM running), current_vm_id() returns 0
-        // So partition ID = vm_id_to_partition_id(0) = 1
         if cont && ctx.gp_regs.x0 == ffa::FFA_SUCCESS_32 && ctx.gp_regs.x2 == 1 {
             hypervisor::uart_puts(b"  [PASS] FFA_ID_GET returns partition ID 1\n");
             pass += 1;
@@ -46,7 +44,7 @@ pub fn run_ffa_test() {
     {
         let mut ctx = VcpuContext::default();
         ctx.gp_regs.x0 = ffa::FFA_FEATURES;
-        ctx.gp_regs.x1 = ffa::FFA_VERSION; // Query FFA_VERSION support
+        ctx.gp_regs.x1 = ffa::FFA_VERSION;
         let cont = ffa::proxy::handle_ffa_call(&mut ctx);
         if cont && ctx.gp_regs.x0 == ffa::FFA_SUCCESS_32 {
             hypervisor::uart_puts(b"  [PASS] FFA_FEATURES(FFA_VERSION) = supported\n");
@@ -61,7 +59,7 @@ pub fn run_ffa_test() {
     {
         let mut ctx = VcpuContext::default();
         ctx.gp_regs.x0 = ffa::FFA_FEATURES;
-        ctx.gp_regs.x1 = 0x84000099; // Unknown function
+        ctx.gp_regs.x1 = 0x84000099;
         let cont = ffa::proxy::handle_ffa_call(&mut ctx);
         if cont && ctx.gp_regs.x0 == ffa::FFA_ERROR {
             hypervisor::uart_puts(b"  [PASS] FFA_FEATURES(unknown) = NOT_SUPPORTED\n");
@@ -82,6 +80,142 @@ pub fn run_ffa_test() {
             pass += 1;
         } else {
             hypervisor::uart_puts(b"  [FAIL] FFA_MEM_DONATE not blocked\n");
+            fail += 1;
+        }
+    }
+
+    // Test 6: FFA_RXTX_MAP
+    {
+        let mut ctx = VcpuContext::default();
+        ctx.gp_regs.x0 = ffa::FFA_RXTX_MAP;
+        ctx.gp_regs.x1 = 0x5000_0000; // TX buffer IPA (page-aligned)
+        ctx.gp_regs.x2 = 0x5000_1000; // RX buffer IPA
+        ctx.gp_regs.x3 = 1;           // 1 page
+        let cont = ffa::proxy::handle_ffa_call(&mut ctx);
+        if cont && ctx.gp_regs.x0 == ffa::FFA_SUCCESS_32 {
+            hypervisor::uart_puts(b"  [PASS] FFA_RXTX_MAP success\n");
+            pass += 1;
+        } else {
+            hypervisor::uart_puts(b"  [FAIL] FFA_RXTX_MAP\n");
+            fail += 1;
+        }
+    }
+
+    // Test 7: FFA_RXTX_MAP duplicate → DENIED
+    {
+        let mut ctx = VcpuContext::default();
+        ctx.gp_regs.x0 = ffa::FFA_RXTX_MAP;
+        ctx.gp_regs.x1 = 0x5000_2000;
+        ctx.gp_regs.x2 = 0x5000_3000;
+        ctx.gp_regs.x3 = 1;
+        let cont = ffa::proxy::handle_ffa_call(&mut ctx);
+        if cont && ctx.gp_regs.x0 == ffa::FFA_ERROR {
+            hypervisor::uart_puts(b"  [PASS] FFA_RXTX_MAP duplicate denied\n");
+            pass += 1;
+        } else {
+            hypervisor::uart_puts(b"  [FAIL] FFA_RXTX_MAP duplicate\n");
+            fail += 1;
+        }
+    }
+
+    // Test 8: FFA_RXTX_UNMAP
+    {
+        let mut ctx = VcpuContext::default();
+        ctx.gp_regs.x0 = ffa::FFA_RXTX_UNMAP;
+        let cont = ffa::proxy::handle_ffa_call(&mut ctx);
+        if cont && ctx.gp_regs.x0 == ffa::FFA_SUCCESS_32 {
+            hypervisor::uart_puts(b"  [PASS] FFA_RXTX_UNMAP success\n");
+            pass += 1;
+        } else {
+            hypervisor::uart_puts(b"  [FAIL] FFA_RXTX_UNMAP\n");
+            fail += 1;
+        }
+    }
+
+    // Test 9: FFA_MSG_SEND_DIRECT_REQ echo
+    {
+        let mut ctx = VcpuContext::default();
+        ctx.gp_regs.x0 = ffa::FFA_MSG_SEND_DIRECT_REQ_32;
+        // x1: sender=1 (VM0 partition ID), receiver=0x8001 (SP1)
+        ctx.gp_regs.x1 = (1u64 << 16) | 0x8001;
+        ctx.gp_regs.x3 = 0;
+        ctx.gp_regs.x4 = 0xDEAD_BEEF;
+        ctx.gp_regs.x5 = 0xCAFE_BABE;
+        ctx.gp_regs.x6 = 0x1234_5678;
+        ctx.gp_regs.x7 = 0x9ABC_DEF0;
+        let cont = ffa::proxy::handle_ffa_call(&mut ctx);
+        if cont
+            && ctx.gp_regs.x0 == ffa::FFA_MSG_SEND_DIRECT_RESP_32
+            && ctx.gp_regs.x4 == 0xDEAD_BEEF
+            && ctx.gp_regs.x5 == 0xCAFE_BABE
+        {
+            hypervisor::uart_puts(b"  [PASS] FFA_MSG_SEND_DIRECT_REQ echo\n");
+            pass += 1;
+        } else {
+            hypervisor::uart_puts(b"  [FAIL] FFA_MSG_SEND_DIRECT_REQ\n");
+            fail += 1;
+        }
+    }
+
+    // Test 10: FFA_MSG_SEND_DIRECT_REQ to invalid SP
+    {
+        let mut ctx = VcpuContext::default();
+        ctx.gp_regs.x0 = ffa::FFA_MSG_SEND_DIRECT_REQ_32;
+        ctx.gp_regs.x1 = (1u64 << 16) | 0x9999; // Invalid SP
+        let cont = ffa::proxy::handle_ffa_call(&mut ctx);
+        if cont && ctx.gp_regs.x0 == ffa::FFA_ERROR {
+            hypervisor::uart_puts(b"  [PASS] Direct req to invalid SP rejected\n");
+            pass += 1;
+        } else {
+            hypervisor::uart_puts(b"  [FAIL] Direct req to invalid SP\n");
+            fail += 1;
+        }
+    }
+
+    // Test 11: FFA_MEM_SHARE → success with handle
+    {
+        let mut ctx = VcpuContext::default();
+        ctx.gp_regs.x0 = ffa::FFA_MEM_SHARE_32;
+        ctx.gp_regs.x3 = 0x5000_0000; // IPA
+        ctx.gp_regs.x4 = 1;           // 1 page
+        ctx.gp_regs.x5 = 0x8001;      // SP1
+        let cont = ffa::proxy::handle_ffa_call(&mut ctx);
+        let handle = ctx.gp_regs.x2;
+        if cont && ctx.gp_regs.x0 == ffa::FFA_SUCCESS_32 && handle > 0 {
+            hypervisor::uart_puts(b"  [PASS] FFA_MEM_SHARE returns handle\n");
+            pass += 1;
+
+            // Test 12: FFA_MEM_RECLAIM with valid handle
+            let mut ctx2 = VcpuContext::default();
+            ctx2.gp_regs.x0 = ffa::FFA_MEM_RECLAIM;
+            ctx2.gp_regs.x1 = handle; // handle low
+            ctx2.gp_regs.x2 = 0;      // handle high
+            let cont2 = ffa::proxy::handle_ffa_call(&mut ctx2);
+            if cont2 && ctx2.gp_regs.x0 == ffa::FFA_SUCCESS_32 {
+                hypervisor::uart_puts(b"  [PASS] FFA_MEM_RECLAIM success\n");
+                pass += 1;
+            } else {
+                hypervisor::uart_puts(b"  [FAIL] FFA_MEM_RECLAIM\n");
+                fail += 1;
+            }
+        } else {
+            hypervisor::uart_puts(b"  [FAIL] FFA_MEM_SHARE\n");
+            fail += 2; // Skip reclaim test too
+        }
+    }
+
+    // Test 13: FFA_MEM_RECLAIM with invalid handle
+    {
+        let mut ctx = VcpuContext::default();
+        ctx.gp_regs.x0 = ffa::FFA_MEM_RECLAIM;
+        ctx.gp_regs.x1 = 0xDEAD; // Invalid handle
+        ctx.gp_regs.x2 = 0;
+        let cont = ffa::proxy::handle_ffa_call(&mut ctx);
+        if cont && ctx.gp_regs.x0 == ffa::FFA_ERROR {
+            hypervisor::uart_puts(b"  [PASS] FFA_MEM_RECLAIM invalid handle rejected\n");
+            pass += 1;
+        } else {
+            hypervisor::uart_puts(b"  [FAIL] FFA_MEM_RECLAIM invalid\n");
             fail += 1;
         }
     }
