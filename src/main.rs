@@ -147,6 +147,9 @@ pub extern "C" fn rust_main(dtb_addr: usize) -> ! {
     tests::run_multi_vm_devices_test();
     tests::run_vm_activate_test();
 
+    // Run the NetRxRing test
+    tests::run_net_rx_ring_test();
+
     // Run the guest interrupt injection test (LAST before guest boot — blocks forever)
     // Skip when booting guests since it never returns.
     #[cfg(not(any(feature = "linux_guest", feature = "guest")))]

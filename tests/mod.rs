@@ -27,6 +27,7 @@ pub mod test_vmid_vttbr;
 pub mod test_multi_vm_devices;
 pub mod test_vm_activate;
 pub mod test_dtb;
+pub mod test_net_rx_ring;
 
 // Re-export test functions for easy access
 pub use test_guest::run_test as run_guest_test;
@@ -55,3 +56,4 @@ pub use test_vmid_vttbr::run_vmid_vttbr_test;
 pub use test_multi_vm_devices::run_multi_vm_devices_test;
 pub use test_vm_activate::run_vm_activate_test;
 pub use test_dtb::run_dtb_test;
+pub use test_net_rx_ring::run_net_rx_ring_test;
