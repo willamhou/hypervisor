@@ -4,13 +4,13 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Overview
 
-ARM64 Type-1 bare-metal hypervisor written in Rust (no_std) with ARM64 assembly. Runs at EL2 (hypervisor exception level) and manages guest VMs at EL1. Targets QEMU virt machine. Boots Linux 6.12.12 to BusyBox shell with 4 vCPUs and virtio-blk storage. Supports multi-VM with per-VM Stage-2, VMID-tagged TLBs, and two-level scheduling.
+ARM64 Type-1 bare-metal hypervisor written in Rust (no_std) with ARM64 assembly. Runs at EL2 (hypervisor exception level) and manages guest VMs at EL1. Targets QEMU virt machine. Boots Linux 6.12.12 to BusyBox shell with 4 vCPUs, virtio-blk storage, and virtio-net inter-VM networking. Supports multi-VM with per-VM Stage-2, VMID-tagged TLBs, two-level scheduling, and L2 virtual switch.
 
 ## Build Commands
 
 ```bash
 make              # Build hypervisor
-make run          # Build + run in QEMU — runs 24 test suites automatically (exit: Ctrl+A then X)
+make run          # Build + run in QEMU — runs 26 test suites automatically (exit: Ctrl+A then X)
 make run-linux    # Build + boot Linux guest (--features linux_guest, 4 vCPUs on 1 pCPU, virtio-blk)
 make run-linux-smp # Build + boot Linux guest (--features multi_pcpu, 4 vCPUs on 4 pCPUs)
 make run-multi-vm # Build + boot 2 Linux VMs time-sliced (--features multi_vm)
@@ -25,7 +25,7 @@ make fmt          # Format code
 **Feature flags** (Cargo features, selected via Makefile targets):
 - `(default)` — unit tests only, no guest boot
 - `guest` — Zephyr guest loading
-- `linux_guest` — Linux guest with DynamicIdentityMapper, GICR trap-and-emulate, virtio-blk
+- `linux_guest` — Linux guest with DynamicIdentityMapper, GICR trap-and-emulate, virtio-blk, virtio-net
 - `multi_pcpu` — Multi-pCPU support (implies `linux_guest`): 1:1 vCPU-to-pCPU affinity, PSCI boot, TPIDR_EL2 context, SpinLock devices
 - `multi_vm` — Multi-VM support (implies `linux_guest`): 2 VMs time-sliced on 1 pCPU, per-VM Stage-2/VMID, per-VM DeviceManager
 
@@ -52,6 +52,8 @@ make fmt          # Format code
 | `Scheduler` | `src/scheduler.rs` | Round-robin vCPU scheduler with block/unblock |
 | `ExitReason` | `src/arch/aarch64/regs.rs` | VM exit causes: WfiWfe, HvcCall, DataAbort, etc. |
 | `PlatformInfo` | `src/dtb.rs` | Runtime DTB parsing: UART, GIC, RAM, CPU count discovery |
+| `VSwitch` | `src/vswitch.rs` | L2 virtual switch with MAC learning, inter-VM frame forwarding |
+| `NetRxRing` | `src/vswitch.rs` | Per-port SPSC ring buffer for async RX frame delivery |
 
 ### Exception Handling Flow
 ```
@@ -140,6 +142,27 @@ VirtioMmioTransport<VirtioBlk>  @ 0x0a000000 (SPI 16 = INTID 48)
 
 Guest writes QueueNotify → `process_request()` → read/write disk image via `copy_nonoverlapping` (identity-mapped) → update used ring → `inject_spi(48)` → `flush_pending_spis_to_hardware()`.
 
+### Virtio-net + VSwitch
+
+```
+VirtioMmioTransport<VirtioNet>  @ 0x0a000200 (SPI 17 = INTID 49)
+  ├─ MMIO registers (virtio-mmio spec)
+  ├─ 2 virtqueues: RX (queue 0) + TX (queue 1)
+  └─ VirtioNet backend (device_id=1, MAC 52:54:00:00:00:{vm_id+1})
+```
+
+**TX path**: Guest writes QueueNotify → `process_tx()` → strip 12-byte `virtio_net_hdr_v1` → `vswitch_forward(src_port, frame)` → VSwitch MAC learning + L2 forwarding → `PORT_RX[dst].store(frame)`.
+
+**RX path**: `drain_net_rx(vm_id)` in run loop → `PORT_RX[vm_id].take()` → `inject_net_rx()` → `inject_rx(frame)` → write 12-byte header (num_buffers=1) + frame into RX descriptor chain via `copy_nonoverlapping` → `inject_spi(49)`.
+
+**VSwitch** (`src/vswitch.rs`): L2 virtual switch with 16-entry MAC learning table. Broadcasts/multicasts flood all ports (excluding source). Unknown unicasts also flood. MAC entries are learned on TX (source MAC → source port).
+
+**NetRxRing**: SPSC ring buffer (9 slots, 8 usable + 1 sentinel) per VM port. Atomic head/tail with Acquire/Release ordering. Stores up to 1514-byte Ethernet frames.
+
+**MMIO slot abstraction**: `platform::virtio_slot(n)` returns `(base_addr, intid)` for slot n. Slot 0 = virtio-blk, slot 1 = virtio-net. Stride = 0x200.
+
+**Auto-IP**: Initramfs `/init` reads MAC from sysfs, extracts last octet, assigns `10.0.0.{octet}/24` via `ifconfig`. VM 0 → `10.0.0.1`, VM 1 → `10.0.0.2`.
+
 ### UART (PL011) Emulation
 
 Full trap-and-emulate (Stage-2 unmapped). TX: guest writes UARTDR → `output_char()` to physical UART. RX: physical IRQ (INTID 33) → `UART_RX` ring buffer → `VirtualUart.push_rx()` → inject SPI 33. Linux amba-pl011 probe requires PeriphID/PrimeCellID registers.
@@ -191,6 +214,8 @@ Falls back to QEMU virt defaults if DTB parse fails (e.g., QEMU passes addr=0 wi
 | `PENDING_CPU_ON_PER_VCPU` | `[PerVcpuCpuOnRequest; 8]` | Per-vCPU PSCI CPU_ON (multi-pCPU mode only) |
 | `SHARED_VTTBR` / `SHARED_VTCR` | `AtomicU64` | Stage-2 config shared from primary to secondaries (multi-pCPU) |
 | `UART_RX` | `UartRxRing` | Lock-free ring buffer, IRQ handler → run loop |
+| `PORT_RX` | `[NetRxRing; MAX_PORTS]` | Per-VM SPSC ring for virtio-net RX frames |
+| `VSWITCH` | `UnsafeCell<VSwitch>` | L2 virtual switch with MAC learning table |
 
 `VmGlobalState` contains per-VM: `pending_sgis[MAX_VCPUS]`, `pending_spis[MAX_VCPUS]`, `terminal_exit[MAX_VCPUS]`, `vcpu_online_mask`, `current_vcpu_id`, `pending_cpu_on`, `preemption_exit`. Accessed via `vm_state(vm_id)` or `current_vm_state()`.
 
@@ -203,19 +228,20 @@ pub enum Device {
     Gicd(gic::VirtualGicd),
     Gicr(gic::VirtualGicr),
     VirtioBlk(virtio::mmio::VirtioMmioTransport<virtio::blk::VirtioBlk>),
+    VirtioNet(virtio::mmio::VirtioMmioTransport<virtio::net::VirtioNet>),
 }
 ```
 Array-based routing: `devices: [Option<Device>; 8]`, scan for `dev.contains(addr)`.
 
 ## Build System
 
-- **build.rs**: Cross-compiles `boot.S` and `exception.S` via `aarch64-linux-gnu-gcc`, archives into `libboot.a`, links with `--whole-archive`
+- **build.rs**: Cross-compiles `boot.S` and `exception.S` via `aarch64-linux-gnu-gcc`, archives into `libboot.a`, links with `--whole-archive`. Also passes `-Tarch/aarch64/linker.ld` to the linker (moved here from `.cargo/config.toml` to avoid worktree config merging issues)
 - **Target**: `aarch64-unknown-none.json` (custom spec: `llvm-target: aarch64-unknown-none`, `panic-strategy: abort`, `disable-redzone: true`)
 - **Linker**: `arch/aarch64/linker.ld` — base at 0x40000000, `.text.boot` first
 
 ## Tests
 
-113 assertions across 24 test suites run automatically on `make run` (no feature flags). Orchestrated sequentially in `src/main.rs`. Located in `tests/`:
+~127 assertions across 26 test suites run automatically on `make run` (no feature flags). Orchestrated sequentially in `src/main.rs`. Located in `tests/`:
 
 | Test | Coverage | Assertions |
 |------|----------|------------|
@@ -242,6 +268,9 @@ Array-based routing: `devices: [Option<Device>; 8]`, scan for `dev.contains(addr
 | `test_vmid_vttbr` | VMID 0/1 encoding in VTTBR_EL2 bits [63:48] | 2 |
 | `test_multi_vm_devices` | DEVICES[0]/DEVICES[1] registration + MMIO isolation | 3 |
 | `test_vm_activate` | Vm initial VTTBR/VTCR state | 2 |
+| `test_net_rx_ring` | NetRxRing SPSC: empty/store/take/fill/overflow/wraparound | 8 |
+| `test_vswitch` | VSwitch: flood/MAC learning/broadcast/no-self/capacity | 6 |
+| `test_virtio_net` | VirtioNet: device_id/features/queues/config/mac_for_vm | 8 |
 | `test_guest_interrupt` | Guest interrupt injection + exception vector (blocks) | 1 |
 
 Not wired into `main.rs` (exported but not called):
