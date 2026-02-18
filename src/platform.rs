@@ -31,6 +31,24 @@ pub const VIRTIO_DISK_ADDR: u64 = 0x5800_0000;
 /// Disk image size (2MB default — overridden if image is smaller/larger)
 pub const VIRTIO_DISK_SIZE: u64 = 2 * 1024 * 1024;
 
+// ── Virtio-MMIO slot layout ───────────────────────────────────────
+/// Base address of the first virtio-mmio transport (QEMU virt convention)
+pub const VIRTIO_MMIO_BASE: u64 = 0x0a00_0000;
+/// Stride between virtio-mmio transports
+pub const VIRTIO_MMIO_STRIDE: u64 = 0x200;
+/// First SPI INTID for virtio devices (SPI 16 = INTID 48)
+pub const VIRTIO_SPI_BASE: u32 = 48;
+
+/// Compute (base_addr, intid) for virtio-mmio slot N.
+/// Slot 0: virtio-blk (0x0a000000, INTID 48)
+/// Slot 1: virtio-net (0x0a000200, INTID 49)
+pub const fn virtio_slot(n: usize) -> (u64, u32) {
+    (
+        VIRTIO_MMIO_BASE + (n as u64) * VIRTIO_MMIO_STRIDE,
+        VIRTIO_SPI_BASE + n as u32,
+    )
+}
+
 // ── SMP ──────────────────────────────────────────────────────────────
 /// Maximum CPUs supported (compile-time capacity for array sizing)
 pub const MAX_SMP_CPUS: usize = 8;

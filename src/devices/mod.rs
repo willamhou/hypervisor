@@ -101,10 +101,9 @@ impl MmioDevice for Device {
 
 const MAX_DEVICES: usize = 8;
 
-/// Virtio-blk MMIO base address (first QEMU virt virtio-mmio slot)
-const VIRTIO_BLK_BASE: u64 = 0x0a00_0000;
-/// Virtio-blk SPI: SPI 16 = INTID 48
-const VIRTIO_BLK_INTID: u32 = 48;
+use crate::platform;
+const VIRTIO_BLK_BASE: u64 = platform::virtio_slot(0).0;
+const VIRTIO_BLK_INTID: u32 = platform::virtio_slot(0).1;
 
 /// MMIO Device Manager — routes accesses to registered devices by address.
 pub struct DeviceManager {
