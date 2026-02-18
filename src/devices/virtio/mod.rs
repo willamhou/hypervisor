@@ -6,6 +6,7 @@
 pub mod queue;
 pub mod mmio;
 pub mod blk;
+pub mod net;
 
 use queue::Virtqueue;
 
