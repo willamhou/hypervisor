@@ -66,6 +66,10 @@ fn main() {
         // Output link search path
         println!("cargo:rustc-link-search=native={}", out_dir.display());
 
+        // Linker script
+        println!("cargo:rerun-if-changed=arch/aarch64/linker.ld");
+        println!("cargo:rustc-link-arg=-Tarch/aarch64/linker.ld");
+
         // Output link directives with whole-archive
         println!("cargo:rustc-link-arg=--whole-archive");
         println!("cargo:rustc-link-lib=static=boot");
