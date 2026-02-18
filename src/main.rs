@@ -156,6 +156,9 @@ pub extern "C" fn rust_main(dtb_addr: usize) -> ! {
     // Run the VirtioNet device test
     tests::run_virtio_net_test();
 
+    // Run the page ownership test
+    tests::run_page_ownership_test();
+
     // Run the FF-A proxy test
     tests::run_ffa_test();
 

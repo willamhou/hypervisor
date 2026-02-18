@@ -31,6 +31,7 @@ pub mod test_net_rx_ring;
 pub mod test_vswitch;
 pub mod test_virtio_net;
 pub mod test_ffa;
+pub mod test_page_ownership;
 
 // Re-export test functions for easy access
 pub use test_guest::run_test as run_guest_test;
@@ -63,3 +64,4 @@ pub use test_net_rx_ring::run_net_rx_ring_test;
 pub use test_vswitch::run_vswitch_test;
 pub use test_virtio_net::run_virtio_net_test;
 pub use test_ffa::run_ffa_test;
+pub use test_page_ownership::run_page_ownership_test;

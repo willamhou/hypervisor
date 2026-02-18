@@ -99,6 +99,10 @@ pub const BLOCK_MASK_2MB: u64 = BLOCK_SIZE_2MB - 1;
 pub const PAGE_SIZE_4KB: u64 = 4096;
 pub const PAGE_MASK_4KB: u64 = PAGE_SIZE_4KB - 1;
 
+// ── Stage-2 PTE Software bits (for page ownership tracking) ────────
+pub const PTE_SW_SHIFT: u32 = 55;
+pub const PTE_SW_MASK: u64  = 0x3 << PTE_SW_SHIFT; // bits [56:55]
+
 // ── Preemptive scheduling ────────────────────────────────────────────
 // Preemption is now handled by CNTHP timer (INTID 26) armed before each
 // vcpu.run(). See timer::arm_preemption_timer(). This ensures preemption
