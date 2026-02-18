@@ -1,6 +1,6 @@
 # Virtio-Net Inter-VM Networking Design
 
-> Date: 2026-02-17 | Status: Approved
+> Date: 2026-02-17 | Revised: 2026-02-18 | Status: Approved
 
 ## Context
 
@@ -14,10 +14,24 @@ The hypervisor supports multi-VM mode (2 Linux VMs time-sliced on 1 pCPU) with v
 |----------|--------|-----------|
 | Backend | Inter-VM (no host OS networking) | Bare-metal hypervisor has no TAP/socket API |
 | Topology | L2 virtual switch (VSwitch) | Future-proof for >2 VMs, MAC-based forwarding |
-| Feature level | Standard (MAC + STATUS + CSUM) | Linux driver works with minimal, CSUM avoids checksum overhead |
+| Feature level | MAC + STATUS only (no CSUM) | CSUM offload causes corrupt checksums across VMs (stripped header loses csum_start/csum_offset); V2 can add CSUM by copying hdr through VSwitch |
 | MMIO slot | Slot 1: `0x0a000200`, INTID 49 | QEMU virt convention, stride 0x200 from slot 0 |
 | Frame buffering | SPSC ring buffer (8 frames/port) | Avoids cross-DEVICES lock access, handles ARP+ICMP bursts |
 | AVF compatibility | Compile-time `virtio_slot()` abstraction | Addresses are hypervisor policy, not hardware discovery |
+| virtio_net_hdr size | 12 bytes (with `num_buffers`) | Linux virtio-net with VERSION_1 always uses 12-byte `virtio_net_hdr_v1` |
+| Device enum dispatch | Explicit match arms (no macro) | 5 variants × 6 methods is manageable; explicit arms are grep-friendly and easier to debug |
+
+## Feature Flag Scoping
+
+| Component | cfg gate | Rationale |
+|-----------|----------|-----------|
+| `VirtioNet` struct + VirtioDevice impl | always compiled | Device is usable in any mode (single-VM sees NIC but no peer) |
+| `VSwitch` + `NetRxRing` + `PORT_RX` | always compiled | Static globals, minimal cost; avoids cfg complexity |
+| `Device::VirtioNet` variant | always compiled | Enum variant must always exist |
+| `attach_virtio_net()` call in `run_guest()` | `#[cfg(feature = "linux_guest")]` | Only Linux guests use virtio-net |
+| `attach_virtio_net()` call in `run_multi_vm_guests()` | `#[cfg(feature = "multi_vm")]` | Already inside multi_vm-gated function |
+| `drain_net_rx()` in run loops | always compiled | No-op when PORT_RX is empty (fast path check) |
+| `VSwitch::add_port()` calls | alongside `attach_virtio_net()` | Ports registered at device attach time |
 
 ## Architecture
 
@@ -44,29 +58,36 @@ VirtioMmioTransport<VirtioNet>   VirtioMmioTransport<VirtioNet>
 ```
 Guest writes QueueNotify (queue 1)
   -> VirtioMmioTransport::write() -> queue_notify(1, tx_queue)
-  -> VirtioNet::process_tx(tx_queue, port_id)
-     while get_avail_desc():
-       strip virtio_net_hdr (10 bytes)
-       VSwitch::forward(src_port, ethernet_frame)
-         1. MAC learn: src_mac -> src_port
-         2. Lookup dst_mac
-         3. Found -> PORT_RX[dst].store(frame)
-            Not found / broadcast -> flood all ports (except src)
-       tx_queue.put_used(head, 0)
+  -> VirtioNet::queue_notify(1, tx_queue)
+     -> self.process_tx(tx_queue)  // uses self.port_id internally
+        while get_avail_desc():
+          strip virtio_net_hdr (12 bytes)
+          VSWITCH.forward(self.port_id, ethernet_frame)
+            1. MAC learn: src_mac -> src_port
+            2. Lookup dst_mac
+            3. Found -> PORT_RX[dst].store(frame)
+               Not found / broadcast -> flood all ports (except src)
+          tx_queue.put_used(head, 0)
   -> signal_interrupt() -> inject_spi(49) [TX completion]
 ```
 
 ### RX Path (Run loop delivers frames)
 
+**Precondition**: `CURRENT_VM_ID` must be set before calling `drain_net_rx()`,
+because `inject_net_rx()` -> `signal_interrupt()` -> `inject_spi(49)` reads
+`CURRENT_VM_ID` to route the SPI to the correct VM's pending_spis.
+
 ```
 run_one_iteration() / run_multi_vm():
+  // CURRENT_VM_ID already set by caller
   drain_net_rx(vm_id):
     while PORT_RX[vm_id].take():
       DEVICES[vm_id].inject_net_rx(frame)
-        -> VirtioMmioTransport<VirtioNet>::inject_rx(frame)
+        -> DeviceManager::virtio_net_mut() -> VirtioMmioTransport<VirtioNet>
+        -> transport.inject_rx(frame)
            get_avail_desc() from RX queue (queue 0)
-           write virtio_net_hdr (10 bytes, zeroed) + frame
-           put_used(head, 10 + frame.len)
+           write virtio_net_hdr (12 bytes, zeroed, num_buffers=1) + frame
+           put_used(head, 12 + frame.len)
            signal_interrupt() -> inject_spi(49)
         -> Guest receives SPI 49 -> virtio_net driver processes RX
 ```
@@ -91,27 +112,51 @@ pub struct VirtioNet {
 }
 ```
 
+`VirtioNet::mac_for_vm(vm_id)` — associated function for MAC generation:
+```rust
+impl VirtioNet {
+    pub fn mac_for_vm(vm_id: usize) -> [u8; 6] {
+        [0x52, 0x54, 0x00, 0x00, 0x00, (vm_id + 1) as u8]
+    }
+}
+```
+
 VirtioDevice impl:
 - `device_id()` -> 1 (VIRTIO_ID_NET)
-- `device_features()` -> VERSION_1 | MAC | STATUS | CSUM | GUEST_CSUM
+- `device_features()` -> `VIRTIO_F_VERSION_1 | VIRTIO_NET_F_MAC | VIRTIO_NET_F_STATUS`
 - `config_read()` -> MAC (6 bytes @ offset 0) + status (2 bytes @ offset 6)
 - `num_queues()` -> 2 (RX=0, TX=1)
 - `queue_notify(0, q)` -> no-op (guest replenishing RX buffers)
-- `queue_notify(1, q)` -> process_tx(): strip hdr, forward via VSwitch
+- `queue_notify(1, q)` -> `self.process_tx(queue)` (uses `self.port_id` for VSwitch forwarding)
 
-virtio_net_hdr (10 bytes, no MRG_RXBUF):
+Note: CSUM/GUEST_CSUM deliberately excluded. When negotiated, TX frames have
+incomplete checksums (csum_start/csum_offset in virtio_net_hdr). Our VSwitch
+strips the header during forwarding, losing this metadata. The RX side would
+inject a zeroed header, causing the receiver to validate a partial checksum
+and drop the packet. V2 can add CSUM by passing the virtio_net_hdr through
+the VSwitch alongside the frame.
+
+virtio_net_hdr_v1 (12 bytes, VERSION_1 always uses this):
 ```rust
 #[repr(C)]
 struct VirtioNetHdr {
-    flags: u8, gso_type: u8, hdr_len: u16,
-    gso_size: u16, csum_start: u16, csum_offset: u16,
+    flags: u8,
+    gso_type: u8,
+    hdr_len: u16,
+    gso_size: u16,
+    csum_start: u16,
+    csum_offset: u16,
+    num_buffers: u16,   // set to 1 by device on RX; ignored on TX
 }
 ```
+
+Linux kernel's `virtio_net.c` uses `struct virtio_net_hdr_mrg_rxbuf` (12 bytes)
+for all modern (VERSION_1) devices, regardless of MRG_RXBUF negotiation.
 
 ### VSwitch (`src/vswitch.rs`)
 
 ```rust
-const MAX_PORTS: usize = 4;
+const MAX_PORTS: usize = 2;  // matches MAX_VMS
 const MAC_TABLE_SIZE: usize = 16;
 
 pub struct VSwitch {
@@ -127,8 +172,16 @@ struct MacEntry {
 }
 ```
 
+**Global placement**: `static VSWITCH: UnsafeCell<VSwitch>` with manual `unsafe impl Sync`
+(same pattern as `GlobalDeviceManager` in single-pCPU mode). Safe because:
+- `forward()` called from DEVICES lock (single producer per VM iteration)
+- `add_port()` called during init only (before any VM runs)
+
+**Initialization**: `add_port(vm_id)` called during `attach_virtio_net(vm_id)` in
+`guest_loader.rs`, before any run loop starts.
+
 API:
-- `add_port(port_id)` — register port (called at VM init)
+- `add_port(port_id)` — register port (called during `attach_virtio_net()`)
 - `forward(src_port, frame)` — L2 forward: learn src MAC, lookup dst MAC, deliver or flood
 - Internal: `deliver_to_port(port_id, frame)` -> `PORT_RX[port_id].store(frame)`
 
@@ -159,7 +212,7 @@ struct FrameSlot {
 pub static PORT_RX: [NetRxRing; MAX_PORTS] = [...];
 ```
 
-8 frames x 1514 bytes x 4 ports = ~48KB. Acceptable for 16MB heap.
+8 frames x 1514 bytes x 2 ports = ~24KB BSS. Well within the 16MB heap gap.
 
 ### VirtioMmioTransport Extension
 
@@ -168,27 +221,9 @@ impl VirtioMmioTransport<VirtioNet> {
     /// VSwitch -> guest RX: write frame to RX queue, signal interrupt
     pub fn inject_rx(&mut self, frame: &[u8]) -> bool {
         let rx_queue = &mut self.queues[0];
-        // get avail desc, write virtio_net_hdr (10B zeroed) + frame, put_used
+        // get avail desc, write virtio_net_hdr (12B zeroed, num_buffers=1) + frame, put_used
         // signal_interrupt() -> inject_spi(49)
     }
-}
-```
-
-### Device Enum Dispatch Macro
-
-Replace 6 hand-written match arms with macro:
-
-```rust
-macro_rules! dispatch_device {
-    ($self:expr, $method:ident $(, $arg:expr)*) => {
-        match $self {
-            Device::Uart(d) => d.$method($($arg),*),
-            Device::Gicd(d) => d.$method($($arg),*),
-            Device::Gicr(d) => d.$method($($arg),*),
-            Device::VirtioBlk(d) => d.$method($($arg),*),
-            Device::VirtioNet(d) => d.$method($($arg),*),
-        }
-    };
 }
 ```
 
@@ -244,14 +279,23 @@ DEVICES[1].attach_virtio_net(1);
 Drain net RX in the same location as UART RX drain:
 
 - `run_one_iteration()`: after `drain_uart_rx`, before `inject_pending_sgis`
-- `run_multi_vm()`: after `activate_stage2`, before `run_one_iteration`
+- `run_multi_vm()`: after setting `CURRENT_VM_ID` + `activate_stage2`, before `run_one_iteration`
 - `run_vcpu()` (multi-pCPU): after `drain_uart_rx`
+
+**CURRENT_VM_ID precondition**: `drain_net_rx()` calls `inject_net_rx()` →
+`signal_interrupt()` → `inject_spi(49)` which reads `CURRENT_VM_ID` to route
+the SPI to the correct VM. In `run_multi_vm()`, `CURRENT_VM_ID` is set before
+`activate_stage2`, so `drain_net_rx()` placed after that is safe.
+
+After `inject_net_rx()`, call `flush_pending_spis_to_hardware()` for low-latency
+SPI delivery (same as virtio-blk pattern with INTID 48).
 
 ### GlobalDeviceManager
 
 Both cfg variants get new methods:
-- `attach_virtio_net(vm_id: usize)`
-- `inject_net_rx(frame: &[u8]) -> bool`
+- `attach_virtio_net(vm_id: usize)` — creates VirtioNet + VirtioMmioTransport, registers as Device
+- `inject_net_rx(frame: &[u8]) -> bool` — calls `virtio_net_mut().inject_rx(frame)`
+- `virtio_net_mut() -> &mut VirtioMmioTransport<VirtioNet>` — accessor (same pattern as `uart_mut()`)
 
 ### Initramfs Auto-IP
 
@@ -280,7 +324,7 @@ BusyBox v1.36.0 confirmed: `awk`, `sed`, `ip`, `cat` all available.
 
 **test_virtio_net** (~6 assertions):
 - device_id() == 1
-- device_features() includes VERSION_1 | MAC | STATUS | CSUM | GUEST_CSUM
+- device_features() includes VERSION_1 | MAC | STATUS (no CSUM/GUEST_CSUM)
 - config_read() returns correct MAC + LINK_UP status
 - num_queues() == 2
 - mac_for_vm(0) == [52:54:00:00:00:01]
@@ -326,7 +370,7 @@ PING 10.0.0.2: 3 packets transmitted, 3 received, 0% packet loss
 | `src/devices/virtio/mod.rs` | Add `pub mod net` | LOW |
 | `src/vswitch.rs` | **NEW** — VSwitch + NetRxRing + PORT_RX | MEDIUM |
 | `src/lib.rs` | Add `pub mod vswitch` | LOW |
-| `src/devices/mod.rs` | VirtioNet variant + dispatch macro + attach/inject methods | MEDIUM |
+| `src/devices/mod.rs` | VirtioNet variant + explicit match arms + attach/inject/accessor methods | MEDIUM |
 | `src/platform.rs` | `virtio_slot()` abstraction | LOW |
 | `src/global.rs` | `attach_virtio_net` / `inject_net_rx` proxy methods | LOW |
 | `src/guest_loader.rs` | Register virtio-net at VM init | LOW |
@@ -348,7 +392,7 @@ This design leaves extension points for future AVF-style mechanisms:
 
 ## Known Limitations (V2)
 
-- Single-frame latency: RX delivery waits for next VM scheduling iteration (~10ms worst case)
+- Single-frame latency: RX delivery waits for next VM scheduling iteration (~20ms worst case in multi-VM: frame sent during VM0's turn, VM1 drains on next outer loop pass = 2 × 10ms)
 - No multi-queue: single RX/TX pair (adequate for inter-VM ping, not for throughput)
 - No VIRTIO_NET_F_MRG_RXBUF: large frames require single descriptor
 - No promiscuous mode or VLAN support
