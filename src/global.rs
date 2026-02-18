@@ -264,6 +264,12 @@ pub fn current_vcpu_id() -> usize {
     { crate::percpu::current_cpu_id() }
 }
 
+/// Get the current VM ID (0 for single-VM modes).
+#[inline]
+pub fn current_vm_id() -> usize {
+    CURRENT_VM_ID.load(Ordering::Relaxed)
+}
+
 // ── PSCI CPU_ON ──────────────────────────────────────────────────────
 
 /// Pending PSCI CPU_ON request from exception handler to run loop

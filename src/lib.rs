@@ -15,6 +15,7 @@ pub mod sync;
 pub mod percpu;
 pub mod dtb;
 pub mod vswitch;
+pub mod ffa;
 
 // Note: println! macro is exported at the crate root via #[macro_export]
 // It can be used as: use hypervisor::println;

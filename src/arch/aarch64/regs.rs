@@ -299,6 +299,7 @@ impl VcpuContext {
             EC_UNKNOWN => ExitReason::Unknown,
             EC_WFI_WFE => ExitReason::WfiWfe,
             EC_HVC64 => ExitReason::HvcCall,
+            EC_SMC64 => ExitReason::SmcCall,
             EC_MSR_MRS => ExitReason::TrapMsrMrs,
             EC_IABT_LOWER | EC_IABT_SAME => ExitReason::InstructionAbort,
             EC_DABT_LOWER | EC_DABT_SAME => ExitReason::DataAbort,
@@ -321,6 +322,9 @@ pub enum ExitReason {
     /// HVC (Hypervisor Call) instruction
     HvcCall,
 
+    /// SMC (Secure Monitor Call) instruction
+    SmcCall,
+
     /// Trapped MSR/MRS (system register access)
     TrapMsrMrs,
 
@@ -340,6 +344,7 @@ impl fmt::Display for ExitReason {
             ExitReason::Unknown => write!(f, "Unknown"),
             ExitReason::WfiWfe => write!(f, "WFI/WFE"),
             ExitReason::HvcCall => write!(f, "HVC Call"),
+            ExitReason::SmcCall => write!(f, "SMC Call"),
             ExitReason::TrapMsrMrs => write!(f, "MSR/MRS Trap"),
             ExitReason::InstructionAbort => write!(f, "Instruction Abort"),
             ExitReason::DataAbort => write!(f, "Data Abort"),

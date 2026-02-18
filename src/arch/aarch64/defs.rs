@@ -18,6 +18,7 @@ pub const HCR_RW: u64 = 1 << 31;
 pub const HCR_TEA: u64 = 1 << 37;  // Trap External Aborts to EL2
 pub const HCR_APK: u64 = 1 << 40;
 pub const HCR_API: u64 = 1 << 41;
+pub const HCR_TSC: u64 = 1 << 19;  // Trap SMC to EL2
 
 // ── ESR_EL2 (Exception Syndrome Register) ────────────────────────────
 pub const ESR_EC_SHIFT: u32 = 26;
@@ -37,6 +38,7 @@ pub const EC_IABT_LOWER: u64 = 0x20;
 pub const EC_IABT_SAME: u64 = 0x21;
 pub const EC_DABT_LOWER: u64 = 0x24;
 pub const EC_DABT_SAME: u64 = 0x25;
+pub const EC_SMC64: u64 = 0x17;
 
 // ── SPSR_EL2 defaults ────────────────────────────────────────────────
 pub const SPSR_EL1H_DAIF_MASKED: u64 = 0x3C5;

@@ -60,6 +60,7 @@ pub fn init() {
                       | HCR_FB         // Force Broadcast TLB/cache maintenance
                       | HCR_BSU_INNER  // Barrier Shareability Upgrade = IS
                       | HCR_TWI        // Trap WFI to EL2 (for vCPU scheduling)
+                      | HCR_TSC        // Trap SMC to EL2 (for FF-A proxy)
                       // TWE NOT set: WFE executes natively (used in spinlocks,
                       // woken by SEV not SGI — trapping would cause deadlock)
                       | HCR_TEA        // Trap External Aborts to EL2
@@ -196,6 +197,15 @@ pub extern "C" fn handle_exception(context: &mut VcpuContext) -> bool {
             // x0 contains the hypercall number
             let should_continue = handle_hypercall(context);
             // Don't advance PC - ELR_EL2 already points to the next instruction
+            should_continue
+        }
+
+        ExitReason::SmcCall => {
+            reset_exception_count();
+            let should_continue = handle_smc(context);
+            // SMC: ELR_EL2 points to the SMC instruction itself.
+            // Must advance PC by 4 after handling.
+            context.pc += AARCH64_INSN_SIZE;
             should_continue
         }
 
@@ -968,6 +978,47 @@ fn handle_hypercall(context: &mut VcpuContext) -> bool {
     // Extract HVC immediate from ESR_EL2[15:0]
     let hvc_imm = (context.sys_regs.esr_el2 & ESR_HVC_IMM_MASK) as u32;
     handle_hypercall_with_imm(context, hvc_imm)
+}
+
+/// Handle SMC from guest (trapped by HCR_EL2.TSC)
+///
+/// Routes to:
+/// - PSCI (0x84000000-0x8400000F, 0xC4000003-0xC4000004) -> handle_psci()
+/// - FF-A (0x84000060-0x840000FF, 0xC4000060-0xC40000FF) -> handle_ffa_call()
+/// - Unknown -> SMC_UNKNOWN (-1)
+fn handle_smc(context: &mut VcpuContext) -> bool {
+    let function_id = context.gp_regs.x0;
+
+    // PSCI range: standard ARM function IDs
+    if is_psci_function(function_id) {
+        return handle_psci(context, function_id);
+    }
+
+    // FF-A range: 0x840000[60-FF] or 0xC40000[60-FF]
+    if is_ffa_function(function_id) {
+        return crate::ffa::proxy::handle_ffa_call(context);
+    }
+
+    // Unknown SMC
+    context.gp_regs.x0 = 0xFFFF_FFFF_FFFF_FFFF; // SMC_UNKNOWN = -1
+    true
+}
+
+/// Check if function_id is a PSCI call
+fn is_psci_function(fid: u64) -> bool {
+    matches!(fid,
+        PSCI_VERSION | PSCI_CPU_SUSPEND_32 | PSCI_CPU_OFF |
+        PSCI_CPU_ON_32 | PSCI_CPU_ON_64 | PSCI_AFFINITY_INFO_32 |
+        PSCI_AFFINITY_INFO_64 | PSCI_MIGRATE_INFO_TYPE |
+        PSCI_SYSTEM_OFF | PSCI_SYSTEM_RESET | PSCI_FEATURES
+    )
+}
+
+/// Check if function_id is an FF-A call
+fn is_ffa_function(fid: u64) -> bool {
+    let base = fid & 0xFFFF_FF00;
+    let low = fid & 0xFF;
+    (base == 0x84000000 || base == 0xC4000000) && low >= 0x60
 }
 
 /// Handle PSCI (Power State Coordination Interface) calls
