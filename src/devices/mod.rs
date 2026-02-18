@@ -39,6 +39,7 @@ pub enum Device {
     Gicd(gic::VirtualGicd),
     Gicr(gic::VirtualGicr),
     VirtioBlk(virtio::mmio::VirtioMmioTransport<virtio::blk::VirtioBlk>),
+    VirtioNet(virtio::mmio::VirtioMmioTransport<virtio::net::VirtioNet>),
 }
 
 impl MmioDevice for Device {
@@ -48,6 +49,7 @@ impl MmioDevice for Device {
             Device::Gicd(d) => d.read(offset, size),
             Device::Gicr(d) => d.read(offset, size),
             Device::VirtioBlk(d) => d.read(offset, size),
+            Device::VirtioNet(d) => d.read(offset, size),
         }
     }
 
@@ -57,6 +59,7 @@ impl MmioDevice for Device {
             Device::Gicd(d) => d.write(offset, value, size),
             Device::Gicr(d) => d.write(offset, value, size),
             Device::VirtioBlk(d) => d.write(offset, value, size),
+            Device::VirtioNet(d) => d.write(offset, value, size),
         }
     }
 
@@ -66,6 +69,7 @@ impl MmioDevice for Device {
             Device::Gicd(d) => d.base_address(),
             Device::Gicr(d) => d.base_address(),
             Device::VirtioBlk(d) => d.base_address(),
+            Device::VirtioNet(d) => d.base_address(),
         }
     }
 
@@ -75,6 +79,7 @@ impl MmioDevice for Device {
             Device::Gicd(d) => d.size(),
             Device::Gicr(d) => d.size(),
             Device::VirtioBlk(d) => d.size(),
+            Device::VirtioNet(d) => d.size(),
         }
     }
 
@@ -84,6 +89,7 @@ impl MmioDevice for Device {
             Device::Gicd(d) => d.pending_irq(),
             Device::Gicr(d) => d.pending_irq(),
             Device::VirtioBlk(d) => d.pending_irq(),
+            Device::VirtioNet(d) => d.pending_irq(),
         }
     }
 
@@ -93,6 +99,7 @@ impl MmioDevice for Device {
             Device::Gicd(d) => d.ack_irq(),
             Device::Gicr(d) => d.ack_irq(),
             Device::VirtioBlk(d) => d.ack_irq(),
+            Device::VirtioNet(d) => d.ack_irq(),
         }
     }
 }
@@ -145,6 +152,25 @@ impl DeviceManager {
             VIRTIO_BLK_BASE, blk, VIRTIO_BLK_INTID,
         );
         self.register_device(Device::VirtioBlk(transport));
+    }
+
+    /// Attach a virtio-net device for the given VM.
+    pub fn attach_virtio_net(&mut self, vm_id: usize) {
+        let (base, intid) = crate::platform::virtio_slot(1);
+        let net = virtio::net::VirtioNet::new(vm_id);
+        let transport = virtio::mmio::VirtioMmioTransport::new(base, net, intid);
+        self.register_device(Device::VirtioNet(transport));
+        crate::vswitch::vswitch_add_port(vm_id);
+    }
+
+    /// Get a mutable reference to the virtio-net transport (for RX injection).
+    pub fn virtio_net_mut(&mut self) -> Option<&mut virtio::mmio::VirtioMmioTransport<virtio::net::VirtioNet>> {
+        for slot in self.devices.iter_mut() {
+            if let Some(Device::VirtioNet(transport)) = slot {
+                return Some(transport);
+            }
+        }
+        None
     }
 
     /// Handle MMIO access by scanning registered devices.
