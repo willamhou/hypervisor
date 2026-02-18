@@ -108,3 +108,156 @@ pub static PORT_RX: [NetRxRing; MAX_PORTS] = [
     NetRxRing::new(),
     NetRxRing::new(),
 ];
+
+// ── VSwitch L2 Virtual Switch ─────────────────────────────────────
+
+const MAC_TABLE_SIZE: usize = 16;
+
+struct MacEntry {
+    mac: [u8; 6],
+    port_id: usize,
+    valid: bool,
+}
+
+impl MacEntry {
+    const fn new() -> Self {
+        Self {
+            mac: [0; 6],
+            port_id: 0,
+            valid: false,
+        }
+    }
+}
+
+/// L2 virtual switch with MAC learning.
+///
+/// Forwarding logic:
+/// 1. Learn src_mac -> src_port
+/// 2. If dst is broadcast/multicast -> flood all ports except src
+/// 3. Lookup dst_mac -> found: deliver; not found: flood
+pub struct VSwitch {
+    mac_table: [MacEntry; MAC_TABLE_SIZE],
+    mac_count: usize,
+    port_count: usize,
+}
+
+impl VSwitch {
+    const fn new() -> Self {
+        Self {
+            mac_table: [
+                MacEntry::new(), MacEntry::new(), MacEntry::new(), MacEntry::new(),
+                MacEntry::new(), MacEntry::new(), MacEntry::new(), MacEntry::new(),
+                MacEntry::new(), MacEntry::new(), MacEntry::new(), MacEntry::new(),
+                MacEntry::new(), MacEntry::new(), MacEntry::new(), MacEntry::new(),
+            ],
+            mac_count: 0,
+            port_count: 0,
+        }
+    }
+
+    fn reset(&mut self) {
+        for entry in self.mac_table.iter_mut() {
+            entry.valid = false;
+        }
+        self.mac_count = 0;
+        self.port_count = 0;
+    }
+
+    fn add_port(&mut self, _port_id: usize) {
+        self.port_count += 1;
+    }
+
+    fn forward(&mut self, src_port: usize, frame: &[u8]) {
+        if frame.len() < 14 {
+            return; // Too short for Ethernet header
+        }
+
+        let dst_mac = &frame[0..6];
+        let src_mac = &frame[6..12];
+
+        // Learn: src_mac -> src_port
+        self.learn(src_mac, src_port);
+
+        // Check broadcast/multicast (bit 0 of first byte)
+        if dst_mac[0] & 1 != 0 {
+            // Flood to all ports except src
+            self.flood(src_port, frame);
+            return;
+        }
+
+        // Unicast: lookup dst_mac
+        if let Some(dst_port) = self.lookup(dst_mac) {
+            if dst_port != src_port {
+                PORT_RX[dst_port].store(frame);
+            }
+            // If dst_port == src_port, drop (no self-delivery)
+        } else {
+            // Unknown unicast: flood
+            self.flood(src_port, frame);
+        }
+    }
+
+    fn learn(&mut self, mac: &[u8], port_id: usize) {
+        // Check if already learned (update port if changed)
+        for entry in self.mac_table.iter_mut() {
+            if entry.valid && entry.mac == mac[..6] {
+                entry.port_id = port_id;
+                return;
+            }
+        }
+        // Add new entry
+        if self.mac_count < MAC_TABLE_SIZE {
+            for entry in self.mac_table.iter_mut() {
+                if !entry.valid {
+                    entry.mac.copy_from_slice(&mac[..6]);
+                    entry.port_id = port_id;
+                    entry.valid = true;
+                    self.mac_count += 1;
+                    return;
+                }
+            }
+        }
+        // Table full — drop (no eviction in V1)
+    }
+
+    fn lookup(&self, mac: &[u8]) -> Option<usize> {
+        for entry in &self.mac_table {
+            if entry.valid && entry.mac == mac[..6] {
+                return Some(entry.port_id);
+            }
+        }
+        None
+    }
+
+    fn flood(&self, src_port: usize, frame: &[u8]) {
+        for port in 0..MAX_PORTS {
+            if port != src_port {
+                PORT_RX[port].store(frame);
+            }
+        }
+    }
+}
+
+/// Global VSwitch instance.
+/// SAFETY: forward() only called from inside DEVICES lock (single producer
+/// per VM iteration). add_port() only called during init. Same pattern as
+/// GlobalDeviceManager in single-pCPU mode.
+struct VSwitchCell(UnsafeCell<VSwitch>);
+unsafe impl Sync for VSwitchCell {}
+
+static VSWITCH: VSwitchCell = VSwitchCell(UnsafeCell::new(VSwitch::new()));
+
+/// Public API — called from VirtioNet::process_tx() inside DEVICES lock.
+pub fn vswitch_forward(src_port: usize, frame: &[u8]) {
+    unsafe { (*VSWITCH.0.get()).forward(src_port, frame); }
+}
+
+/// Register a port (called during attach_virtio_net).
+pub fn vswitch_add_port(port_id: usize) {
+    unsafe { (*VSWITCH.0.get()).add_port(port_id); }
+}
+
+/// Reset VSwitch state (for tests).
+pub fn vswitch_reset() {
+    unsafe { (*VSWITCH.0.get()).reset(); }
+}
