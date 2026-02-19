@@ -26,11 +26,8 @@ pub const FFA_MSG_SEND_DIRECT_RESP_32: u64 = 0x84000070;
 pub const FFA_MEM_DONATE_32: u64  = 0x84000071;
 pub const FFA_MEM_LEND_32: u64    = 0x84000072;
 pub const FFA_MEM_SHARE_32: u64   = 0x84000073;
-#[allow(dead_code)]
 pub const FFA_MEM_RETRIEVE_REQ_32: u64 = 0x84000074;
-#[allow(dead_code)]
 pub const FFA_MEM_RETRIEVE_RESP: u64 = 0x84000075;
-#[allow(dead_code)]
 pub const FFA_MEM_RELINQUISH: u64 = 0x84000076;
 pub const FFA_MEM_RECLAIM: u64    = 0x84000077;
 #[allow(dead_code)]
@@ -47,7 +44,6 @@ pub const FFA_MSG_SEND_DIRECT_RESP_64: u64 = 0xC4000070;
 pub const FFA_MEM_DONATE_64: u64  = 0xC4000071;
 pub const FFA_MEM_LEND_64: u64    = 0xC4000072;
 pub const FFA_MEM_SHARE_64: u64   = 0xC4000073;
-#[allow(dead_code)]
 pub const FFA_MEM_RETRIEVE_REQ_64: u64 = 0xC4000074;
 
 // ── FF-A Version ──────────────────────────────────────────────────
@@ -80,11 +76,20 @@ pub fn vm_id_to_partition_id(vm_id: usize) -> u16 {
 }
 
 /// Convert an FF-A partition ID to a VM ID. Returns None for non-VM IDs.
-#[allow(dead_code)]
 pub fn partition_id_to_vm_id(part_id: u16) -> Option<usize> {
     if part_id >= 1 && (part_id as usize) <= FFA_MAX_VMS {
         Some((part_id - 1) as usize)
     } else {
         None
     }
+}
+
+/// Check if a partition ID is a valid VM (non-SP) partition.
+pub fn is_vm_partition(part_id: u16) -> bool {
+    partition_id_to_vm_id(part_id).is_some()
+}
+
+/// Check if a partition ID is a valid receiver (VM or SP).
+pub fn is_valid_receiver(part_id: u16) -> bool {
+    is_vm_partition(part_id) || stub_spmc::is_valid_sp(part_id)
 }

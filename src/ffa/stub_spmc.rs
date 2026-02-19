@@ -47,6 +47,8 @@ pub struct MemShareRecord {
     pub active: bool,
     /// True for MEM_LEND (S2AP=NONE), false for MEM_SHARE (S2AP=RO).
     pub is_lend: bool,
+    /// Whether receiver has called FFA_MEM_RETRIEVE_REQ.
+    pub retrieved: bool,
 }
 
 /// Fixed-size array of share records (no alloc).
@@ -68,6 +70,7 @@ static SHARE_RECORDS: ShareRecordArray = ShareRecordArray(UnsafeCell::new({
         total_page_count: 0,
         active: false,
         is_lend: false,
+        retrieved: false,
     };
     [EMPTY, EMPTY, EMPTY, EMPTY, EMPTY, EMPTY, EMPTY, EMPTY,
      EMPTY, EMPTY, EMPTY, EMPTY, EMPTY, EMPTY, EMPTY, EMPTY]
@@ -104,6 +107,7 @@ pub fn record_share(
                 total_page_count,
                 active: true,
                 is_lend,
+                retrieved: false,
             };
             return Some(handle);
         }
@@ -133,6 +137,60 @@ pub fn lookup_share(handle: u64) -> Option<ShareInfo> {
         }
     }
     None
+}
+
+/// Extended share record info (includes sender/receiver/retrieved state).
+pub struct ShareInfoFull {
+    pub sender_id: u16,
+    pub receiver_id: u16,
+    pub ranges: [(u64, u32); MAX_SHARE_RANGES],
+    pub range_count: usize,
+    pub total_page_count: u32,
+    pub is_lend: bool,
+    pub retrieved: bool,
+}
+
+/// Look up a share record by handle, returning full info including sender/receiver.
+pub fn lookup_share_full(handle: u64) -> Option<ShareInfoFull> {
+    let records = unsafe { &*SHARE_RECORDS.0.get() };
+    for record in records.iter() {
+        if record.active && record.handle == handle {
+            return Some(ShareInfoFull {
+                sender_id: record.sender_id,
+                receiver_id: record.receiver_id,
+                ranges: record.ranges,
+                range_count: record.range_count,
+                total_page_count: record.total_page_count,
+                is_lend: record.is_lend,
+                retrieved: record.retrieved,
+            });
+        }
+    }
+    None
+}
+
+/// Mark a share as retrieved. Returns true if found and was not already retrieved.
+pub fn mark_retrieved(handle: u64) -> bool {
+    let records = unsafe { &mut *SHARE_RECORDS.0.get() };
+    for record in records.iter_mut() {
+        if record.active && record.handle == handle && !record.retrieved {
+            record.retrieved = true;
+            return true;
+        }
+    }
+    false
+}
+
+/// Mark a share as relinquished (not retrieved). Returns true if found and was retrieved.
+pub fn mark_relinquished(handle: u64) -> bool {
+    let records = unsafe { &mut *SHARE_RECORDS.0.get() };
+    for record in records.iter_mut() {
+        if record.active && record.handle == handle && record.retrieved {
+            record.retrieved = false;
+            return true;
+        }
+    }
+    false
 }
 
 /// Reclaim a memory share by handle. Returns true if found and removed.
