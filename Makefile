@@ -16,7 +16,7 @@ QEMU := qemu-system-aarch64
 QEMU_FLAGS := -machine virt,virtualization=on,gic-version=3 \
               -cpu max \
               -smp 4 \
-              -m 1G \
+              -m 2G \
               -nographic \
               -kernel $(BINARY)
 
@@ -116,12 +116,13 @@ run-multi-vm:
 	    -device loader,file=$(LINUX_INITRAMFS),addr=0x74000000 \
 	    -device loader,file=$(LINUX_DISK_VM1),addr=0x78000000
 
-# Android guest paths (Phase 1: upstream 6.6 LTS + Android config, reuses Linux DTB/initramfs)
+# Android guest paths (Phase 2: Android DTB + minimal init)
 ANDROID_IMAGE ?= guest/android/Image
-ANDROID_INITRAMFS ?= guest/linux/initramfs.cpio.gz
+ANDROID_DTB ?= guest/android/guest.dtb
+ANDROID_INITRAMFS ?= guest/android/initramfs.cpio.gz
 ANDROID_DISK ?= guest/linux/disk.img
 
-# QEMU flags for Android guest (2GB RAM for future phases)
+# QEMU flags for Android guest (2GB RAM)
 QEMU_FLAGS_ANDROID := -machine virt,virtualization=on,gic-version=3 \
               -cpu max \
               -smp 4 \
@@ -129,7 +130,7 @@ QEMU_FLAGS_ANDROID := -machine virt,virtualization=on,gic-version=3 \
               -nographic \
               -kernel $(BINARY)
 
-# Run hypervisor with Android-configured kernel (Phase 1: BusyBox shell)
+# Run hypervisor with Android-configured kernel (Phase 2: minimal init)
 run-android:
 	@echo "Building hypervisor with Linux guest support..."
 	cargo build --target aarch64-unknown-none --features linux_guest
@@ -139,7 +140,7 @@ run-android:
 	@echo "Press Ctrl+A then X to exit QEMU"
 	$(QEMU) $(QEMU_FLAGS_ANDROID) \
 	    -device loader,file=$(ANDROID_IMAGE),addr=0x48000000 \
-	    -device loader,file=$(LINUX_DTB),addr=0x47000000 \
+	    -device loader,file=$(ANDROID_DTB),addr=0x47000000 \
 	    -device loader,file=$(ANDROID_INITRAMFS),addr=0x54000000 \
 	    -device loader,file=$(ANDROID_DISK),addr=0x58000000
 

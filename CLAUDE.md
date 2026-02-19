@@ -4,17 +4,17 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Overview
 
-ARM64 Type-1 bare-metal hypervisor written in Rust (no_std) with ARM64 assembly. Runs at EL2 (hypervisor exception level) and manages guest VMs at EL1. Targets QEMU virt machine. Boots Linux 6.12.12 to BusyBox shell with 4 vCPUs, virtio-blk storage, and virtio-net inter-VM networking. Supports multi-VM with per-VM Stage-2, VMID-tagged TLBs, two-level scheduling, and L2 virtual switch. Includes FF-A v1.1 proxy with stub SPMC, page ownership validation via Stage-2 PTE SW bits, FF-A v1.1 descriptor parsing, and SMC forwarding to EL3.
+ARM64 Type-1 bare-metal hypervisor written in Rust (no_std) with ARM64 assembly. Runs at EL2 (hypervisor exception level) and manages guest VMs at EL1. Targets QEMU virt machine. Boots Linux 6.12.12 to BusyBox shell with 4 vCPUs, virtio-blk storage, and virtio-net inter-VM networking. Supports multi-VM with per-VM Stage-2, VMID-tagged TLBs, two-level scheduling, and L2 virtual switch. Includes FF-A v1.1 proxy with stub SPMC, page ownership validation via Stage-2 PTE SW bits, FF-A v1.1 descriptor parsing, and SMC forwarding to EL3. Android boot with PL031 RTC emulation, Binder IPC, binderfs, minimal init, 1GB guest RAM.
 
 ## Build Commands
 
 ```bash
 make              # Build hypervisor
-make run          # Build + run in QEMU — runs 29 test suites automatically (exit: Ctrl+A then X)
+make run          # Build + run in QEMU — runs 30 test suites automatically (exit: Ctrl+A then X)
 make run-linux    # Build + boot Linux guest (--features linux_guest, 4 vCPUs on 1 pCPU, virtio-blk)
 make run-linux-smp # Build + boot Linux guest (--features multi_pcpu, 4 vCPUs on 4 pCPUs)
 make run-multi-vm # Build + boot 2 Linux VMs time-sliced (--features multi_vm)
-make run-android  # Build + boot Linux 6.6 LTS with Android config (Phase 1: BusyBox shell)
+make run-android  # Build + boot Android-configured kernel (PL031 RTC, Binder, minimal init, 1GB RAM)
 make run-guest GUEST_ELF=/path/to/zephyr.elf  # Boot Zephyr guest (--features guest)
 make debug        # Build + run with GDB server on port 1234
 make clean        # Clean build artifacts
@@ -59,6 +59,7 @@ make fmt          # Format code
 | `PlatformInfo` | `src/dtb.rs` | Runtime DTB parsing: UART, GIC, RAM, CPU count discovery |
 | `VSwitch` | `src/vswitch.rs` | L2 virtual switch with MAC learning, inter-VM frame forwarding |
 | `NetRxRing` | `src/vswitch.rs` | Per-port SPSC ring buffer for async RX frame delivery |
+| `VirtualPl031` | `src/devices/pl031.rs` | PL031 RTC emulation: counter-based time, PrimeCell ID |
 
 ### Exception Handling Flow
 ```
@@ -193,6 +194,10 @@ Implements the FF-A (Firmware Framework for Arm) v1.1 hypervisor proxy role (pKV
 
 Full trap-and-emulate (Stage-2 unmapped). TX: guest writes UARTDR → `output_char()` to physical UART. RX: physical IRQ (INTID 33) → `UART_RX` ring buffer → `VirtualUart.push_rx()` → inject SPI 33. Linux amba-pl011 probe requires PeriphID/PrimeCellID registers.
 
+### PL031 RTC Emulation (`src/devices/pl031.rs`)
+
+Trap-and-emulate at `0x09010000` (SPI 2 = INTID 34). Counter-based time: `RTCDR = load_value + (CNTVCT_EL0 / CNTFRQ_EL0)` when enabled (RTCCR bit 0). Registers: RTCDR (0x000, read), RTCLR (0x008, write), RTCCR (0x00C, control), RTCIMSC/RTCRIS/RTCMIS/RTCICR (0x010-0x01C, stubs). PrimeCell ID registers (0xFE0-0xFFC) required for Linux amba bus probe. 4 unit tests in `tests/test_pl031.rs`.
+
 ### DTB Runtime Parsing (`src/dtb.rs`)
 
 At boot, QEMU passes the host DTB address in x0. `boot.S` preserves it in callee-saved x20, then passes to `rust_main(dtb_addr: usize)`. `dtb::init()` uses the `fdt` crate (v0.1.5, zero-copy, no-alloc) to discover platform hardware:
@@ -218,7 +223,7 @@ Falls back to QEMU virt defaults if DTB parse fails (e.g., QEMU passes addr=0 wi
 | Kernel (VM 0) | 0x48000000 | Linux Image load address |
 | Initramfs (VM 0) | 0x54000000 | BusyBox initramfs |
 | Disk image (VM 0) | 0x58000000 | virtio-blk backing store |
-| VM 0 RAM | 0x48000000-0x58000000 | 256MB (single-VM: 0x48000000-0x68000000 = 512MB) |
+| VM 0 RAM | 0x48000000-0x58000000 | 256MB (single-VM: 0x48000000-0x88000000 = 1GB) |
 | DTB (VM 1) | 0x67000000 | Device tree blob (multi_vm only) |
 | Kernel (VM 1) | 0x68000000 | Linux Image load address (multi_vm only) |
 | VM 1 RAM | 0x68000000-0x78000000 | 256MB (multi_vm only) |
@@ -255,6 +260,7 @@ pub enum Device {
     Gicr(gic::VirtualGicr),
     VirtioBlk(virtio::mmio::VirtioMmioTransport<virtio::blk::VirtioBlk>),
     VirtioNet(virtio::mmio::VirtioMmioTransport<virtio::net::VirtioNet>),
+    Pl031(pl031::VirtualPl031),
 }
 ```
 Array-based routing: `devices: [Option<Device>; 8]`, scan for `dev.contains(addr)`.
@@ -267,7 +273,7 @@ Array-based routing: `devices: [Option<Device>; 8]`, scan for `dev.contains(addr
 
 ## Tests
 
-~158 assertions across 29 test suites run automatically on `make run` (no feature flags). Orchestrated sequentially in `src/main.rs`. Located in `tests/`:
+~162 assertions across 30 test suites run automatically on `make run` (no feature flags). Orchestrated sequentially in `src/main.rs`. Located in `tests/`:
 
 | Test | Coverage | Assertions |
 |------|----------|------------|
@@ -298,6 +304,7 @@ Array-based routing: `devices: [Option<Device>; 8]`, scan for `dev.contains(addr
 | `test_vswitch` | VSwitch: flood/MAC learning/broadcast/no-self/capacity | 6 |
 | `test_virtio_net` | VirtioNet: device_id/features/queues/config/mac_for_vm | 8 |
 | `test_page_ownership` | Stage-2 PTE SW bits: read/write OWNED/SHARED_OWNED, unmapped IPA | 4 |
+| `test_pl031` | PL031 RTC: RTCDR readable, RTCLR write+readback, PeriphID/PrimeCellID, unknown offset | 4 |
 | `test_ffa` | FF-A proxy: VERSION/ID_GET/FEATURES/RXTX/messaging/MEM_SHARE/RECLAIM/descriptors/SMC forward | 18 |
 | `test_guest_interrupt` | Guest interrupt injection + exception vector (blocks) | 1 |
 

@@ -1,6 +1,6 @@
 # ARM64 Hypervisor 开发计划
 
-**项目版本**: v0.14.0 (Phase 14 Complete — FF-A Validation + Descriptors + SMC Forwarding)
+**项目版本**: v0.16.0 (Phase 16 Complete — Android Boot Phase 2: PL031 RTC + Init)
 **计划制定日期**: 2026-01-26
 **最后更新**: 2026-02-19
 **计划类型**: 敏捷迭代，灵活调整
@@ -18,12 +18,13 @@ M2: 增强功能          ██████████████████
 M3: FF-A              ████████████░░░░░░░░  60% 🔧
 M4: Secure EL2        ░░░░░░░░░░░░░░░░░░░░   0% ⏸️
 M5: RME & CCA         ░░░░░░░░░░░░░░░░░░░░   0% ⏸️
-Android Boot          █████░░░░░░░░░░░░░░░  25% ✅ (Phase 1 完成)
+Android Boot          ██████████░░░░░░░░░░  50% ✅ (Phase 2 完成)
 ```
 
-**测试覆盖**: ~158 assertions / 29 test suites (100% pass)
-**代码量**: ~13000+ 行
+**测试覆盖**: ~162 assertions / 30 test suites (100% pass)
+**代码量**: ~13500+ 行
 **Linux启动**: 4 vCPU, BusyBox shell, virtio-blk, virtio-net, multi-VM, FF-A proxy
+**Android启动**: 4 vCPU, PL031 RTC, Binder IPC, minimal init, 1GB RAM
 **编译警告**: 最小化
 
 ---
@@ -1021,7 +1022,7 @@ GitHub Actions配置：
 | M1 | MVP - 基础虚拟化 | 8周 | 10周 | ✅ 已完成 |
 | M2 | 增强功能 | 8周 | 18周 | ✅ 已完成 |
 | M3 | FF-A实现 | 10周 | 28周 | 🔧 进行中 (Sprint 3.1 ✅) |
-| Android | Android Boot (4 phases) | 4-8周 | — | ✅ Phase 1 完成 (6.6.126 + Binder) |
+| Android | Android Boot (4 phases) | 4-8周 | — | ✅ Phase 2 完成 (PL031 RTC + Init) |
 | M4 | Secure EL2 & TEE | 8周 | 36周 | ⏸️ 未开始 |
 | M5 | RME & CCA | 16-20周 | 52-56周 | ⏸️ 未开始 |
 
@@ -1039,6 +1040,7 @@ GitHub Actions配置：
 - [x] **M2 增强**: 4 vCPU Linux + virtio-blk + virtio-net + UART RX + GIC emulation ✅ **已完成 2026-02-13**
 - [ ] **M3 FF-A**: VM与SP内存共享成功 🔧 **进行中** (proxy + stub SPMC 已完成)
 - [x] **Android Phase 1**: Linux 6.6.126 + Android config boots to BusyBox shell ✅ **已完成 2026-02-19**
+- [x] **Android Phase 2**: PL031 RTC + Android init + 1GB RAM + binderfs ✅ **已完成 2026-02-19**
 - [ ] **M4 TEE**: OP-TEE运行并可调用TA ⏸️ **未开始**
 - [ ] **M5 CCA**: Realm VM启动Guest OS ⏸️ **未开始**
 
@@ -1200,10 +1202,11 @@ GitHub Actions配置：
 - Phase 13: FF-A v1.1 Proxy + Stub SPMC (SMC trap, VERSION/ID_GET/FEATURES, RXTX mailbox, direct messaging, memory sharing, page ownership PTE SW bits, 2 test suites)
 - Phase 14: FF-A Validation + Descriptors + SMC Forwarding (Stage2Walker page ownership validation, S2AP permission control, FF-A v1.1 descriptor parsing, SMC forwarding to EL3, SMCCC pass-through)
 - Phase 15: Android Boot Phase 1 ✅ **已完成** — Linux 6.6.126 + Android config (Binder IPC) boots to BusyBox shell, `make run-android`
+- Phase 16: Android Boot Phase 2 ✅ **已完成** — PL031 RTC emulation, Android DTB, minimal init (shell), Binder+binderfs, 1GB RAM, 30 test suites
 
 ---
 
-### Android Boot (并行方向) ✅ **Phase 1 完成**
+### Android Boot (并行方向) ✅ **Phase 2 完成**
 
 **目标**: 在 hypervisor 上启动完整 Android (AOSP)，分 4 个阶段
 
@@ -1219,11 +1222,14 @@ GitHub Actions配置：
 - [x] 验证: `Linux version 6.6.126` + `smp: Brought up 1 node, 4 CPUs` + virtio-blk/net
 - [x] Bug fixes: `probe_spmc()` QEMU crash + stale VTTBR in FF-A tests
 
-#### Phase 2: Android minimal init ⏸️ **未开始**
-- [ ] PL031 RTC emulation (`src/devices/pl031.rs`, ~150 LOC)
-- [ ] Android ramdisk (minimal `/init` + `init.rc`)
-- [ ] 独立 Android DTB (`guest/android/guest.dts`, `androidboot.hardware=virt`)
-- [ ] RAM 增加到 1GB+ guest
+#### Phase 2: Android minimal init ✅ **已完成 2026-02-19**
+- [x] PL031 RTC emulation (`src/devices/pl031.rs`, ~120 LOC) — counter-based time from CNTVCT/CNTFRQ, PrimeCell ID, 4 unit tests
+- [x] Android ramdisk (`guest/android/init.sh` shell script + `init.rc`) — mounts proc/sysfs/devtmpfs, checks binder+binderfs+RTC, prints system info, spawns shell
+- [x] 独立 Android DTB (`guest/android/guest.dts`) — PL031 node at 0x9010000 (SPI 2), `androidboot.hardware=virt`
+- [x] RAM 增加到 1GB guest (`LINUX_MEM_SIZE=1GB`, QEMU `-m 2G`)
+- [x] Docker build script (`guest/android/build-initramfs.sh`) — 1.2MB initramfs
+- [x] 设计文档: `docs/plans/2026-02-19-android-phase2-impl.md`
+- [x] 验证: PL031 RTC detected + system clock set, Binder IPC + binderfs, 4 CPUs, 929MB RAM, shell prompt
 
 #### Phase 3: Android system partition ⏸️ **未开始**
 - [ ] 切换到 AOSP kernel source (`common-android15-6.6` + Clang/LLVM)

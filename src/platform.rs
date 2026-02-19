@@ -21,7 +21,7 @@ pub const GIC_REGION_SIZE: u64 = 8 * BLOCK_SIZE_2MB;
 pub const GUEST_RAM_BASE: u64 = 0x4000_0000;
 pub const GUEST_LOAD_ADDR: u64 = 0x4800_0000;
 pub const LINUX_DTB_ADDR: u64 = 0x4700_0000;
-pub const LINUX_MEM_SIZE: u64 = 512 * 1024 * 1024;
+pub const LINUX_MEM_SIZE: u64 = 1024 * 1024 * 1024;
 pub const ZEPHYR_MEM_SIZE: u64 = 128 * 1024 * 1024;
 pub const GUEST_STACK_RESERVE: u64 = 0x1000;
 

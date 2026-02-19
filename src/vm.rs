@@ -81,6 +81,9 @@ impl Vm {
         crate::global::DEVICES[id].register_device(crate::devices::Device::Gicr(
             crate::devices::gic::VirtualGicr::new(platform::num_cpus()),
         ));
+        crate::global::DEVICES[id].register_device(crate::devices::Device::Pl031(
+            crate::devices::pl031::VirtualPl031::new(),
+        ));
 
         Self {
             id,

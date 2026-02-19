@@ -1,0 +1,4 @@
+# Minimal Android-style init.rc for hypervisor Phase 2
+# Parsed by /init (guest/android/init.c)
+
+hostname android-virt

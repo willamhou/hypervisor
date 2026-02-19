@@ -4,6 +4,7 @@
 //! Devices are registered dynamically into an array of up to `MAX_DEVICES` slots.
 
 pub mod pl011;
+pub mod pl031;
 pub mod gic;
 pub mod virtio;
 
@@ -40,6 +41,7 @@ pub enum Device {
     Gicr(gic::VirtualGicr),
     VirtioBlk(virtio::mmio::VirtioMmioTransport<virtio::blk::VirtioBlk>),
     VirtioNet(virtio::mmio::VirtioMmioTransport<virtio::net::VirtioNet>),
+    Pl031(pl031::VirtualPl031),
 }
 
 impl MmioDevice for Device {
@@ -50,6 +52,7 @@ impl MmioDevice for Device {
             Device::Gicr(d) => d.read(offset, size),
             Device::VirtioBlk(d) => d.read(offset, size),
             Device::VirtioNet(d) => d.read(offset, size),
+            Device::Pl031(d) => d.read(offset, size),
         }
     }
 
@@ -60,6 +63,7 @@ impl MmioDevice for Device {
             Device::Gicr(d) => d.write(offset, value, size),
             Device::VirtioBlk(d) => d.write(offset, value, size),
             Device::VirtioNet(d) => d.write(offset, value, size),
+            Device::Pl031(d) => d.write(offset, value, size),
         }
     }
 
@@ -70,6 +74,7 @@ impl MmioDevice for Device {
             Device::Gicr(d) => d.base_address(),
             Device::VirtioBlk(d) => d.base_address(),
             Device::VirtioNet(d) => d.base_address(),
+            Device::Pl031(d) => d.base_address(),
         }
     }
 
@@ -80,6 +85,7 @@ impl MmioDevice for Device {
             Device::Gicr(d) => d.size(),
             Device::VirtioBlk(d) => d.size(),
             Device::VirtioNet(d) => d.size(),
+            Device::Pl031(d) => d.size(),
         }
     }
 
@@ -90,6 +96,7 @@ impl MmioDevice for Device {
             Device::Gicr(d) => d.pending_irq(),
             Device::VirtioBlk(d) => d.pending_irq(),
             Device::VirtioNet(d) => d.pending_irq(),
+            Device::Pl031(d) => d.pending_irq(),
         }
     }
 
@@ -100,6 +107,7 @@ impl MmioDevice for Device {
             Device::Gicr(d) => d.ack_irq(),
             Device::VirtioBlk(d) => d.ack_irq(),
             Device::VirtioNet(d) => d.ack_irq(),
+            Device::Pl031(d) => d.ack_irq(),
         }
     }
 }
