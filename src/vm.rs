@@ -283,6 +283,13 @@ impl Vm {
         );
         self.vttbr = config.vttbr;
         self.vtcr = config.vtcr;
+
+        // Store L0 table PA for cross-VM Stage-2 access (FF-A memory sharing)
+        crate::global::PER_VM_VTTBR[self.id].store(
+            config.vttbr & crate::arch::aarch64::defs::PTE_ADDR_MASK,
+            core::sync::atomic::Ordering::Release,
+        );
+
         init_stage2_from_config(&config);
 
         // Save VTTBR/VTCR for secondary pCPUs (they need the same Stage-2 config)

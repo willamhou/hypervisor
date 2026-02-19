@@ -370,6 +370,14 @@ pub static SHARED_VTTBR: AtomicU64 = AtomicU64::new(0);
 #[cfg(feature = "multi_pcpu")]
 pub static SHARED_VTCR: AtomicU64 = AtomicU64::new(0);
 
+/// Per-VM VTTBR L0 table physical address (for cross-VM Stage-2 access).
+/// Stored at boot by setup_linux_memory(). Used by FF-A proxy to construct
+/// Stage2Walker for any VM's page tables.
+pub static PER_VM_VTTBR: [AtomicU64; MAX_VMS] = [
+    AtomicU64::new(0),
+    AtomicU64::new(0),
+];
+
 /// Inject an SPI to the correct vCPU based on GICD_IROUTER.
 ///
 /// Called from exception handler or device completion path.
