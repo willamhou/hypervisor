@@ -19,5 +19,8 @@ Thumbs.db
 *.elf
 *.bin
 
+# Guest kernel images (built via Docker)
+guest/android/Image
+
 # Worktrees
 .worktrees/

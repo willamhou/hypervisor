@@ -14,58 +14,70 @@ Boot full Android (AOSP) on the ARM64 hypervisor, progressing through 4 phases f
 
 ## Phase Overview
 
-| Phase | Target | Success Criteria |
-|-------|--------|------------------|
-| 1 | AOSP kernel + BusyBox shell | `smp: Brought up 1 node, 4 CPUs` with AOSP android14-6.6 kernel |
-| 2 | Android minimal init | Android `/init` starts, mounts filesystems, prints to serial |
-| 3 | Android system partition | `/system` mounted from virtio-blk, core services start |
-| 4 | Full Android boot | All AOSP services running, `adb shell` accessible |
+| Phase | Target | Kernel Source | Success Criteria |
+|-------|--------|---------------|------------------|
+| 1 | Android-configured kernel + BusyBox shell | Upstream kernel.org 6.6 LTS + Android config fragment (GCC) | `smp: Brought up 1 node, 4 CPUs`, binder driver loaded |
+| 2 | Android minimal init | Same kernel | Android `/init` starts, mounts filesystems, prints to serial |
+| 3 | Android system partition | AOSP common kernel (Clang/LLVM) | `/system` mounted, core services start |
+| 4 | Full Android boot | AOSP common kernel | All services running, `adb shell` accessible |
 
-## Phase 1: AOSP Kernel + BusyBox Shell
+## Phase 1: Upstream 6.6 LTS + Android Config + BusyBox Shell
 
 ### What
 
-Replace Linux 6.12.12 with AOSP android14-6.6-lts kernel. Reuse existing BusyBox initramfs. Validate hypervisor compatibility with Android-configured kernel.
+Build upstream Linux 6.6 LTS from kernel.org with Android-specific config options (Binder IPC, Binderfs) on top of arm64 `defconfig`. Reuse existing BusyBox initramfs. Validate hypervisor compatibility with Android-configured kernel.
+
+### Why Upstream Kernel (Not AOSP Source)
+
+AOSP GKI kernels use Clang/LLVM toolchain and Kleaf/Bazel build system. Using upstream kernel.org source with GCC:
+1. Reuses the exact same Docker build pattern as our existing `guest/linux/build-kernel.sh`
+2. Binder IPC and Binderfs are available in upstream 6.6 — no AOSP patches needed for Phase 1
+3. Avoids Clang/LLVM toolchain setup complexity
+4. Phase 3 will switch to real AOSP kernel when we need Android-specific patches
 
 ### Kernel Build
 
-Source: `repo init -u https://android.googlesource.com/kernel/manifest -b common-android14-6.6-lts`
+Source: `https://cdn.kernel.org/pub/linux/kernel/v6.x/linux-6.6.126.tar.xz`
 
-Required defconfig additions for QEMU virt:
+Config: arm64 `defconfig` + Android config fragment:
 ```
-CONFIG_VIRTIO_PCI=y
 CONFIG_VIRTIO_BLK=y
 CONFIG_VIRTIO_NET=y
 CONFIG_VIRTIO_MMIO=y
-CONFIG_9P_FS=y          # optional: host filesystem sharing
-CONFIG_NET_9P_VIRTIO=y  # optional: host filesystem sharing
+CONFIG_ANDROID=y
+CONFIG_ANDROID_BINDER_IPC=y
+CONFIG_ANDROID_BINDERFS=y
+CONFIG_DEBUG_INFO_BTF=n
 ```
 
 Build via Docker (same pattern as existing Linux kernel build):
 ```
-docker run --rm -v $PWD:/work debian:bookworm-slim \
-  bash -c "apt-get update && apt-get install -y ... && \
-  cd /work/android-kernel && tools/bazel run //common:kernel_aarch64_dist"
+docker run --rm \
+    -v /tmp/android-kernel-build:/build \
+    -v $PWD/guest/android:/output \
+    debian:bookworm-slim \
+    bash /output/build-kernel.sh
 ```
 
-Output: `Image` file (~30MB), drop-in replacement for current kernel.
+Output: `Image` file (~20-30MB), drop-in replacement for current kernel.
 
 ### Hypervisor Changes
 
-None. Existing `make run-linux` flow works — just swap the kernel Image file.
+None. Existing `linux_guest` feature works — just swap the kernel Image file. Reuse existing Linux DTB (bootargs identical for Phase 1).
 
 ### Validation
 
-- Boot to BusyBox shell prompt
+- Boot to BusyBox shell prompt `/ #`
 - `smp: Brought up 1 node, 4 CPUs`
 - virtio-blk detected: `virtio_blk virtio0: [vda]`
+- Binder driver loaded: `dmesg | grep binder`
 - No new traps or exceptions vs current Linux kernel
 
 ## Phase 2: Android Minimal Init
 
 ### What
 
-Boot AOSP kernel with Android ramdisk containing `/init` (Android's init process). Get Android init to parse `init.rc`, mount basic filesystems, and print to serial console.
+Boot same kernel with Android ramdisk containing `/init` (Android's init process). Get Android init to parse `init.rc`, mount basic filesystems, and print to serial console.
 
 ### New Hypervisor Device: PL031 RTC
 
@@ -88,13 +100,20 @@ Android init reads system time early in boot. Without an RTC, `date` fails and i
 
 Estimated: ~150 LOC in `src/devices/pl031.rs`.
 
+### Android DTB
+
+Phase 2 creates a separate `guest/android/guest.dts` with:
+- `androidboot.hardware=virt` in bootargs
+- PL031 RTC node at `0x09010000`
+- Adjusted memory size if needed
+
 ### RAM Increase
 
 Current: 1GB QEMU, 512MB guest.
 Required: 2GB QEMU, 1GB+ guest.
 
 Changes:
-- Makefile: `-m 2G`
+- Makefile: `-m 2G` (already set in Phase 1's `QEMU_FLAGS_ANDROID`)
 - `platform.rs`: adjust `GUEST_MEMORY_SIZE` for android feature
 - Stage-2: map additional RAM region
 
@@ -110,11 +129,18 @@ Simpler approach: build a minimal ramdisk with just Android `/init` binary + `in
 - Basic filesystem mounts succeed
 - Serial console output from init
 
-## Phase 3: Android System Partition
+## Phase 3: Android System Partition (Switch to AOSP Kernel)
 
 ### What
 
 Mount a real Android `/system` partition via virtio-blk. Start core Android services (servicemanager, logd, etc).
+
+### AOSP Kernel Switch
+
+Phase 3 switches from upstream kernel.org to real AOSP kernel source:
+- Source: `https://android.googlesource.com/kernel/common` branch `common-android15-6.6`
+- Build: Docker with Clang/LLVM (`LLVM=1`), or `tools/bazel run //common:kernel_aarch64_dist`
+- This gives us GKI with Android-specific patches (energy-aware scheduling, cgroup v2 tweaks, etc.)
 
 ### Multiple virtio-blk Devices
 
@@ -139,7 +165,7 @@ Recommended: Option 2 — `android_guest` feature flag with Android-specific dev
 root=/dev/vda rootfstype=ext4 ro init=/init console=ttyAMA0 androidboot.hardware=virt
 ```
 
-Passed via DTB `/chosen/bootargs` node (QEMU generates this).
+Passed via DTB `/chosen/bootargs` node.
 
 ### Validation
 
@@ -173,6 +199,8 @@ make -j$(nproc)
 
 Output: `system.img`, `vendor.img`, `userdata.img`, `ramdisk.img`, `kernel`
 
+Note: Cuttlefish target (`aosp_cf_arm64_phone`) produces images for virtio-PCI hardware. Adapting these for our virtio-mmio hypervisor will require device tree and fstab modifications.
+
 ### Validation
 
 - All Android services start (check `getprop sys.boot_completed`)
@@ -183,11 +211,13 @@ Output: `system.img`, `vendor.img`, `userdata.img`, `ramdisk.img`, `kernel`
 
 | Risk | Likelihood | Impact | Mitigation |
 |------|-----------|--------|------------|
-| AOSP kernel needs new sysreg traps | Medium | High | Log unknown traps, add emulation incrementally |
+| 6.6 LTS kernel needs new sysreg traps | Low | Medium | Existing PMU catch-all handles most; add stubs incrementally |
 | Android init needs unimplemented device | Medium | Medium | Stub devices, return zeros |
-| AOSP build environment too large | Low | Medium | Use Docker, cloud build |
+| Binder not available in upstream 6.6 | Very Low | High | Binder has been upstream since 3.19; verified in 6.6 |
+| AOSP build environment too large (Phase 3+) | Low | Medium | Use Docker, cloud build |
 | Performance too slow (no KVM) | High | Low | TCG is slow but functional; focus on correctness |
-| SELinux blocks boot | Medium | Medium | Use permissive mode |
+| SELinux blocks boot (Phase 4) | Medium | Medium | Use permissive mode |
+| Cuttlefish images need adaptation (Phase 4) | High | Medium | Modify fstab + DTB for virtio-mmio |
 
 ## Architecture Diagram
 
@@ -205,19 +235,23 @@ QEMU Host (x86_64 or aarch64)
        ├─ FF-A Proxy (stub SPMC)
        └─ SMP Scheduler (4 vCPUs)
             └─ Android Guest @ EL1
-                 ├─ AOSP Kernel (android14-6.6)
-                 ├─ Android Init (/init + init.rc)
-                 ├─ /system (ext4 on virtio-blk)
-                 ├─ /vendor (ext4 on virtio-blk)
-                 └─ Android Services (servicemanager, logd, ...)
+                 ├─ Phase 1: kernel.org 6.6 LTS + Android config (GCC)
+                 ├─ Phase 3+: AOSP common kernel android15-6.6 (Clang)
+                 ├─ Android Init (/init + init.rc) [Phase 2+]
+                 ├─ /system (ext4 on virtio-blk) [Phase 3+]
+                 ├─ /vendor (ext4 on virtio-blk) [Phase 3+]
+                 └─ Android Services (servicemanager, logd, ...) [Phase 3+]
 ```
 
 ## Implementation Priority
 
 Phase 1 is the immediate next step. It requires:
-1. Set up AOSP kernel build environment (Docker)
-2. Compile android14-6.6-lts with QEMU virt defconfig
-3. Test boot with existing `make run-linux` (swap kernel Image)
-4. Debug any new traps or incompatibilities
+1. Create build script + Android config fragment for upstream 6.6 LTS
+2. Build kernel via Docker (same pattern as existing Linux build)
+3. Add `make run-android` Makefile target (reuses Linux DTB + initramfs)
+4. Test boot and debug any new traps
+5. Verify binder driver loads (`dmesg | grep binder`)
 
-Estimated effort: 1-2 days for Phase 1, assuming kernel compiles cleanly.
+Estimated effort: 1-2 hours for Phase 1 (mostly kernel compilation time).
+
+Phase 3 will switch to AOSP kernel source with Clang/LLVM when Android-specific patches become necessary.
