@@ -73,21 +73,27 @@ pub fn forward_smc(
     }
 }
 
-/// Check if a real SPMC is present by sending FFA_VERSION to EL3.
+/// Check if a real SPMC is present at EL3.
 ///
-/// Returns true if EL3 responds with a valid FF-A version (not -1 / SMC_UNKNOWN).
+/// Uses PSCI_VERSION as a safe probe first (always handled by QEMU firmware),
+/// then sends FFA_VERSION only if EL3 is known to be responsive.
+///
+/// NOTE: QEMU's simple EL3 firmware crashes on unknown SMCs like FFA_VERSION
+/// (it doesn't return SMC_UNKNOWN, it faults). So we only probe FFA_VERSION
+/// on platforms where EL3 is known to handle it (e.g., with Hafnium/OP-TEE).
+/// For now, we conservatively return false on QEMU.
 pub fn probe_spmc() -> bool {
-    let result = forward_smc(
-        crate::ffa::FFA_VERSION,
-        crate::ffa::FFA_VERSION_1_1 as u64,
-        0,
-        0,
-        0,
-        0,
-        0,
-        0,
-    );
-    // SMC_UNKNOWN returns 0xFFFFFFFF_FFFFFFFF (u64) or 0xFFFFFFFF (u32 sign-extended)
-    // A valid FFA_VERSION response is a small positive number like 0x00010001
-    result.x0 != 0xFFFF_FFFF_FFFF_FFFF && result.x0 != 0xFFFF_FFFF
+    // First, verify EL3 is alive via PSCI_VERSION (0x84000000).
+    // QEMU firmware always handles this, returning 0x00010001 (PSCI 1.1).
+    let psci_result = forward_smc(0x8400_0000, 0, 0, 0, 0, 0, 0, 0);
+    if psci_result.x0 == 0xFFFF_FFFF_FFFF_FFFF || psci_result.x0 == 0xFFFF_FFFF {
+        // EL3 doesn't even handle PSCI — no point probing FFA
+        return false;
+    }
+
+    // EL3 is alive, but QEMU's simple firmware will crash on FFA_VERSION.
+    // Only send FFA_VERSION if we have evidence of a real SPMC (e.g., TF-A + Hafnium).
+    // For QEMU virt with default firmware, PSCI_VERSION returns 0x10001 — no SPMC.
+    // TODO: Enable FFA_VERSION probe when running on real hardware or with OP-TEE/Hafnium.
+    false
 }

@@ -11,6 +11,14 @@ pub fn run_ffa_test() {
     let mut pass: u64 = 0;
     let mut fail: u64 = 0;
 
+    // Clear VTTBR_EL2 to avoid stale page tables from earlier VM tests.
+    // Earlier tests (test_mmio, test_simple_guest) create VMs that set VTTBR
+    // to their own Stage-2 tables. The MEM_SHARE handler checks has_stage2()
+    // and would attempt ownership validation against those incomplete tables.
+    unsafe {
+        core::arch::asm!("msr vttbr_el2, xzr", "isb", options(nomem, nostack));
+    }
+
     // Test 1: FFA_VERSION returns v1.1
     {
         let mut ctx = VcpuContext::default();

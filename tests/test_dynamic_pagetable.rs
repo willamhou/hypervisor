@@ -73,6 +73,12 @@ pub fn run_dynamic_pt_test() {
     }
     uart_puts(b"[DYN PT] Test 6 PASSED\n\n");
 
+    // Clear VTTBR_EL2 so subsequent tests (e.g. FF-A MEM_SHARE) don't see stale
+    // page tables and attempt Stage-2 walks on pages that were never mapped.
+    unsafe {
+        core::arch::asm!("msr vttbr_el2, xzr", "isb", options(nomem, nostack));
+    }
+
     uart_puts(b"========================================\n");
     uart_puts(b"  Dynamic Page Table Test PASSED (6 assertions)\n");
     uart_puts(b"========================================\n\n");
