@@ -15,9 +15,10 @@
 M0: 项目启动          ████████████████████ 100% ✅
 M1: MVP基础虚拟化     ████████████████████ 100% ✅
 M2: 增强功能          ████████████████████ 100% ✅
-M3: FF-A              ████████████░░░░░░░░  60% 🔧 (当前位置)
+M3: FF-A              ████████████░░░░░░░░  60% 🔧
 M4: Secure EL2        ░░░░░░░░░░░░░░░░░░░░   0% ⏸️
 M5: RME & CCA         ░░░░░░░░░░░░░░░░░░░░   0% ⏸️
+Android Boot          ██░░░░░░░░░░░░░░░░░░  10% 📋 (计划完成, 待实现)
 ```
 
 **测试覆盖**: ~158 assertions / 29 test suites (100% pass)
@@ -1020,6 +1021,7 @@ GitHub Actions配置：
 | M1 | MVP - 基础虚拟化 | 8周 | 10周 | ✅ 已完成 |
 | M2 | 增强功能 | 8周 | 18周 | ✅ 已完成 |
 | M3 | FF-A实现 | 10周 | 28周 | 🔧 进行中 (Sprint 3.1 ✅) |
+| Android | Android Boot (4 phases) | 4-8周 | — | 📋 Phase 1 计划完成 |
 | M4 | Secure EL2 & TEE | 8周 | 36周 | ⏸️ 未开始 |
 | M5 | RME & CCA | 16-20周 | 52-56周 | ⏸️ 未开始 |
 
@@ -1036,6 +1038,7 @@ GitHub Actions配置：
 - [x] **M1 MVP**: QEMU启动busybox ✅ **已完成 2026-01-26**
 - [x] **M2 增强**: 4 vCPU Linux + virtio-blk + virtio-net + UART RX + GIC emulation ✅ **已完成 2026-02-13**
 - [ ] **M3 FF-A**: VM与SP内存共享成功 🔧 **进行中** (proxy + stub SPMC 已完成)
+- [ ] **Android**: AOSP kernel + BusyBox shell 📋 **Phase 1 计划完成** (upstream 6.6 LTS + Android config)
 - [ ] **M4 TEE**: OP-TEE运行并可调用TA ⏸️ **未开始**
 - [ ] **M5 CCA**: Realm VM启动Guest OS ⏸️ **未开始**
 
@@ -1196,6 +1199,41 @@ GitHub Actions配置：
 - Phase 12: Virtio-net + VSwitch (L2 switch, NetRxRing SPSC, auto-IP, 3 test suites)
 - Phase 13: FF-A v1.1 Proxy + Stub SPMC (SMC trap, VERSION/ID_GET/FEATURES, RXTX mailbox, direct messaging, memory sharing, page ownership PTE SW bits, 2 test suites)
 - Phase 14: FF-A Validation + Descriptors + SMC Forwarding (Stage2Walker page ownership validation, S2AP permission control, FF-A v1.1 descriptor parsing, SMC forwarding to EL3, SMCCC pass-through)
+- Phase 15: Android Boot Phase 1 📋 **计划完成** — upstream kernel.org 6.6 LTS + Android config (Binder IPC), `make run-android`
+
+---
+
+### Android Boot (并行方向) 📋 **计划完成, 待实现**
+
+**目标**: 在 hypervisor 上启动完整 Android (AOSP)，分 4 个阶段
+
+**设计文档**: `docs/plans/2026-02-19-android-boot-design.md`
+**实现计划**: `docs/plans/2026-02-19-android-boot-impl.md`
+
+#### Phase 1: Android-configured kernel + BusyBox shell 📋 **待实现**
+- [ ] 构建 upstream Linux 6.6.126 LTS + Android config fragment (Binder IPC, Binderfs)
+- [ ] Docker 构建脚本 (`guest/android/build-kernel.sh`) — 复用现有 GCC 交叉编译模式
+- [ ] `make run-android` Makefile target (`QEMU_FLAGS_ANDROID` with `-m 2G`)
+- [ ] 复用现有 Linux DTB + BusyBox initramfs
+- [ ] 验证: `smp: Brought up 1 node, 4 CPUs` + `dmesg | grep binder`
+- **预估**: 1-2 小时 (主要等内核编译)
+
+#### Phase 2: Android minimal init ⏸️ **未开始**
+- [ ] PL031 RTC emulation (`src/devices/pl031.rs`, ~150 LOC)
+- [ ] Android ramdisk (minimal `/init` + `init.rc`)
+- [ ] 独立 Android DTB (`guest/android/guest.dts`, `androidboot.hardware=virt`)
+- [ ] RAM 增加到 1GB+ guest
+
+#### Phase 3: Android system partition ⏸️ **未开始**
+- [ ] 切换到 AOSP kernel source (`common-android15-6.6` + Clang/LLVM)
+- [ ] 多个 virtio-blk (system.img, vendor.img)
+- [ ] `android_guest` feature flag + 设备布局重排
+- [ ] servicemanager + logd 启动
+
+#### Phase 4: Full Android boot ⏸️ **未开始**
+- [ ] 完整 AOSP 服务
+- [ ] SELinux permissive
+- [ ] `adb shell` via virtio-net
 
 ---
 

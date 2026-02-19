@@ -14,6 +14,7 @@ make run          # Build + run in QEMU — runs 29 test suites automatically (e
 make run-linux    # Build + boot Linux guest (--features linux_guest, 4 vCPUs on 1 pCPU, virtio-blk)
 make run-linux-smp # Build + boot Linux guest (--features multi_pcpu, 4 vCPUs on 4 pCPUs)
 make run-multi-vm # Build + boot 2 Linux VMs time-sliced (--features multi_vm)
+make run-android  # Build + boot Linux 6.6 LTS with Android config (Phase 1: BusyBox shell)
 make run-guest GUEST_ELF=/path/to/zephyr.elf  # Boot Zephyr guest (--features guest)
 make debug        # Build + run with GDB server on port 1234
 make clean        # Clean build artifacts
