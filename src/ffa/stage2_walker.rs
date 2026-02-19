@@ -141,6 +141,158 @@ impl Stage2Walker {
         Some(l3_ptr)
     }
 
+    /// Create a 4KB page mapping in this VM's Stage-2 at the given IPA.
+    ///
+    /// Identity mapping: IPA == PA. Walks L0->L1->L2->L3, allocating L2/L3
+    /// tables from the heap as needed. The L0->L1 link must already exist
+    /// (created by `DynamicIdentityMapper::new()`).
+    ///
+    /// # Arguments
+    /// * `ipa` - Guest intermediate physical address (4KB-aligned)
+    /// * `s2ap` - Stage-2 access permissions (2 bits): 0b00=None, 0b01=RO, 0b11=RW
+    /// * `sw_bits` - Software-defined PTE bits [56:55] for page ownership tracking
+    ///
+    /// # Errors
+    /// Returns an error if:
+    /// - L0 entry is invalid (no L1 table)
+    /// - L1 entry is a 1GB block (won't split)
+    /// - L2 entry is a 2MB block (won't split existing blocks for cross-VM mapping)
+    /// - L3 entry is already valid (page already mapped)
+    /// - Heap allocation fails
+    #[allow(dead_code)]
+    pub fn map_page(&self, ipa: u64, s2ap: u8, sw_bits: u8) -> Result<(), &'static str> {
+        // L0: must be a valid table descriptor (L0->L1 link from DynamicIdentityMapper)
+        let l0_idx = ((ipa >> 39) & PT_INDEX_MASK) as usize;
+        let l0_entry = unsafe { core::ptr::read_volatile((self.l0_table as *const u64).add(l0_idx)) };
+        if l0_entry & (PTE_VALID | PTE_TABLE) != (PTE_VALID | PTE_TABLE) {
+            return Err("L0 entry not a valid table");
+        }
+        let l1_table = l0_entry & PTE_ADDR_MASK;
+
+        // L1: get or create L2 table
+        let l1_idx = ((ipa >> 30) & PT_INDEX_MASK) as usize;
+        let l1_ptr = unsafe { (l1_table as *mut u64).add(l1_idx) };
+        let l1_entry = unsafe { core::ptr::read_volatile(l1_ptr) };
+
+        let l2_table = if l1_entry & PTE_VALID == 0 {
+            // L1 entry invalid: allocate a new L2 table
+            let l2 = crate::mm::heap::alloc_page().ok_or("Failed to allocate L2 table")?;
+            unsafe { core::ptr::write_bytes(l2 as *mut u8, 0, PAGE_SIZE_4KB as usize); }
+            let l1_desc = l2 | PTE_VALID | PTE_TABLE;
+            unsafe { core::ptr::write_volatile(l1_ptr, l1_desc); }
+            l2
+        } else if l1_entry & PTE_TABLE != 0 {
+            // L1 entry is a valid table descriptor -> L2 table address
+            l1_entry & PTE_ADDR_MASK
+        } else {
+            // L1 entry is a 1GB block -- won't split
+            return Err("L1 entry is a 1GB block");
+        };
+
+        // L2: get or create L3 table
+        let l2_idx = ((ipa >> 21) & PT_INDEX_MASK) as usize;
+        let l2_ptr = unsafe { (l2_table as *mut u64).add(l2_idx) };
+        let l2_entry = unsafe { core::ptr::read_volatile(l2_ptr) };
+
+        let l3_table = if l2_entry & PTE_VALID == 0 {
+            // L2 entry invalid: allocate a new L3 table
+            let l3 = crate::mm::heap::alloc_page().ok_or("Failed to allocate L3 table")?;
+            unsafe { core::ptr::write_bytes(l3 as *mut u8, 0, PAGE_SIZE_4KB as usize); }
+            let l2_desc = l3 | PTE_VALID | PTE_TABLE;
+            unsafe { core::ptr::write_volatile(l2_ptr, l2_desc); }
+            l3
+        } else if l2_entry & PTE_TABLE != 0 {
+            // L2 entry is a valid table descriptor -> L3 table address
+            l2_entry & PTE_ADDR_MASK
+        } else {
+            // L2 entry is a 2MB block -- won't split for cross-VM mapping
+            return Err("L2 entry is a 2MB block");
+        };
+
+        // L3: write page entry (must not already be mapped)
+        let l3_idx = ((ipa >> 12) & PT_INDEX_MASK) as usize;
+        let l3_ptr = unsafe { (l3_table as *mut u64).add(l3_idx) };
+        let l3_entry = unsafe { core::ptr::read_volatile(l3_ptr) };
+        if l3_entry & PTE_VALID != 0 {
+            return Err("L3 entry already mapped");
+        }
+
+        // Build the L3 page descriptor:
+        //   PA (identity-mapped) | MemAttrIndx=0b1111 | SH=Inner | AF=1 | S2AP | SW | Valid+Page
+        // Normal memory base attrs (without S2AP): MemAttrIndx[5:2]=0b1111, SH[9:8]=0b11, AF[10]=1
+        let normal_attrs: u64 = (0b1111 << 2) | (0b11 << 8) | (1 << 10);
+        let s2ap_bits = ((s2ap as u64) & 0x3) << S2AP_SHIFT;
+        let sw = ((sw_bits as u64) & 0x3) << PTE_SW_SHIFT;
+        let pa = ipa & !PAGE_MASK_4KB;
+        let page_entry = pa | normal_attrs | s2ap_bits | sw | PTE_TABLE | PTE_VALID;
+        unsafe { core::ptr::write_volatile(l3_ptr, page_entry); }
+
+        Self::tlbi_ipa(ipa);
+        Ok(())
+    }
+
+    /// Remove a 4KB page mapping from this VM's Stage-2.
+    ///
+    /// Walks L0->L1->L2->L3 and zeroes the leaf L3 PTE. Does not free
+    /// intermediate page tables (leaked tables are acceptable).
+    ///
+    /// # Errors
+    /// Returns an error if the IPA is not mapped as a 4KB page (e.g., unmapped,
+    /// 2MB block, or 1GB block).
+    #[allow(dead_code)]
+    pub fn unmap_page(&self, ipa: u64) -> Result<(), &'static str> {
+        // Walk to the L3 PTE. We need to ensure we reach an L3 page entry
+        // specifically, not a 2MB block or 1GB block.
+        let l3_ptr = self.walk_to_l3_ptr(ipa).ok_or("IPA not mapped as 4KB page")?;
+
+        // Zero the L3 entry to invalidate the mapping
+        unsafe { core::ptr::write_volatile(l3_ptr, 0u64); }
+
+        Self::tlbi_ipa(ipa);
+        Ok(())
+    }
+
+    /// Walk page table to the L3 PTE pointer for a given IPA.
+    ///
+    /// Unlike `walk_to_leaf_ptr()`, this only returns a pointer if the walk
+    /// reaches a valid L3 page entry. Returns `None` for 2MB blocks, 1GB blocks,
+    /// or unmapped IPAs.
+    fn walk_to_l3_ptr(&self, ipa: u64) -> Option<*mut u64> {
+        // L0
+        let l0_idx = ((ipa >> 39) & PT_INDEX_MASK) as usize;
+        let l0_entry = unsafe { core::ptr::read_volatile((self.l0_table as *const u64).add(l0_idx)) };
+        if l0_entry & (PTE_VALID | PTE_TABLE) != (PTE_VALID | PTE_TABLE) {
+            return None;
+        }
+
+        // L1: must be a table descriptor (not a 1GB block)
+        let l1_table = l0_entry & PTE_ADDR_MASK;
+        let l1_idx = ((ipa >> 30) & PT_INDEX_MASK) as usize;
+        let l1_entry = unsafe { core::ptr::read_volatile((l1_table as *const u64).add(l1_idx)) };
+        if l1_entry & (PTE_VALID | PTE_TABLE) != (PTE_VALID | PTE_TABLE) {
+            return None;
+        }
+
+        // L2: must be a table descriptor (not a 2MB block)
+        let l2_table = l1_entry & PTE_ADDR_MASK;
+        let l2_idx = ((ipa >> 21) & PT_INDEX_MASK) as usize;
+        let l2_entry = unsafe { core::ptr::read_volatile((l2_table as *const u64).add(l2_idx)) };
+        if l2_entry & (PTE_VALID | PTE_TABLE) != (PTE_VALID | PTE_TABLE) {
+            return None;
+        }
+
+        // L3: must be a valid page entry
+        let l3_table = l2_entry & PTE_ADDR_MASK;
+        let l3_idx = ((ipa >> 12) & PT_INDEX_MASK) as usize;
+        let l3_ptr = unsafe { (l3_table as *mut u64).add(l3_idx) };
+        let l3_entry = unsafe { core::ptr::read_volatile(l3_ptr) };
+        if l3_entry & PTE_VALID == 0 {
+            return None;
+        }
+
+        Some(l3_ptr)
+    }
+
     /// Invalidate a single IPA from Stage-2 TLB.
     fn tlbi_ipa(ipa: u64) {
         let ipa_shifted = (ipa >> 12) & 0x0000_00FF_FFFF_FFFF;
