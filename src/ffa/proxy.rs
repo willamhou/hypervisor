@@ -50,6 +50,10 @@ pub fn handle_ffa_call(context: &mut VcpuContext) -> bool {
         FFA_MEM_SHARE_32 | FFA_MEM_SHARE_64 => handle_mem_share(context),
         FFA_MEM_LEND_32 | FFA_MEM_LEND_64 => handle_mem_lend(context),
         FFA_MEM_RECLAIM => handle_mem_reclaim(context),
+        FFA_MEM_RETRIEVE_REQ_32 | FFA_MEM_RETRIEVE_REQ_64 => {
+            handle_mem_retrieve_req(context)
+        }
+        FFA_MEM_RELINQUISH => handle_mem_relinquish(context),
 
         // Blocked: FFA_MEM_DONATE (pKVM policy)
         FFA_MEM_DONATE_32 | FFA_MEM_DONATE_64 => {
@@ -123,7 +127,9 @@ fn handle_features(context: &mut VcpuContext) -> bool {
         FFA_MSG_SEND_DIRECT_REQ_32 | FFA_MSG_SEND_DIRECT_REQ_64 |
         FFA_MEM_SHARE_32 | FFA_MEM_SHARE_64 |
         FFA_MEM_LEND_32 | FFA_MEM_LEND_64 |
-        FFA_MEM_RECLAIM
+        FFA_MEM_RECLAIM |
+        FFA_MEM_RETRIEVE_REQ_32 | FFA_MEM_RETRIEVE_REQ_64 |
+        FFA_MEM_RELINQUISH
     );
 
     if supported {
@@ -360,8 +366,8 @@ fn handle_mem_share_or_lend(context: &mut VcpuContext, is_lend: bool) -> bool {
             (0u16, receiver_id, ranges, 1usize, page_count)
         };
 
-    // Validate receiver is a known SP
-    if !stub_spmc::is_valid_sp(receiver_id) {
+    // Validate receiver is a known partition (VM or SP)
+    if !is_valid_receiver(receiver_id) {
         ffa_error(context, FFA_INVALID_PARAMETERS);
         return true;
     }
@@ -482,14 +488,20 @@ fn handle_mem_reclaim(context: &mut VcpuContext) -> bool {
     let handle = (context.gp_regs.x1 & 0xFFFF_FFFF)
         | ((context.gp_regs.x2 & 0xFFFF_FFFF) << 32);
 
-    // Look up share record BEFORE removing it (need IPA info for restoration)
-    let _info = match stub_spmc::lookup_share(handle) {
+    // Look up share record (need IPA info for restoration + retrieved status)
+    let info = match stub_spmc::lookup_share_full(handle) {
         Some(info) => info,
         None => {
             ffa_error(context, FFA_INVALID_PARAMETERS);
             return true;
         }
     };
+
+    // Block reclaim while share is still retrieved by receiver
+    if info.retrieved {
+        ffa_error(context, FFA_DENIED);
+        return true;
+    }
 
     // Restore pages to Owned + S2AP_RW.
     // Only when running actual VMs (linux_guest feature), not unit tests.
@@ -499,8 +511,8 @@ fn handle_mem_reclaim(context: &mut VcpuContext) -> bool {
         if walker.has_stage2() {
             let owned_sw = memory::PageOwnership::Owned as u8;
             let rw_s2ap = (S2AP_RW >> S2AP_SHIFT) as u8;
-            for i in 0.._info.range_count {
-                let (base_ipa, page_count) = _info.ranges[i];
+            for i in 0..info.range_count {
+                let (base_ipa, page_count) = info.ranges[i];
                 for p in 0..page_count as u64 {
                     let ipa = base_ipa + p * PAGE_SIZE_4KB;
                     let _ = walker.write_sw_bits(ipa, owned_sw);
@@ -512,6 +524,146 @@ fn handle_mem_reclaim(context: &mut VcpuContext) -> bool {
 
     // Now remove the record
     stub_spmc::reclaim_share(handle);
+    context.gp_regs.x0 = FFA_SUCCESS_32;
+    true
+}
+
+/// FFA_MEM_RETRIEVE_REQ: Receiver retrieves previously shared memory.
+///
+/// Input: x1 = handle (low 32), x2 = handle (high 32)
+/// Output: x0 = FFA_MEM_RETRIEVE_RESP or FFA_ERROR
+///
+/// For VM receivers: maps shared pages into receiver's Stage-2 via map_page().
+/// For SP receivers: returns NOT_SUPPORTED (stub SPMC has no Stage-2).
+fn handle_mem_retrieve_req(context: &mut VcpuContext) -> bool {
+    let handle = (context.gp_regs.x1 & 0xFFFF_FFFF)
+        | ((context.gp_regs.x2 & 0xFFFF_FFFF) << 32);
+
+    // Look up the share record
+    let info = match stub_spmc::lookup_share_full(handle) {
+        Some(info) => info,
+        None => {
+            ffa_error(context, FFA_INVALID_PARAMETERS);
+            return true;
+        }
+    };
+
+    // Verify caller is the designated receiver
+    let vm_id = crate::global::current_vm_id();
+    let caller_id = vm_id_to_partition_id(vm_id);
+    if caller_id != info.receiver_id {
+        ffa_error(context, FFA_DENIED);
+        return true;
+    }
+
+    // Check not already retrieved
+    if info.retrieved {
+        ffa_error(context, FFA_DENIED);
+        return true;
+    }
+
+    // Only VM receivers get Stage-2 mapping; SP receivers are stub-only
+    if is_vm_partition(info.receiver_id) {
+        #[cfg(feature = "linux_guest")]
+        {
+            let recv_vm_id = partition_id_to_vm_id(info.receiver_id).unwrap();
+            let l0_pa = crate::global::PER_VM_VTTBR[recv_vm_id]
+                .load(core::sync::atomic::Ordering::Acquire);
+            if l0_pa != 0 {
+                let walker = stage2_walker::Stage2Walker::new(l0_pa);
+                let s2ap = (S2AP_RW >> S2AP_SHIFT) as u8;
+                let sw = memory::PageOwnership::SharedBorrowed as u8;
+                for i in 0..info.range_count {
+                    let (base_ipa, page_count) = info.ranges[i];
+                    for p in 0..page_count as u64 {
+                        let ipa = base_ipa + p * PAGE_SIZE_4KB;
+                        if let Err(_) = walker.map_page(ipa, s2ap, sw) {
+                            // Rollback: unmap pages we already mapped
+                            // (best effort -- ignore errors on rollback)
+                            for j in 0..=i {
+                                let (rb_ipa, rb_count) = info.ranges[j];
+                                let end = if j == i { p } else { rb_count as u64 };
+                                for k in 0..end {
+                                    let _ = walker.unmap_page(rb_ipa + k * PAGE_SIZE_4KB);
+                                }
+                            }
+                            ffa_error(context, FFA_DENIED);
+                            return true;
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    // Mark as retrieved
+    stub_spmc::mark_retrieved(handle);
+
+    // Return FFA_MEM_RETRIEVE_RESP
+    context.gp_regs.x0 = FFA_MEM_RETRIEVE_RESP;
+    // x1 = total_length (0 for register-based), x2/x3 = handle
+    context.gp_regs.x1 = 0;
+    context.gp_regs.x2 = handle & 0xFFFF_FFFF;
+    context.gp_regs.x3 = handle >> 32;
+    true
+}
+
+/// FFA_MEM_RELINQUISH: Receiver gives up access to previously retrieved memory.
+///
+/// Input: x1 = handle (low 32), x2 = handle (high 32)
+/// Output: x0 = FFA_SUCCESS_32 or FFA_ERROR
+///
+/// For VM receivers: unmaps shared pages from receiver's Stage-2 via unmap_page().
+fn handle_mem_relinquish(context: &mut VcpuContext) -> bool {
+    let handle = (context.gp_regs.x1 & 0xFFFF_FFFF)
+        | ((context.gp_regs.x2 & 0xFFFF_FFFF) << 32);
+
+    // Look up the share record
+    let info = match stub_spmc::lookup_share_full(handle) {
+        Some(info) => info,
+        None => {
+            ffa_error(context, FFA_INVALID_PARAMETERS);
+            return true;
+        }
+    };
+
+    // Verify caller is the designated receiver
+    let vm_id = crate::global::current_vm_id();
+    let caller_id = vm_id_to_partition_id(vm_id);
+    if caller_id != info.receiver_id {
+        ffa_error(context, FFA_DENIED);
+        return true;
+    }
+
+    // Must be currently retrieved
+    if !info.retrieved {
+        ffa_error(context, FFA_DENIED);
+        return true;
+    }
+
+    // Unmap pages from receiver's Stage-2
+    if is_vm_partition(info.receiver_id) {
+        #[cfg(feature = "linux_guest")]
+        {
+            let recv_vm_id = partition_id_to_vm_id(info.receiver_id).unwrap();
+            let l0_pa = crate::global::PER_VM_VTTBR[recv_vm_id]
+                .load(core::sync::atomic::Ordering::Acquire);
+            if l0_pa != 0 {
+                let walker = stage2_walker::Stage2Walker::new(l0_pa);
+                for i in 0..info.range_count {
+                    let (base_ipa, page_count) = info.ranges[i];
+                    for p in 0..page_count as u64 {
+                        let ipa = base_ipa + p * PAGE_SIZE_4KB;
+                        let _ = walker.unmap_page(ipa);
+                    }
+                }
+            }
+        }
+    }
+
+    // Mark as relinquished
+    stub_spmc::mark_relinquished(handle);
+
     context.gp_regs.x0 = FFA_SUCCESS_32;
     true
 }
