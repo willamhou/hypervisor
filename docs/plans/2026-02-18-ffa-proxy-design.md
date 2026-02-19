@@ -33,7 +33,7 @@ Hypervisor FF-A Proxy (EL2)
 |----------|--------|-----------|
 | FF-A version | v1.1 (0x00010001) | pKVM baseline, covers all core interfaces |
 | Proxy model | pKVM-compatible EL2 proxy | AVF/pKVM alignment, future Secure World integration |
-| Page ownership | Stage-2 PTE SW bits [58:55] | Matches pKVM exactly, no extra memory |
+| Page ownership | Stage-2 PTE SW bits [56:55] | Matches pKVM exactly, no extra memory |
 | SPMC | Stub (in-hypervisor) | No EL3/S-EL2 in QEMU default; replaceable later |
 | FFA_MEM_DONATE | Blocked | pKVM blocks this; too dangerous for proxy model |
 
@@ -103,7 +103,7 @@ Hypervisor FF-A Proxy (EL2)
 
 ## 4. Page Ownership Tracking (Stage-2 PTE SW bits)
 
-ARM Stage-2 PTE bits [58:55] encode software-defined page state:
+ARM Stage-2 PTE bits [56:55] encode software-defined page state:
 
 | SW[1:0] (bits 56:55) | State | Meaning |
 |-----------------------|-------|---------|
@@ -132,7 +132,7 @@ A page in state `SHARED_OWNED` or `DONATED` CANNOT be:
 New methods:
 - `read_sw_bits(ipa: u64) -> Option<u8>` — walk page table to leaf PTE, extract bits [56:55]
 - `write_sw_bits(ipa: u64, bits: u8)` — walk page table to leaf PTE, set bits [56:55]
-- Bits [58:57] reserved for future use
+- Only bits [56:55] used; bits [58:57] reserved for future use
 
 ---
 

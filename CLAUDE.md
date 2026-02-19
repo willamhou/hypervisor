@@ -4,13 +4,13 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Overview
 
-ARM64 Type-1 bare-metal hypervisor written in Rust (no_std) with ARM64 assembly. Runs at EL2 (hypervisor exception level) and manages guest VMs at EL1. Targets QEMU virt machine. Boots Linux 6.12.12 to BusyBox shell with 4 vCPUs, virtio-blk storage, and virtio-net inter-VM networking. Supports multi-VM with per-VM Stage-2, VMID-tagged TLBs, two-level scheduling, and L2 virtual switch.
+ARM64 Type-1 bare-metal hypervisor written in Rust (no_std) with ARM64 assembly. Runs at EL2 (hypervisor exception level) and manages guest VMs at EL1. Targets QEMU virt machine. Boots Linux 6.12.12 to BusyBox shell with 4 vCPUs, virtio-blk storage, and virtio-net inter-VM networking. Supports multi-VM with per-VM Stage-2, VMID-tagged TLBs, two-level scheduling, and L2 virtual switch. Includes FF-A v1.1 proxy with stub SPMC, page ownership validation via Stage-2 PTE SW bits, FF-A v1.1 descriptor parsing, and SMC forwarding to EL3.
 
 ## Build Commands
 
 ```bash
 make              # Build hypervisor
-make run          # Build + run in QEMU — runs 26 test suites automatically (exit: Ctrl+A then X)
+make run          # Build + run in QEMU — runs 29 test suites automatically (exit: Ctrl+A then X)
 make run-linux    # Build + boot Linux guest (--features linux_guest, 4 vCPUs on 1 pCPU, virtio-blk)
 make run-linux-smp # Build + boot Linux guest (--features multi_pcpu, 4 vCPUs on 4 pCPUs)
 make run-multi-vm # Build + boot 2 Linux VMs time-sliced (--features multi_vm)
@@ -50,7 +50,11 @@ make fmt          # Format code
 | `VcpuArchState` | `src/arch/aarch64/vcpu_arch_state.rs` | Per-vCPU GIC LRs, timer, EL1 sysregs, PAC keys |
 | `DeviceManager` | `src/devices/mod.rs` | Enum-dispatch MMIO routing to emulated devices |
 | `Scheduler` | `src/scheduler.rs` | Round-robin vCPU scheduler with block/unblock |
-| `ExitReason` | `src/arch/aarch64/regs.rs` | VM exit causes: WfiWfe, HvcCall, DataAbort, etc. |
+| `ExitReason` | `src/arch/aarch64/regs.rs` | VM exit causes: WfiWfe, HvcCall, SmcCall, DataAbort, etc. |
+| `FfaProxy` | `src/ffa/proxy.rs` | FF-A v1.1 proxy: intercepts guest SMC, handles VERSION/ID_GET/FEATURES/RXTX/messaging/memory |
+| `Stage2Walker` | `src/ffa/stage2_walker.rs` | Lightweight Stage-2 page table walker from VTTBR_EL2 for PTE SW bits |
+| `FfaDescriptors` | `src/ffa/descriptors.rs` | FF-A v1.1 composite memory region descriptor parsing |
+| `SmcForward` | `src/ffa/smc_forward.rs` | SMC forwarding to EL3 + SPMC probe |
 | `PlatformInfo` | `src/dtb.rs` | Runtime DTB parsing: UART, GIC, RAM, CPU count discovery |
 | `VSwitch` | `src/vswitch.rs` | L2 virtual switch with MAC learning, inter-VM frame forwarding |
 | `NetRxRing` | `src/vswitch.rs` | Per-port SPSC ring buffer for async RX frame delivery |
@@ -58,12 +62,13 @@ make fmt          # Format code
 ### Exception Handling Flow
 ```
 Guest @ EL1
-  ↓ trap (Data Abort, HVC, WFI, MSR/MRS)
+  ↓ trap (Data Abort, HVC, SMC, WFI, MSR/MRS)
 Exception Vector (arch/aarch64/exception.S) — save context
   ↓
 handle_exception() (src/arch/aarch64/hypervisor/exception.rs)
   ├─ WFI → return false (exit to scheduler)
   ├─ HVC → handle_psci() (CPU_ON, CPU_OFF, SYSTEM_RESET)
+  ├─ SMC → handle_smc() → PSCI or FF-A proxy or forward to EL3
   ├─ Data Abort → HPFAR_EL2 for IPA → decode instruction → MMIO dispatch
   ├─ MSR/MRS trap → handle ICC_SGI1R_EL1 (SGI emulation), sysreg emulation
   └─ IRQ → handle INTID 26 (preemption), 27 (vtimer), 33 (UART RX)
@@ -163,6 +168,26 @@ VirtioMmioTransport<VirtioNet>  @ 0x0a000200 (SPI 17 = INTID 49)
 
 **Auto-IP**: Initramfs `/init` reads MAC from sysfs, extracts last octet, assigns `10.0.0.{octet}/24` via `ifconfig`. VM 0 → `10.0.0.1`, VM 1 → `10.0.0.2`.
 
+### FF-A v1.1 Proxy (`src/ffa/`)
+
+Implements the FF-A (Firmware Framework for Arm) v1.1 hypervisor proxy role (pKVM-compatible). Guest SMC calls trapped via `HCR_EL2.TSC=1` (bit 19) are routed through `handle_smc()` → `ffa::proxy::handle_ffa_call()`.
+
+**Supported calls**: FFA_VERSION, FFA_ID_GET, FFA_FEATURES, FFA_RXTX_MAP/UNMAP, FFA_RX_RELEASE, FFA_PARTITION_INFO_GET, FFA_MSG_SEND_DIRECT_REQ, FFA_MEM_SHARE/LEND/RECLAIM. FFA_MEM_DONATE is blocked (returns NOT_SUPPORTED).
+
+**Stub SPMC** (`src/ffa/stub_spmc.rs`): Simulates 2 Secure Partitions (SP1=0x8001, SP2=0x8002) for testing without a real Secure World. Direct messaging echoes x4-x7 back. Memory sharing tracks multi-range records with `MemShareRecord` (up to 4 ranges per share, `ShareInfo` for reclaim).
+
+**RXTX Mailbox** (`src/ffa/mailbox.rs`): Per-VM TX/RX buffer IPAs registered via FFA_RXTX_MAP. Used by PARTITION_INFO_GET to return SP descriptors. TX buffer used for FF-A v1.1 composite memory region descriptors.
+
+**Page Ownership** (`src/ffa/memory.rs`): Stage-2 PTE software bits [56:55] track page state: Owned(0b00), SharedOwned(0b01), SharedBorrowed(0b10), Donated(0b11). Validated during MEM_SHARE/LEND (Owned required), transitioned to SharedOwned, restored on MEM_RECLAIM. S2AP bits [7:6] restrict access: SHARE→RO, LEND→NONE. Matches pKVM page ownership model.
+
+**Stage-2 Walker** (`src/ffa/stage2_walker.rs`): Lightweight page table walker reconstructed from `VTTBR_EL2` at SMC handling time. Reads/writes PTE SW bits and S2AP without owning page table memory. Used by MEM_SHARE/LEND/RECLAIM for ownership validation. Gated by `#[cfg(feature = "linux_guest")]` — unit tests skip Stage-2 validation (stale VTTBR from earlier page table tests).
+
+**Descriptor Parsing** (`src/ffa/descriptors.rs`): Parses FF-A v1.1 composite memory region descriptors (DEN0077A Table 5.19-5.25): `FfaMemRegion`(48B) → `FfaMemAccessDesc`(16B) → `FfaCompositeMemRegion`(16B) → `FfaMemRegionAddrRange`(16B). Uses `core::ptr::read_unaligned` for packed struct safety. Falls back to register-based protocol (x3=IPA, x4=count, x5=receiver) when no mailbox is mapped.
+
+**SMC Forwarding** (`src/ffa/smc_forward.rs`): `forward_smc()` uses inline `smc #0` to forward calls to EL3 (HCR_EL2.TSC only traps EL1 SMC). `probe_spmc()` sends FFA_VERSION to detect a real SPMC at EL3. `ffa::proxy::init()` called at boot (linux_guest only) to set `SPMC_PRESENT` flag. Unknown SMCs in `handle_smc()` catch-all are forwarded to EL3 instead of returning -1.
+
+**SMC routing**: `is_ffa_function(fid)` checks for SMC32/64 function IDs in the 0x84/0xC4 range with low byte >= 0x60. PSCI functions (0x84000000-0x8400001F, 0xC4000000-0xC4000003) are handled separately.
+
 ### UART (PL011) Emulation
 
 Full trap-and-emulate (Stage-2 unmapped). TX: guest writes UARTDR → `output_char()` to physical UART. RX: physical IRQ (INTID 33) → `UART_RX` ring buffer → `VirtualUart.push_rx()` → inject SPI 33. Linux amba-pl011 probe requires PeriphID/PrimeCellID registers.
@@ -241,7 +266,7 @@ Array-based routing: `devices: [Option<Device>; 8]`, scan for `dev.contains(addr
 
 ## Tests
 
-~127 assertions across 26 test suites run automatically on `make run` (no feature flags). Orchestrated sequentially in `src/main.rs`. Located in `tests/`:
+~158 assertions across 29 test suites run automatically on `make run` (no feature flags). Orchestrated sequentially in `src/main.rs`. Located in `tests/`:
 
 | Test | Coverage | Assertions |
 |------|----------|------------|
@@ -271,6 +296,8 @@ Array-based routing: `devices: [Option<Device>; 8]`, scan for `dev.contains(addr
 | `test_net_rx_ring` | NetRxRing SPSC: empty/store/take/fill/overflow/wraparound | 8 |
 | `test_vswitch` | VSwitch: flood/MAC learning/broadcast/no-self/capacity | 6 |
 | `test_virtio_net` | VirtioNet: device_id/features/queues/config/mac_for_vm | 8 |
+| `test_page_ownership` | Stage-2 PTE SW bits: read/write OWNED/SHARED_OWNED, unmapped IPA | 4 |
+| `test_ffa` | FF-A proxy: VERSION/ID_GET/FEATURES/RXTX/messaging/MEM_SHARE/RECLAIM/descriptors/SMC forward | 18 |
 | `test_guest_interrupt` | Guest interrupt injection + exception vector (blocks) | 1 |
 
 Not wired into `main.rs` (exported but not called):
@@ -306,6 +333,9 @@ Secondary physical CPUs start powered off — they do NOT execute `_start`. Must
 
 ### Physical GICR Must Be Programmed for SGIs/PPIs
 Guest GICR writes only update `VirtualGicr` shadow state. `ensure_vtimer_enabled()` programs physical GICR ISENABLER0 for SGIs 0-15 + PPI 27 before every guest entry.
+
+### HCR_EL2.TSC for SMC Trapping
+`HCR_TSC = 1 << 19` traps guest SMC instructions to EL2 as `EC_SMC64 (0x17)`. Unlike HVC traps, the trapped SMC sets `ELR_EL2` to the SMC instruction itself — exception handler must advance PC by 4. This enables the FF-A proxy to intercept guest FF-A SMC calls and route them through `handle_smc()`.
 
 ### Platform Constants
 Guest-specific addresses (heap, kernel load, virtio disk) are in `src/platform.rs`. Host hardware addresses (UART, GIC, RAM, CPU count) are discovered at runtime from DTB via `src/dtb.rs` — use `platform::num_cpus()` and `dtb::platform_info()` instead of hardcoded constants. `MAX_SMP_CPUS = 8` is the compile-time array capacity; `SMP_CPUS = 4` is the fallback default.

@@ -103,6 +103,13 @@ pub const PAGE_MASK_4KB: u64 = PAGE_SIZE_4KB - 1;
 pub const PTE_SW_SHIFT: u32 = 55;
 pub const PTE_SW_MASK: u64  = 0x3 << PTE_SW_SHIFT; // bits [56:55]
 
+// ── Stage-2 Access Permissions (S2AP, PTE bits [7:6]) ────────────
+pub const S2AP_SHIFT: u32 = 6;
+pub const S2AP_MASK: u64  = 0x3 << S2AP_SHIFT;
+pub const S2AP_NONE: u64  = 0b00 << S2AP_SHIFT; // No access
+pub const S2AP_RO: u64    = 0b01 << S2AP_SHIFT;  // Read-only
+pub const S2AP_RW: u64    = 0b11 << S2AP_SHIFT;  // Read-write
+
 // ── Preemptive scheduling ────────────────────────────────────────────
 // Preemption is now handled by CNTHP timer (INTID 26) armed before each
 // vcpu.run(). See timer::arm_preemption_timer(). This ensures preemption

@@ -1,9 +1,28 @@
 //! FF-A Proxy — main dispatch for FF-A SMC calls.
 //!
 //! Routes FF-A function IDs to local handlers or stub SPMC.
+//! Validates page ownership via Stage-2 PTE SW bits before allowing
+//! memory sharing operations (pKVM-compatible).
 
+use core::sync::atomic::{AtomicBool, Ordering};
+
+#[cfg(feature = "linux_guest")]
+use crate::arch::aarch64::defs::*;
 use crate::arch::aarch64::regs::VcpuContext;
 use crate::ffa::*;
+
+/// Whether a real SPMC was detected at EL3 during init.
+static SPMC_PRESENT: AtomicBool = AtomicBool::new(false);
+
+/// Initialize FF-A proxy. Probes EL3 for a real SPMC.
+///
+/// Called once at boot before guest entry.
+pub fn init() {
+    if smc_forward::probe_spmc() {
+        SPMC_PRESENT.store(true, Ordering::Relaxed);
+        crate::uart_puts(b"[FFA] Real SPMC detected at EL3\n");
+    }
+}
 
 /// Handle an FF-A SMC call from guest.
 ///
@@ -13,6 +32,7 @@ pub fn handle_ffa_call(context: &mut VcpuContext) -> bool {
     let function_id = context.gp_regs.x0;
 
     match function_id {
+        // Always handled locally (proxy policy, same as pKVM)
         FFA_VERSION => handle_version(context),
         FFA_ID_GET => handle_id_get(context),
         FFA_FEATURES => handle_features(context),
@@ -20,25 +40,52 @@ pub fn handle_ffa_call(context: &mut VcpuContext) -> bool {
         FFA_RXTX_UNMAP => handle_rxtx_unmap(context),
         FFA_RX_RELEASE => handle_rx_release(context),
         FFA_PARTITION_INFO_GET => handle_partition_info_get(context),
+
+        // Direct messaging: forward to SPMC if present, else stub
         FFA_MSG_SEND_DIRECT_REQ_32 | FFA_MSG_SEND_DIRECT_REQ_64 => {
             handle_msg_send_direct_req(context)
         }
+
+        // Memory operations: validate ownership, then stub SPMC or forward
         FFA_MEM_SHARE_32 | FFA_MEM_SHARE_64 => handle_mem_share(context),
         FFA_MEM_LEND_32 | FFA_MEM_LEND_64 => handle_mem_lend(context),
         FFA_MEM_RECLAIM => handle_mem_reclaim(context),
 
-        // Blocked: FFA_MEM_DONATE
+        // Blocked: FFA_MEM_DONATE (pKVM policy)
         FFA_MEM_DONATE_32 | FFA_MEM_DONATE_64 => {
             ffa_error(context, FFA_NOT_SUPPORTED);
             true
         }
 
-        // Not yet implemented — return NOT_SUPPORTED
+        // Unknown FF-A: forward to SPMC if present, else NOT_SUPPORTED
         _ => {
-            ffa_error(context, FFA_NOT_SUPPORTED);
-            true
+            if SPMC_PRESENT.load(Ordering::Relaxed) {
+                forward_ffa_to_spmc(context)
+            } else {
+                ffa_error(context, FFA_NOT_SUPPORTED);
+                true
+            }
         }
     }
+}
+
+/// Forward an FF-A call transparently to the Secure World.
+fn forward_ffa_to_spmc(context: &mut VcpuContext) -> bool {
+    let result = smc_forward::forward_smc(
+        context.gp_regs.x0,
+        context.gp_regs.x1,
+        context.gp_regs.x2,
+        context.gp_regs.x3,
+        context.gp_regs.x4,
+        context.gp_regs.x5,
+        context.gp_regs.x6,
+        context.gp_regs.x7,
+    );
+    context.gp_regs.x0 = result.x0;
+    context.gp_regs.x1 = result.x1;
+    context.gp_regs.x2 = result.x2;
+    context.gp_regs.x3 = result.x3;
+    true
 }
 
 // ── Locally Handled ──────────────────────────────────────────────────
@@ -260,22 +307,58 @@ fn handle_msg_send_direct_req(context: &mut VcpuContext) -> bool {
 
 /// FFA_MEM_SHARE: Share memory pages with a secure partition.
 ///
-/// Simplified interface (no RXTX descriptor parsing):
-///   x3 = IPA of first page to share
-///   x4 = page count
-///   x5 = receiver partition ID
+/// Two interfaces supported:
+/// 1. **Descriptor-based** (FF-A v1.1 compliant): If RXTX mailbox is mapped,
+///    reads composite memory region descriptor from TX buffer.
+///    x1 = total_length, x2 = fragment_length.
+/// 2. **Register-based** (fallback for testing): If no mailbox,
+///    x3 = IPA, x4 = page_count, x5 = receiver_id.
 ///
-/// NOTE: Real FF-A v1.1 MEM_SHARE uses composite memory region descriptors
-/// in the TX buffer (DEN0077A §5.12). This stub uses registers for testability.
+/// Validates page ownership via Stage-2 PTE SW bits and transitions
+/// pages from Owned → SharedOwned. Sets S2AP to RO for shared pages.
 fn handle_mem_share(context: &mut VcpuContext) -> bool {
-    let _ipa = context.gp_regs.x3;
-    let page_count = context.gp_regs.x4 as u32;
-    let receiver_id = context.gp_regs.x5 as u16;
+    handle_mem_share_or_lend(context, false)
+}
 
-    if page_count == 0 {
-        ffa_error(context, FFA_INVALID_PARAMETERS);
-        return true;
-    }
+/// FFA_MEM_LEND: Lend memory pages to a secure partition.
+///
+/// Same as share but sets S2AP to NONE (no access) instead of RO.
+fn handle_mem_lend(context: &mut VcpuContext) -> bool {
+    handle_mem_share_or_lend(context, true)
+}
+
+/// Unified handler for MEM_SHARE and MEM_LEND.
+///
+/// - is_lend=false (SHARE): pages become S2AP_RO (guest retains read)
+/// - is_lend=true  (LEND):  pages become S2AP_NONE (guest loses access)
+fn handle_mem_share_or_lend(context: &mut VcpuContext, is_lend: bool) -> bool {
+    let vm_id = crate::global::current_vm_id();
+    let mbox = mailbox::get_mailbox(vm_id);
+
+    // Choose interface: descriptor-based (mailbox mapped) or register-based (fallback)
+    let (sender_id_from_desc, receiver_id, ranges, range_count, total_page_count) =
+        if mbox.mapped {
+            // FF-A v1.1 descriptor path: parse TX buffer
+            match parse_share_descriptor(context, mbox) {
+                Ok(info) => info,
+                Err(code) => {
+                    ffa_error(context, code);
+                    return true;
+                }
+            }
+        } else {
+            // Register-based fallback (for unit tests and simple use)
+            let base_ipa = context.gp_regs.x3;
+            let page_count = context.gp_regs.x4 as u32;
+            let receiver_id = context.gp_regs.x5 as u16;
+            if page_count == 0 {
+                ffa_error(context, FFA_INVALID_PARAMETERS);
+                return true;
+            }
+            let mut ranges = [(0u64, 0u32); descriptors::MAX_ADDR_RANGES];
+            ranges[0] = (base_ipa, page_count);
+            (0u16, receiver_id, ranges, 1usize, page_count)
+        };
 
     // Validate receiver is a known SP
     if !stub_spmc::is_valid_sp(receiver_id) {
@@ -283,11 +366,68 @@ fn handle_mem_share(context: &mut VcpuContext) -> bool {
         return true;
     }
 
-    let vm_id = crate::global::current_vm_id();
-    let sender_id = vm_id_to_partition_id(vm_id);
+    // Validate sender matches caller (only for descriptor path where sender is explicit)
+    let expected_sender = vm_id_to_partition_id(vm_id);
+    if sender_id_from_desc != 0 && sender_id_from_desc != expected_sender {
+        ffa_error(context, FFA_INVALID_PARAMETERS);
+        return true;
+    }
+
+    // Validate and transition page ownership via Stage-2 PTE SW bits.
+    // Only when running actual VMs (linux_guest feature), not unit tests.
+    // In unit test mode, VTTBR may contain stale values from earlier page table tests.
+    #[cfg(feature = "linux_guest")]
+    {
+        let walker = stage2_walker::Stage2Walker::from_vttbr();
+        if walker.has_stage2() {
+            // Validate: all pages must be in Owned state
+            for i in 0..range_count {
+                let (base_ipa, page_count) = ranges[i];
+                for p in 0..page_count as u64 {
+                    let ipa = base_ipa + p * PAGE_SIZE_4KB;
+                    match walker.read_sw_bits(ipa) {
+                        Some(sw) => {
+                            if let Err(code) = memory::validate_page_for_share(sw) {
+                                ffa_error(context, code);
+                                return true;
+                            }
+                        }
+                        None => {
+                            ffa_error(context, FFA_DENIED);
+                            return true;
+                        }
+                    }
+                }
+            }
+
+            // Transition pages: Owned -> SharedOwned, restrict S2AP
+            let new_sw = memory::PageOwnership::SharedOwned as u8;
+            let new_s2ap = if is_lend {
+                (S2AP_NONE >> S2AP_SHIFT) as u8
+            } else {
+                (S2AP_RO >> S2AP_SHIFT) as u8
+            };
+            for i in 0..range_count {
+                let (base_ipa, page_count) = ranges[i];
+                for p in 0..page_count as u64 {
+                    let ipa = base_ipa + p * PAGE_SIZE_4KB;
+                    let _ = walker.write_sw_bits(ipa, new_sw);
+                    let _ = walker.set_s2ap(ipa, new_s2ap);
+                }
+            }
+        }
+    }
+
+    let sender_id = expected_sender;
 
     // Record the share in stub SPMC
-    let handle = match stub_spmc::record_share(sender_id, receiver_id, page_count) {
+    let handle = match stub_spmc::record_share(
+        sender_id,
+        receiver_id,
+        &ranges[..range_count],
+        total_page_count,
+        is_lend,
+    ) {
         Some(h) => h,
         None => {
             ffa_error(context, FFA_NO_MEMORY);
@@ -303,25 +443,76 @@ fn handle_mem_share(context: &mut VcpuContext) -> bool {
     true
 }
 
-/// FFA_MEM_LEND: Lend memory pages to a secure partition.
-/// Same as share for the stub implementation.
-fn handle_mem_lend(context: &mut VcpuContext) -> bool {
-    handle_mem_share(context)
+/// Parse a FF-A v1.1 composite memory region descriptor from the TX buffer.
+///
+/// Returns (sender_id, receiver_id, ranges, range_count, total_page_count).
+fn parse_share_descriptor(
+    context: &VcpuContext,
+    mbox: &mailbox::FfaMailbox,
+) -> Result<(u16, u16, [(u64, u32); descriptors::MAX_ADDR_RANGES], usize, u32), i32> {
+    let total_length = context.gp_regs.x1 as u32;
+    let fragment_length = context.gp_regs.x2 as u32;
+
+    // No fragmentation support: entire descriptor must fit in one TX buffer
+    if total_length != fragment_length || total_length == 0 {
+        return Err(FFA_INVALID_PARAMETERS);
+    }
+
+    // Identity mapping: IPA == PA, safe to read TX buffer directly at EL2
+    let tx_ptr = mbox.tx_ipa as *const u8;
+
+    let parsed = unsafe { descriptors::parse_mem_region(tx_ptr, total_length)? };
+
+    Ok((
+        parsed.sender_id,
+        parsed.receiver_id,
+        parsed.ranges,
+        parsed.range_count,
+        parsed.total_page_count,
+    ))
 }
 
 /// FFA_MEM_RECLAIM: Reclaim previously shared/lent memory.
 ///
 /// Input: x1 = handle (low 32), x2 = handle (high 32), x3 = flags
 /// Output: x0 = FFA_SUCCESS_32 or FFA_ERROR
+///
+/// Restores page ownership to Owned and S2AP to RW.
 fn handle_mem_reclaim(context: &mut VcpuContext) -> bool {
     let handle = (context.gp_regs.x1 & 0xFFFF_FFFF)
         | ((context.gp_regs.x2 & 0xFFFF_FFFF) << 32);
 
-    if stub_spmc::reclaim_share(handle) {
-        context.gp_regs.x0 = FFA_SUCCESS_32;
-    } else {
-        ffa_error(context, FFA_INVALID_PARAMETERS);
+    // Look up share record BEFORE removing it (need IPA info for restoration)
+    let _info = match stub_spmc::lookup_share(handle) {
+        Some(info) => info,
+        None => {
+            ffa_error(context, FFA_INVALID_PARAMETERS);
+            return true;
+        }
+    };
+
+    // Restore pages to Owned + S2AP_RW.
+    // Only when running actual VMs (linux_guest feature), not unit tests.
+    #[cfg(feature = "linux_guest")]
+    {
+        let walker = stage2_walker::Stage2Walker::from_vttbr();
+        if walker.has_stage2() {
+            let owned_sw = memory::PageOwnership::Owned as u8;
+            let rw_s2ap = (S2AP_RW >> S2AP_SHIFT) as u8;
+            for i in 0.._info.range_count {
+                let (base_ipa, page_count) = _info.ranges[i];
+                for p in 0..page_count as u64 {
+                    let ipa = base_ipa + p * PAGE_SIZE_4KB;
+                    let _ = walker.write_sw_bits(ipa, owned_sw);
+                    let _ = walker.set_s2ap(ipa, rw_s2ap);
+                }
+            }
+        }
     }
+
+    // Now remove the record
+    stub_spmc::reclaim_share(handle);
+    context.gp_regs.x0 = FFA_SUCCESS_32;
     true
 }
 

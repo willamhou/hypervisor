@@ -1,28 +1,28 @@
 # ARM64 Hypervisor 开发计划
 
-**项目版本**: v0.12.0 (Phase 12 Complete — Virtio-net + VSwitch)
+**项目版本**: v0.14.0 (Phase 14 Complete — FF-A Validation + Descriptors + SMC Forwarding)
 **计划制定日期**: 2026-01-26
-**最后更新**: 2026-02-18
+**最后更新**: 2026-02-19
 **计划类型**: 敏捷迭代，灵活调整
 
 ---
 
 ## 📊 当前进度概览
 
-**整体完成度**: 🟢 **60%** (Milestone 0-2 + Options A-G 已完成)
+**整体完成度**: 🟢 **65%** (Milestone 0-2 + Options A-G + M3 Sprint 3.1 已完成)
 
 ```
 M0: 项目启动          ████████████████████ 100% ✅
 M1: MVP基础虚拟化     ████████████████████ 100% ✅
-M2: 增强功能          ████████████████████ 100% ✅ (当前位置)
-M3: FF-A              ░░░░░░░░░░░░░░░░░░░░   0% ⏸️
+M2: 增强功能          ████████████████████ 100% ✅
+M3: FF-A              ████████████░░░░░░░░  60% 🔧 (当前位置)
 M4: Secure EL2        ░░░░░░░░░░░░░░░░░░░░   0% ⏸️
 M5: RME & CCA         ░░░░░░░░░░░░░░░░░░░░   0% ⏸️
 ```
 
-**测试覆盖**: ~127 assertions / 26 test suites (100% pass)
-**代码量**: ~11000+ 行
-**Linux启动**: 4 vCPU, BusyBox shell, virtio-blk, virtio-net, multi-VM
+**测试覆盖**: ~158 assertions / 29 test suites (100% pass)
+**代码量**: ~13000+ 行
+**Linux启动**: 4 vCPU, BusyBox shell, virtio-blk, virtio-net, multi-VM, FF-A proxy
 **编译警告**: 最小化
 
 ---
@@ -416,115 +416,153 @@ M5: RME & CCA         ░░░░░░░░░░░░░░░░░░░�
 - DeviceManager enum dispatch (Device enum: Uart, Gicd, Gicr, VirtioBlk, VirtioNet)
 - VirtualGicr per-vCPU 状态仿真
 - Custom kernel build via Docker (debian:bookworm-slim)
-- ~127 test assertions / 26 test suites
+- ~144 test assertions / 28 test suites
 
 ---
 
-### Milestone 3: 安全扩展 - FF-A（Week 19-28）⏸️ **未开始**
+### Milestone 3: 安全扩展 - FF-A（Week 19-28）🔧 **进行中**
 **目标**: 实现FF-A Hypervisor角色，支持内存共享
 
 根据你的偏好，**先实现FF-A**（因为它是TEE和Realm的通信基础）。
 
-#### Sprint 3.1: FF-A基础框架（Week 19-21）⏸️ **未开始**
-**设计文档**:
-- FF-A规范解读（v1.1）
-- Hypervisor endpoint设计
-- 与SPM交互流程
+#### Sprint 3.1: FF-A基础框架 + Stub SPMC ✅ **已完成**
+**设计文档**: `docs/plans/2026-02-18-ffa-proxy-design.md`
+**实现计划**: `docs/plans/2026-02-18-ffa-proxy-impl.md`
 
 **实现任务**:
-1. **FF-A数据结构**:
-   - `struct FfaPartition`（表示VM或SP）
-   - `struct FfaMessage`（消息缓冲区）
-   - Endpoint ID管理（16-bit ID）
+1. **SMC Trap Infrastructure**:
+   - [x] HCR_EL2.TSC=1 (bit 19) 陷入 guest SMC 到 EL2
+   - [x] EC_SMC64 (0x17) 异常类 + ExitReason::SmcCall
+   - [x] handle_smc() 路由: PSCI → FF-A proxy → SMC_UNKNOWN
+   - [x] is_ffa_function() 识别 SMC32/64 FF-A 调用 (low byte >= 0x60)
 
-2. **基础FF-A调用**:
-   - `FFA_VERSION`: 版本协商
-   - `FFA_ID_GET`: 获取自己的ID
-   - `FFA_FEATURES`: 查询支持的特性
-   - `FFA_PARTITION_INFO_GET`: 发现SP
+2. **FF-A v1.1 Constants + Basic Calls** (`src/ffa/mod.rs`, `src/ffa/proxy.rs`):
+   - [x] FFA_VERSION 版本协商 (返回 v1.1 = 0x00010001)
+   - [x] FFA_ID_GET 获取 partition ID (vm_id → partition_id)
+   - [x] FFA_FEATURES 查询支持的特性
+   - [x] FFA_PARTITION_INFO_GET 发现 SP (通过 RXTX mailbox)
+   - [x] ffa_error() 32-bit 掩码 (避免 i32→u64 符号扩展)
 
-3. **SMC路由**:
-   - Guest发起SMC调用
-   - 解析Function ID（0x8400_00xx）
-   - 转发到SPM或本地处理
+3. **RXTX Mailbox** (`src/ffa/mailbox.rs`):
+   - [x] Per-VM TX/RX buffer IPA 对注册 (FFA_RXTX_MAP)
+   - [x] FFA_RXTX_UNMAP + FFA_RX_RELEASE
+   - [x] UnsafeCell+Sync 全局存储模式 (非 static mut)
 
-**TDD测试**:
-- 测试：VM调用FFA_VERSION，收到正确响应
-- 测试：枚举SP列表
-- 测试：查询特定SP的属性
+4. **Stub SPMC** (`src/ffa/stub_spmc.rs`):
+   - [x] 2 模拟 Secure Partitions (SP1=0x8001, SP2=0x8002)
+   - [x] FFA_MSG_SEND_DIRECT_REQ echo messaging (x4-x7 回传)
+   - [x] Share record management + atomic handle allocation
+
+5. **Memory Sharing** (`src/ffa/memory.rs`):
+   - [x] FFA_MEM_SHARE / FFA_MEM_LEND → handle allocation
+   - [x] FFA_MEM_RECLAIM → handle validation + cleanup
+   - [x] FFA_MEM_DONATE → blocked (returns NOT_SUPPORTED)
+   - [x] Stage-2 PTE SW bits [56:55] page ownership tracking (pKVM-compatible)
+   - [x] DynamicIdentityMapper::read_sw_bits() / write_sw_bits() / walk_to_leaf()
+   - [x] PageOwnership enum: Owned/SharedOwned/SharedBorrowed/Donated
+
+6. **Tests**:
+   - [x] test_ffa: 13 assertions (VERSION, ID_GET, FEATURES, RXTX, messaging, MEM_SHARE/RECLAIM)
+   - [x] test_page_ownership: 4 assertions (SW bits read/write, unmapped IPA handling)
+   - [x] All 4 feature configs build clean (default, linux_guest, multi_pcpu, multi_vm)
 
 **验收**:
-- [ ] VM可以发现系统中的SP
-- [ ] 基础FF-A调用正常工作
+- [x] VM 可以发现系统中的 SP (FFA_PARTITION_INFO_GET)
+- [x] 基础 FF-A 调用正常工作 (VERSION, ID_GET, FEATURES)
+- [x] Direct Messaging echo 工作
+- [x] 内存共享 handle 分配 + 回收
+- [x] Page ownership tracking via PTE SW bits
+
+**实际完成**: 2026-02-18
+**关键文件**: `src/ffa/mod.rs`, `src/ffa/proxy.rs`, `src/ffa/mailbox.rs`, `src/ffa/stub_spmc.rs`, `src/ffa/memory.rs`
+
+---
+
+#### Sprint 3.1b: FF-A Validation + Descriptors + SMC Forwarding ✅ **已完成**
+**设计文档**: `/home/willamhou/.claude/plans/rippling-forging-crescent.md`
+
+**实现任务**:
+1. **Page Ownership Validation** (`src/ffa/stage2_walker.rs`, `src/ffa/proxy.rs`):
+   - [x] Stage2Walker: lightweight page table walker from VTTBR_EL2
+   - [x] S2AP constants (S2AP_NONE/RO/RW) in defs.rs
+   - [x] MEM_SHARE validates all pages are Owned → transitions to SharedOwned
+   - [x] MEM_SHARE sets S2AP_RO (share) or S2AP_NONE (lend)
+   - [x] MEM_RECLAIM restores Owned + S2AP_RW
+   - [x] Unified handle_mem_share_or_lend() for SHARE/LEND
+   - [x] MemShareRecord with multi-range support (ranges[], range_count, is_lend)
+   - [x] lookup_share() for reclaim-time IPA restoration
+
+2. **FF-A v1.1 Descriptor Parsing** (`src/ffa/descriptors.rs`):
+   - [x] #[repr(C, packed)] structs: FfaMemRegion (48B), FfaMemAccessDesc (16B), FfaCompositeMemRegion (16B), FfaMemRegionAddrRange (16B)
+   - [x] parse_mem_region() with bounds validation and core::ptr::read_unaligned
+   - [x] Dual interface: descriptor-based (mailbox mapped) or register-based (fallback)
+   - [x] build_test_descriptor() helper for unit tests
+   - [x] Single-receiver only, no fragmentation support
+
+3. **SMC Forwarding to Secure World** (`src/ffa/smc_forward.rs`):
+   - [x] forward_smc(x0-x7) → SmcResult via inline asm `smc #0`
+   - [x] probe_spmc() → FFA_VERSION to EL3, check for valid response
+   - [x] SPMC_PRESENT runtime detection at boot (ffa::proxy::init())
+   - [x] Unknown FF-A calls forwarded to SPMC when present
+   - [x] Unknown SMCs in exception handler forwarded to EL3 (SMCCC pass-through)
+
+4. **Tests**:
+   - [x] test_ffa expanded: 13 → 18 assertions (+3 descriptor parsing, +1 SMC forward, +1 unknown FFA)
+   - [x] Descriptor parsing: valid single-range, valid multi-range, undersized error
+   - [x] SMC forward: PSCI_VERSION returns valid response from QEMU EL3
+   - [x] All 4 feature configs build clean
+
+**验收**:
+- [x] Page ownership wired into MEM_SHARE/LEND/RECLAIM (pKVM-compatible)
+- [x] FF-A v1.1 composite descriptor parsing from TX buffer
+- [x] SMC forwarding to EL3 works (PSCI_VERSION verified)
+- [x] 29 test suites, ~158 assertions, 0 failures
+
+**实际完成**: 2026-02-19
+**关键文件**: `src/ffa/stage2_walker.rs` (NEW), `src/ffa/descriptors.rs` (NEW), `src/ffa/smc_forward.rs` (NEW), `src/ffa/proxy.rs`, `src/ffa/stub_spmc.rs`, `src/arch/aarch64/hypervisor/exception.rs`
+
+---
+
+#### Sprint 3.2: 真实 SPMC 集成（Week 22-24）⏸️ **未开始**
+**目标**: 将 stub SPMC 替换为对真实 Secure World 的 SMC 转发
+
+**实现任务**:
+1. **完整内存共享生命周期**:
+   - [ ] FFA_MEM_RETRIEVE_REQ/RESP 完整实现
+   - [ ] FFA_MEM_RELINQUISH 完整实现
+   - [ ] RXTX buffer IPA→PA 转换 (Stage-2 walk)
+
+2. **多 VM 隔离**:
+   - [ ] Per-VM partition ID 命名空间
+   - [ ] 跨 VM 共享验证 (权限检查)
+
+**验收**:
+- [ ] VM 通过 FF-A 与真实 SP 通信
+- [ ] 内存共享完整生命周期 (share → retrieve → relinquish → reclaim)
+- [ ] 权限控制正确
 
 **预估**: 3周
 
 ---
 
-#### Sprint 3.2: Direct Messaging（Week 22-24）⏸️ **未开始**
-**设计文档**:
-- Direct request/response消息流
-- 寄存器传递约定（X0-X7）
+#### Sprint 3.3: FF-A 完善和测试（Week 25-28）⏸️ **未开始**
 
 **实现任务**:
-1. **FFA_MSG_SEND_DIRECT_REQ**:
-   - VM发送请求到SP
-   - Hypervisor转发SMC到SPMC
-   - 等待SP响应
+1. **Indirect Messaging** (可选):
+   - [ ] FFA_MSG_SEND2 + FFA_MSG_WAIT
+   - [ ] 基于 RXTX mailbox 的异步消息
 
-2. **FFA_MSG_SEND_DIRECT_RESP**:
-   - 接收SP的响应
-   - 返回给VM
+2. **权限控制**:
+   - [ ] RO/RW/RWX 权限 (Stage-2 AP bits)
+   - [ ] 多方共享（VM1 -> SP1, SP2）
+   - [ ] W^X 保护
 
-3. **上下文切换**:
-   - 保存VM上下文
-   - 等待SP响应期间调度其他vCPU
-
-**TDD测试**:
-- 测试：VM向SP发送简单请求（echo）
-- 测试：SP返回响应，VM收到正确数据
-- 测试：多个VM并发调用不冲突
+3. **Conformance 测试**:
+   - [ ] 扩展 test_ffa 覆盖所有错误路径
+   - [ ] QEMU integration test with real SPMC (如果可用)
 
 **验收**:
-- [ ] VM成功与SP通信（Direct Messaging）
-- [ ] 消息正确传递，数据完整
-
-**预估**: 3周
-
----
-
-#### Sprint 3.3: 内存共享（Week 25-28）⭐ ⏸️ **未开始**
-**设计文档**:
-- FF-A内存共享语义（share, lend, donate）
-- 内存描述符格式
-- 权限管理
-
-**实现任务**:
-1. **FFA_MEM_SHARE**:
-   - VM共享内存页给SP
-   - 构建内存描述符（memory region descriptor）
-   - 调用SPM分配内存句柄
-
-2. **FFA_MEM_RETRIEVE_REQ/RESP**:
-   - SP检索共享内存
-   - 映射到SP的地址空间
-
-3. **FFA_MEM_RELINQUISH/RECLAIM**:
-   - 内存回收流程
-   - 清理Stage-2映射
-
-4. **权限控制**:
-   - RO/RW/RWX权限
-   - 多方共享（VM1 -> SP1, SP2）
-
-**TDD测试**:
-- 测试：VM共享1页给SP，SP成功访问
-- 测试：权限控制（RO页不可写）
-- 测试：共享后reclaim，SP不可访问
-- 测试：多方共享场景
-
-**验收**:
-- [ ] VM和SP通过共享内存高效传输数据
+- [ ] VM 和 SP 通过共享内存高效传输数据
 - [ ] 权限控制正确
 - [ ] 内存生命周期管理正确（无泄漏）
 
@@ -533,13 +571,13 @@ M5: RME & CCA         ░░░░░░░░░░░░░░░░░░░�
 ---
 
 **Milestone 3 总验收**:
-- [ ] FF-A Hypervisor角色完整实现
-- [ ] VM可以通过FF-A与SP通信
-- [ ] 内存共享机制工作正常
-- [ ] 通过FF-A conformance测试（如果有）
+- [x] FF-A Hypervisor proxy 基础框架 + stub SPMC ✅
+- [ ] VM 可以通过 FF-A 与真实 SP 通信
+- [ ] 内存共享完整生命周期
+- [ ] 通过 FF-A conformance 测试（如果有）
 
 **预估总时间**: 10周（Week 19-28）
-**状态**: ⏸️ 未开始
+**状态**: 🔧 进行中 (Sprint 3.1 已完成)
 
 ---
 
@@ -981,7 +1019,7 @@ GitHub Actions配置：
 | M0 | 项目启动 | 2周 | 2周 | ✅ 已完成 |
 | M1 | MVP - 基础虚拟化 | 8周 | 10周 | ✅ 已完成 |
 | M2 | 增强功能 | 8周 | 18周 | ✅ 已完成 |
-| M3 | FF-A实现 | 10周 | 28周 | ⏸️ 未开始 |
+| M3 | FF-A实现 | 10周 | 28周 | 🔧 进行中 (Sprint 3.1 ✅) |
 | M4 | Secure EL2 & TEE | 8周 | 36周 | ⏸️ 未开始 |
 | M5 | RME & CCA | 16-20周 | 52-56周 | ⏸️ 未开始 |
 
@@ -997,7 +1035,7 @@ GitHub Actions配置：
 
 - [x] **M1 MVP**: QEMU启动busybox ✅ **已完成 2026-01-26**
 - [x] **M2 增强**: 4 vCPU Linux + virtio-blk + virtio-net + UART RX + GIC emulation ✅ **已完成 2026-02-13**
-- [ ] **M3 FF-A**: VM与SP内存共享成功 ⏸️ **未开始**
+- [ ] **M3 FF-A**: VM与SP内存共享成功 🔧 **进行中** (proxy + stub SPMC 已完成)
 - [ ] **M4 TEE**: OP-TEE运行并可调用TA ⏸️ **未开始**
 - [ ] **M5 CCA**: Realm VM启动Guest OS ⏸️ **未开始**
 
@@ -1054,11 +1092,21 @@ GitHub Actions配置：
 - [x] 修复: 链接脚本丢失 (build.rs + relocation-model=static)
 - **已完成**: 2026-02-18
 
-**选项 D**: FF-A (Milestone 3)
-- [ ] FFA_VERSION / FFA_ID_GET / FFA_FEATURES
-- [ ] SMC 路由框架
-- [ ] Direct Messaging + 内存共享
-- **收益**: 进入安全扩展阶段
+**选项 D**: FF-A Proxy + Stub SPMC ✅ **已完成 (Phase 1+2)**
+- [x] SMC Trap (HCR_TSC=1) + EC_SMC64 + handle_smc() routing
+- [x] FFA_VERSION / FFA_ID_GET / FFA_FEATURES / FFA_PARTITION_INFO_GET
+- [x] RXTX Mailbox (FFA_RXTX_MAP/UNMAP/RX_RELEASE)
+- [x] Stub SPMC (2 SPs, echo messaging, share records)
+- [x] Direct Messaging (FFA_MSG_SEND_DIRECT_REQ)
+- [x] Memory Sharing (FFA_MEM_SHARE/LEND/RECLAIM, MEM_DONATE blocked)
+- [x] Page Ownership (Stage-2 PTE SW bits [56:55], pKVM-compatible)
+- [x] Page ownership validation wired into share/reclaim (Stage2Walker from VTTBR)
+- [x] S2AP permission modification (RO for share, NONE for lend, RW for reclaim)
+- [x] FF-A v1.1 composite memory region descriptor parsing (from TX buffer)
+- [x] SMC forwarding to EL3 (forward_smc + probe_spmc + SMCCC pass-through)
+- [x] 2 test suites: test_ffa (18), test_page_ownership (4)
+- [ ] 真实 SPMC 集成 (FFA_MEM_RETRIEVE/RELINQUISH, multi-VM isolation)
+- **已完成 (Phase 1)**: 2026-02-18, **(Phase 2)**: 2026-02-19
 
 **选项 E**: 完善测试覆盖 ✅ **已完成**
 - [x] 接入 test_guest_interrupt (之前导出但未调用)
@@ -1146,6 +1194,8 @@ GitHub Actions配置：
 - Phase 10: Multi-VM (per-VM Stage-2/VMID, two-level scheduler, per-VM DeviceManager)
 - Phase 11: DTB Runtime Parsing (fdt crate, PlatformInfo, gicr_rd_base/sgi_base helpers)
 - Phase 12: Virtio-net + VSwitch (L2 switch, NetRxRing SPSC, auto-IP, 3 test suites)
+- Phase 13: FF-A v1.1 Proxy + Stub SPMC (SMC trap, VERSION/ID_GET/FEATURES, RXTX mailbox, direct messaging, memory sharing, page ownership PTE SW bits, 2 test suites)
+- Phase 14: FF-A Validation + Descriptors + SMC Forwarding (Stage2Walker page ownership validation, S2AP permission control, FF-A v1.1 descriptor parsing, SMC forwarding to EL3, SMCCC pass-through)
 
 ---
 

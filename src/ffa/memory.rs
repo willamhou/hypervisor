@@ -23,7 +23,6 @@ impl PageOwnership {
 }
 
 /// Validate that a page can be shared (must be in OWNED state).
-#[allow(dead_code)]
 pub fn validate_page_for_share(sw_bits: u8) -> Result<(), i32> {
     let state = PageOwnership::from_bits(sw_bits);
     match state {

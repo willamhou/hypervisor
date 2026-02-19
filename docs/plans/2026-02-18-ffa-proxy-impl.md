@@ -30,18 +30,6 @@ pub const EC_SMC64: u64 = 0x17;
 After `HCR_API` (line 20), add:
 
 ```rust
-pub const HCR_TSC: u64 = 1 << 14;  // Trap SMC to EL2
-```
-
-Wait — `HCR_TWE` is already `1 << 14`. Check: `HCR_TWE = 1 << 14`, `HCR_TSC = 1 << 8`? No. ARM DDI0487:
-
-- HCR_EL2.TWI = bit 13
-- HCR_EL2.TWE = bit 14
-- HCR_EL2.TSC = bit 19
-
-So:
-
-```rust
 pub const HCR_TSC: u64 = 1 << 19;  // Trap SMC to EL2
 ```
 
@@ -183,7 +171,7 @@ use crate::arch::aarch64::regs::VcpuContext;
 pub fn handle_ffa_call(context: &mut VcpuContext) -> bool {
     // FFA_ERROR with NOT_SUPPORTED
     context.gp_regs.x0 = 0x84000060; // FFA_ERROR
-    context.gp_regs.x2 = 0xFFFF_FFFF_FFFF_FFFF; // NOT_SUPPORTED (-1 as i32 sign-extended)
+    context.gp_regs.x2 = 0xFFFF_FFFF; // NOT_SUPPORTED (-1 as i32, 32-bit, no sign extension)
     true
 }
 ```
@@ -192,6 +180,22 @@ Add to `src/lib.rs`:
 ```rust
 pub mod ffa;
 ```
+
+**Step 6b: Add `current_vm_id()` to `src/global.rs`**
+
+Check if `current_vm_id()` already exists. If not, add:
+
+```rust
+/// Get the current VM ID (0 for single-VM modes).
+pub fn current_vm_id() -> usize {
+    #[cfg(feature = "multi_vm")]
+    { CURRENT_VM_ID.load(core::sync::atomic::Ordering::Relaxed) }
+    #[cfg(not(feature = "multi_vm"))]
+    { 0 }
+}
+```
+
+This is needed by `ffa/proxy.rs` (Task 3) and must exist before that task compiles.
 
 **Step 7: Build and verify**
 
@@ -426,26 +430,16 @@ fn handle_features(context: &mut VcpuContext) -> bool {
 }
 
 /// Set FFA_ERROR return with error code.
+/// FF-A error codes are 32-bit signed values in w2 (not sign-extended to 64-bit x2).
 fn ffa_error(context: &mut VcpuContext, error_code: i32) {
     context.gp_regs.x0 = FFA_ERROR;
-    context.gp_regs.x2 = error_code as u64;
+    context.gp_regs.x2 = (error_code as u32) as u64; // Mask to 32 bits, no sign extension
 }
 ```
 
-**Step 2: Check if `current_vm_id()` exists**
+**Step 2: Verify `current_vm_id()` exists**
 
-`crate::global::current_vm_id()` — need to verify this exists. In multi-VM mode there's `CURRENT_VM_ID`. For single-VM it should return 0. Check `src/global.rs` for the function.
-
-If not present, add to `src/global.rs`:
-```rust
-/// Get the current VM ID (0 for single-VM modes).
-pub fn current_vm_id() -> usize {
-    #[cfg(feature = "multi_vm")]
-    { CURRENT_VM_ID.load(Ordering::Relaxed) }
-    #[cfg(not(feature = "multi_vm"))]
-    { 0 }
-}
-```
+`crate::global::current_vm_id()` was added in Task 1 (Step 6b). Verify it compiles.
 
 **Step 3: Write test**
 
@@ -621,20 +615,28 @@ impl FfaMailbox {
 }
 
 /// Global per-VM mailbox state.
-static mut MAILBOXES: [FfaMailbox; FFA_MAX_VMS] = [
+///
+/// Access is safe: in single-pCPU modes, only one exception handler runs at a time.
+/// In multi-pCPU mode, each pCPU handles its own VM's mailbox (no cross-VM access).
+/// Uses UnsafeCell for interior mutability without runtime cost.
+struct MailboxArray(core::cell::UnsafeCell<[FfaMailbox; FFA_MAX_VMS]>);
+unsafe impl Sync for MailboxArray {}
+
+static MAILBOXES: MailboxArray = MailboxArray(core::cell::UnsafeCell::new([
     FfaMailbox::new(),
     FfaMailbox::new(),
     FfaMailbox::new(),
     FfaMailbox::new(),
-];
+]));
 
 /// Get the mailbox for a VM.
 ///
 /// # Safety
-/// Single-threaded access assumed (called from EL2 exception handler).
+/// Single-pCPU: only one exception handler runs at a time.
+/// Multi-pCPU: each pCPU handles its own VM exclusively.
 pub fn get_mailbox(vm_id: usize) -> &'static mut FfaMailbox {
     assert!(vm_id < FFA_MAX_VMS);
-    unsafe { &mut MAILBOXES[vm_id] }
+    unsafe { &mut (*MAILBOXES.0.get())[vm_id] }
 }
 ```
 
@@ -840,13 +842,20 @@ pub struct MemShareRecord {
 }
 
 /// Fixed-size array of share records (no alloc).
+///
+/// Uses UnsafeCell for interior mutability. Access is safe: in single-pCPU modes,
+/// only one exception handler runs at a time. In multi-pCPU mode, share records
+/// are accessed under the FF-A proxy dispatch (one SMC at a time per VM).
 const MAX_SHARES: usize = 16;
-static mut SHARE_RECORDS: [MemShareRecord; MAX_SHARES] = {
+struct ShareRecordArray(core::cell::UnsafeCell<[MemShareRecord; MAX_SHARES]>);
+unsafe impl Sync for ShareRecordArray {}
+
+static SHARE_RECORDS: ShareRecordArray = ShareRecordArray(core::cell::UnsafeCell::new({
     const EMPTY: MemShareRecord = MemShareRecord {
         handle: 0, sender_id: 0, receiver_id: 0, page_count: 0, active: false,
     };
     [EMPTY; MAX_SHARES]
-};
+}));
 
 /// Allocate a new memory sharing handle.
 pub fn alloc_handle() -> u64 {
@@ -856,14 +865,13 @@ pub fn alloc_handle() -> u64 {
 /// Record a memory share and return the handle.
 pub fn record_share(sender_id: u16, receiver_id: u16, page_count: u32) -> Option<u64> {
     let handle = alloc_handle();
-    unsafe {
-        for record in SHARE_RECORDS.iter_mut() {
-            if !record.active {
-                *record = MemShareRecord {
-                    handle, sender_id, receiver_id, page_count, active: true,
-                };
-                return Some(handle);
-            }
+    let records = unsafe { &mut *SHARE_RECORDS.0.get() };
+    for record in records.iter_mut() {
+        if !record.active {
+            *record = MemShareRecord {
+                handle, sender_id, receiver_id, page_count, active: true,
+            };
+            return Some(handle);
         }
     }
     None // No free slots
@@ -871,12 +879,11 @@ pub fn record_share(sender_id: u16, receiver_id: u16, page_count: u32) -> Option
 
 /// Reclaim a memory share by handle. Returns true if found and removed.
 pub fn reclaim_share(handle: u64) -> bool {
-    unsafe {
-        for record in SHARE_RECORDS.iter_mut() {
-            if record.active && record.handle == handle {
-                record.active = false;
-                return true;
-            }
+    let records = unsafe { &mut *SHARE_RECORDS.0.get() };
+    for record in records.iter_mut() {
+        if record.active && record.handle == handle {
+            record.active = false;
+            return true;
         }
     }
     false
@@ -930,8 +937,10 @@ fn handle_partition_info_get(context: &mut VcpuContext) -> bool {
     let rx_ptr = mbox.rx_ipa as *mut u8;
     let count = stub_spmc::partition_count();
 
-    // FF-A v1.1 partition info descriptor: 8 bytes each
-    // [0:1] = partition ID, [2:3] = exec context count, [4:7] = properties
+    // FF-A v1.1 partition info descriptor: 24 bytes each (DEN0077A Table 5.37)
+    // We use a minimal 8-byte subset for the stub (ID + ctx count + properties).
+    // A full v1.1 descriptor includes UUID (16 bytes) at offset 8.
+    // TODO: Expand to full 24-byte descriptor when integrating real SPMC.
     for (i, sp) in stub_spmc::STUB_PARTITIONS.iter().enumerate() {
         let offset = i * 8;
         unsafe {
@@ -1318,6 +1327,8 @@ git commit -m "feat: add Stage-2 PTE SW bits for page ownership tracking"
 ### Task 7: FF-A Memory Sharing (MEM_SHARE, MEM_LEND, MEM_RECLAIM)
 
 Implement memory sharing with page ownership validation. Uses simplified inline descriptors (page IPA in registers, no RXTX descriptor parsing) for initial implementation.
+
+**NOTE**: Real FF-A v1.1 MEM_SHARE uses composite memory region descriptors in the TX buffer (DEN0077A §5.12). This stub uses x3=IPA, x4=page_count, x5=receiver for testability. Replace with TX buffer descriptor parsing when integrating real SPMC.
 
 **Files:**
 - Modify: `src/ffa/memory.rs`

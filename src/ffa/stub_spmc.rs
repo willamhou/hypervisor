@@ -32,15 +32,21 @@ pub static STUB_PARTITIONS: [StubPartition; 2] = [
 /// Handle count for memory sharing.
 static NEXT_HANDLE: AtomicU64 = AtomicU64::new(1);
 
+/// Maximum address ranges per share record.
+pub const MAX_SHARE_RANGES: usize = 4;
+
 /// Memory share record.
 pub struct MemShareRecord {
     pub handle: u64,
     pub sender_id: u16,
-    #[allow(dead_code)]
     pub receiver_id: u16,
-    #[allow(dead_code)]
-    pub page_count: u32,
+    /// Address ranges: (base_ipa, page_count) per range.
+    pub ranges: [(u64, u32); MAX_SHARE_RANGES],
+    pub range_count: usize,
+    pub total_page_count: u32,
     pub active: bool,
+    /// True for MEM_LEND (S2AP=NONE), false for MEM_SHARE (S2AP=RO).
+    pub is_lend: bool,
 }
 
 /// Fixed-size array of share records (no alloc).
@@ -54,10 +60,15 @@ unsafe impl Sync for ShareRecordArray {}
 
 static SHARE_RECORDS: ShareRecordArray = ShareRecordArray(UnsafeCell::new({
     const EMPTY: MemShareRecord = MemShareRecord {
-        handle: 0, sender_id: 0, receiver_id: 0, page_count: 0, active: false,
+        handle: 0,
+        sender_id: 0,
+        receiver_id: 0,
+        ranges: [(0, 0); MAX_SHARE_RANGES],
+        range_count: 0,
+        total_page_count: 0,
+        active: false,
+        is_lend: false,
     };
-    // Can't use [EMPTY; MAX_SHARES] because MemShareRecord doesn't impl Copy
-    // but we can use const array init
     [EMPTY, EMPTY, EMPTY, EMPTY, EMPTY, EMPTY, EMPTY, EMPTY,
      EMPTY, EMPTY, EMPTY, EMPTY, EMPTY, EMPTY, EMPTY, EMPTY]
 }));
@@ -68,18 +79,60 @@ pub fn alloc_handle() -> u64 {
 }
 
 /// Record a memory share and return the handle.
-pub fn record_share(sender_id: u16, receiver_id: u16, page_count: u32) -> Option<u64> {
+pub fn record_share(
+    sender_id: u16,
+    receiver_id: u16,
+    ranges: &[(u64, u32)],
+    total_page_count: u32,
+    is_lend: bool,
+) -> Option<u64> {
     let handle = alloc_handle();
     let records = unsafe { &mut *SHARE_RECORDS.0.get() };
     for record in records.iter_mut() {
         if !record.active {
+            let mut stored_ranges = [(0u64, 0u32); MAX_SHARE_RANGES];
+            let count = ranges.len().min(MAX_SHARE_RANGES);
+            for (i, &r) in ranges.iter().take(count).enumerate() {
+                stored_ranges[i] = r;
+            }
             *record = MemShareRecord {
-                handle, sender_id, receiver_id, page_count, active: true,
+                handle,
+                sender_id,
+                receiver_id,
+                ranges: stored_ranges,
+                range_count: count,
+                total_page_count,
+                active: true,
+                is_lend,
             };
             return Some(handle);
         }
     }
     None // No free slots
+}
+
+/// Share record info returned by lookup.
+pub struct ShareInfo {
+    pub ranges: [(u64, u32); MAX_SHARE_RANGES],
+    pub range_count: usize,
+    pub total_page_count: u32,
+    pub is_lend: bool,
+}
+
+/// Look up a share record by handle. Returns range info for reclaim.
+pub fn lookup_share(handle: u64) -> Option<ShareInfo> {
+    let records = unsafe { &*SHARE_RECORDS.0.get() };
+    for record in records.iter() {
+        if record.active && record.handle == handle {
+            return Some(ShareInfo {
+                ranges: record.ranges,
+                range_count: record.range_count,
+                total_page_count: record.total_page_count,
+                is_lend: record.is_lend,
+            });
+        }
+    }
+    None
 }
 
 /// Reclaim a memory share by handle. Returns true if found and removed.

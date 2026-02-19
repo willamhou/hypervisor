@@ -8,6 +8,9 @@ pub mod proxy;
 pub mod memory;
 pub mod mailbox;
 pub mod stub_spmc;
+pub mod stage2_walker;
+pub mod descriptors;
+pub mod smc_forward;
 
 // ── FF-A Function IDs (SMC32) ─────────────────────────────────────
 pub const FFA_ERROR: u64          = 0x84000060;

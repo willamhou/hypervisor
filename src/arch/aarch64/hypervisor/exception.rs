@@ -999,8 +999,21 @@ fn handle_smc(context: &mut VcpuContext) -> bool {
         return crate::ffa::proxy::handle_ffa_call(context);
     }
 
-    // Unknown SMC
-    context.gp_regs.x0 = 0xFFFF_FFFF_FFFF_FFFF; // SMC_UNKNOWN = -1
+    // Unknown SMC: forward to EL3 for SMCCC pass-through
+    let result = crate::ffa::smc_forward::forward_smc(
+        context.gp_regs.x0,
+        context.gp_regs.x1,
+        context.gp_regs.x2,
+        context.gp_regs.x3,
+        context.gp_regs.x4,
+        context.gp_regs.x5,
+        context.gp_regs.x6,
+        context.gp_regs.x7,
+    );
+    context.gp_regs.x0 = result.x0;
+    context.gp_regs.x1 = result.x1;
+    context.gp_regs.x2 = result.x2;
+    context.gp_regs.x3 = result.x3;
     true
 }
 

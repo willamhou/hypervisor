@@ -59,7 +59,11 @@ pub extern "C" fn rust_main(dtb_addr: usize) -> ! {
     
     // Initialize GIC - try GICv3 first, fall back to GICv2
     hypervisor::arch::aarch64::peripherals::gicv3::init();
-    
+
+    // Initialize FF-A proxy (probe for real SPMC at EL3)
+    #[cfg(feature = "linux_guest")]
+    hypervisor::ffa::proxy::init();
+
     // Initialize timer
     uart_puts_local(b"[INIT] Configuring timer...\n");
     hypervisor::arch::aarch64::peripherals::timer::init_hypervisor_timer();

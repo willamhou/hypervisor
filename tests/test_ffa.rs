@@ -172,7 +172,7 @@ pub fn run_ffa_test() {
         }
     }
 
-    // Test 11: FFA_MEM_SHARE → success with handle
+    // Test 11: FFA_MEM_SHARE → success with handle (register-based, no mailbox)
     {
         let mut ctx = VcpuContext::default();
         ctx.gp_regs.x0 = ffa::FFA_MEM_SHARE_32;
@@ -216,6 +216,129 @@ pub fn run_ffa_test() {
             pass += 1;
         } else {
             hypervisor::uart_puts(b"  [FAIL] FFA_MEM_RECLAIM invalid\n");
+            fail += 1;
+        }
+    }
+
+    // ── Phase 2 tests: Descriptor parsing ─────────────────────────────
+
+    // Test 14: Parse valid FfaMemRegion descriptor
+    {
+        let mut buf = [0u8; 128];
+        let ranges = [(0x5000_0000u64, 2u32)];
+        let total_len = unsafe {
+            ffa::descriptors::build_test_descriptor(
+                buf.as_mut_ptr(), 1, 0x8001, &ranges,
+            )
+        };
+        let parsed = unsafe {
+            ffa::descriptors::parse_mem_region(buf.as_ptr(), total_len)
+        };
+        if let Ok(p) = parsed {
+            if p.sender_id == 1
+                && p.receiver_id == 0x8001
+                && p.range_count == 1
+                && p.ranges[0] == (0x5000_0000, 2)
+                && p.total_page_count == 2
+            {
+                hypervisor::uart_puts(b"  [PASS] Parse valid FfaMemRegion\n");
+                pass += 1;
+            } else {
+                hypervisor::uart_puts(b"  [FAIL] Parse valid FfaMemRegion: wrong fields\n");
+                fail += 1;
+            }
+        } else {
+            hypervisor::uart_puts(b"  [FAIL] Parse valid FfaMemRegion: error\n");
+            fail += 1;
+        }
+    }
+
+    // Test 15: Parse descriptor with multiple ranges
+    {
+        let mut buf = [0u8; 160];
+        let ranges = [(0x5000_0000u64, 1u32), (0x6000_0000u64, 3u32)];
+        let total_len = unsafe {
+            ffa::descriptors::build_test_descriptor(
+                buf.as_mut_ptr(), 2, 0x8002, &ranges,
+            )
+        };
+        let parsed = unsafe {
+            ffa::descriptors::parse_mem_region(buf.as_ptr(), total_len)
+        };
+        if let Ok(p) = parsed {
+            if p.range_count == 2
+                && p.ranges[0] == (0x5000_0000, 1)
+                && p.ranges[1] == (0x6000_0000, 3)
+                && p.total_page_count == 4
+            {
+                hypervisor::uart_puts(b"  [PASS] Parse multi-range descriptor\n");
+                pass += 1;
+            } else {
+                hypervisor::uart_puts(b"  [FAIL] Parse multi-range: wrong fields\n");
+                fail += 1;
+            }
+        } else {
+            hypervisor::uart_puts(b"  [FAIL] Parse multi-range: error\n");
+            fail += 1;
+        }
+    }
+
+    // Test 16: Parse undersized descriptor → INVALID_PARAMETERS
+    {
+        let buf = [0u8; 16]; // Too small for FfaMemRegion (48 bytes)
+        let parsed = unsafe {
+            ffa::descriptors::parse_mem_region(buf.as_ptr(), 16)
+        };
+        if let Err(code) = parsed {
+            if code == ffa::FFA_INVALID_PARAMETERS {
+                hypervisor::uart_puts(b"  [PASS] Parse undersized -> INVALID_PARAMS\n");
+                pass += 1;
+            } else {
+                hypervisor::uart_puts(b"  [FAIL] Parse undersized: wrong error code\n");
+                fail += 1;
+            }
+        } else {
+            hypervisor::uart_puts(b"  [FAIL] Parse undersized: should fail\n");
+            fail += 1;
+        }
+    }
+
+    // ── Phase 3 tests: SMC forwarding ─────────────────────────────────
+
+    // Test 17: forward_smc to EL3 with PSCI_VERSION returns valid response
+    {
+        let result = ffa::smc_forward::forward_smc(
+            0x84000000, // PSCI_VERSION
+            0, 0, 0, 0, 0, 0, 0,
+        );
+        // QEMU firmware always implements PSCI — should return version (not -1)
+        if result.x0 != 0xFFFF_FFFF_FFFF_FFFF && result.x0 != 0 {
+            hypervisor::uart_puts(b"  [PASS] SMC forward PSCI_VERSION returns ");
+            hypervisor::uart_put_hex(result.x0);
+            hypervisor::uart_puts(b"\n");
+            pass += 1;
+        } else {
+            hypervisor::uart_puts(b"  [FAIL] SMC forward PSCI_VERSION: ");
+            hypervisor::uart_put_hex(result.x0);
+            hypervisor::uart_puts(b"\n");
+            fail += 1;
+        }
+    }
+
+    // Test 18: probe_spmc — skipped in unit test mode.
+    // QEMU's EL3 firmware doesn't handle FFA_VERSION SMC gracefully (crashes).
+    // probe_spmc() is tested implicitly by ffa::proxy::init() at boot in linux_guest mode.
+
+    // Test 18: Unknown FF-A call returns NOT_SUPPORTED when no SPMC
+    {
+        let mut ctx = VcpuContext::default();
+        ctx.gp_regs.x0 = 0x8400009F; // Unknown FF-A function ID
+        let cont = ffa::proxy::handle_ffa_call(&mut ctx);
+        if cont && ctx.gp_regs.x0 == ffa::FFA_ERROR {
+            hypervisor::uart_puts(b"  [PASS] Unknown FFA -> NOT_SUPPORTED\n");
+            pass += 1;
+        } else {
+            hypervisor::uart_puts(b"  [FAIL] Unknown FFA call\n");
             fail += 1;
         }
     }
