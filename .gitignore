@@ -24,3 +24,13 @@ guest/android/Image
 
 # Worktrees
 .worktrees/
+
+# Local QEMU build
+tools/
+
+# TF-A build artifacts (source + intermediates)
+tfa/tfa-src/
+tfa/flash.bin
+tfa/bl32.bin
+tfa/bl33.bin
+tfa/qemu_fw.bios

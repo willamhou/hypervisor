@@ -1,4 +1,4 @@
-.PHONY: all build run debug clean
+.PHONY: all build run debug clean build-qemu build-bl32-bl33 build-tfa run-sel2
 
 # Auto-load Cargo environment
 SHELL := /bin/bash
@@ -12,7 +12,10 @@ BINARY := $(BUILD_DIR)/$(TARGET)
 BINARY_BIN := $(BUILD_DIR)/$(TARGET).bin
 
 # QEMU configuration
+# System QEMU for normal targets (has ROM files for default NIC)
 QEMU := qemu-system-aarch64
+# Local QEMU 9.2+ for S-EL2 targets (secure=on requires newer QEMU)
+QEMU_SEL2 := $(shell test -x tools/qemu-system-aarch64 && echo tools/qemu-system-aarch64 || echo qemu-system-aarch64)
 QEMU_FLAGS := -machine virt,virtualization=on,gic-version=3 \
               -cpu max \
               -smp 4 \
@@ -166,6 +169,48 @@ clippy:
 fmt:
 	cargo fmt
 
+# === S-EL2 / TF-A targets (Phase 4) ===
+
+# TF-A paths
+TFA_DIR := tfa
+TFA_FLASH := $(TFA_DIR)/flash.bin
+
+# Build QEMU 9.2.3 from source (one-time, ~5-10 min)
+build-qemu:
+	@echo "Building QEMU 9.2.3 from source (Docker)..."
+	mkdir -p tools
+	docker run --rm \
+	    -v $(PWD)/tools:/output \
+	    -v $(PWD)/scripts:/scripts \
+	    -v qemu-build-cache:/build \
+	    debian:bookworm-slim bash /scripts/build-qemu.sh
+
+# Build trivial BL32 (S-EL2) and BL33 (NS-EL2) hello binaries
+build-bl32-bl33:
+	@echo "Building trivial BL32/BL33..."
+	docker run --rm \
+	    -v $(PWD)/tfa:/output \
+	    -v $(PWD):/src \
+	    debian:bookworm-slim bash /src/scripts/build-bl32-bl33.sh
+
+# Build TF-A + flash.bin (requires bl32.bin + bl33.bin)
+build-tfa: build-bl32-bl33
+	@echo "Building TF-A with SPD=spmd (Docker)..."
+	docker run --rm \
+	    -v $(PWD)/tfa:/output \
+	    -v $(PWD):/src \
+	    -v tfa-build-cache:/output/tfa-src \
+	    debian:bookworm-slim bash /src/scripts/build-tfa.sh
+
+# Boot TF-A with trivial BL32 at S-EL2 (requires QEMU 9.2+ and flash.bin)
+run-sel2:
+	@test -f $(TFA_FLASH) || (echo "ERROR: $(TFA_FLASH) not found. Run 'make build-tfa' first." && exit 1)
+	@echo "Starting QEMU with TF-A boot chain (S-EL2)..."
+	@echo "Press Ctrl+A then X to exit QEMU"
+	$(QEMU_SEL2) -machine virt,secure=on,virtualization=on,gic-version=3 \
+	    -cpu max -smp 4 -m 2G -nographic \
+	    -bios $(TFA_FLASH) -nic none
+
 # Help
 help:
 	@echo "Available targets:"
@@ -176,7 +221,11 @@ help:
 	@echo "  run-linux - Build and run with Linux kernel guest (single pCPU)"
 	@echo "  run-linux-smp - Build and run with Linux kernel (multi-pCPU)"
 	@echo "  run-multi-vm  - Build and run with 2 Linux VMs (time-sliced)"
-	@echo "  run-android   - Build and run with Android-configured kernel (Phase 1)"
+	@echo "  run-android   - Build and run with Android-configured kernel"
+	@echo "  run-sel2      - Boot TF-A with BL32 at S-EL2 (Phase 4)"
+	@echo "  build-qemu    - Build QEMU 9.2.3 from source (one-time)"
+	@echo "  build-tfa     - Build TF-A + flash.bin with SPD=spmd"
+	@echo "  build-bl32-bl33 - Build trivial BL32/BL33 hello binaries"
 	@echo "  debug     - Build and run in QEMU with GDB server"
 	@echo "  clean     - Clean build artifacts"
 	@echo "  check     - Check code without building"

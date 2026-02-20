@@ -1,0 +1,6 @@
+/dts-v1/;
+/ {
+	secure-partitions {
+		compatible = "arm,sp";
+	};
+};
