@@ -15,6 +15,10 @@ pub struct FfaMailbox {
     pub mapped: bool,
     /// RX buffer ownership: true = proxy owns (can write), false = VM owns
     pub rx_held_by_proxy: bool,
+    /// Whether an indirect message is pending in the RX buffer
+    pub msg_pending: bool,
+    /// Sender ID of the pending indirect message
+    pub msg_sender_id: u16,
 }
 
 impl FfaMailbox {
@@ -25,6 +29,8 @@ impl FfaMailbox {
             page_count: 0,
             mapped: false,
             rx_held_by_proxy: true,
+            msg_pending: false,
+            msg_sender_id: 0,
         }
     }
 }

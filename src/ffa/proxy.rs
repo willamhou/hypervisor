@@ -59,6 +59,25 @@ pub fn handle_ffa_call(context: &mut VcpuContext) -> bool {
             true
         }
 
+        // Supplemental calls
+        FFA_SPM_ID_GET => handle_spm_id_get(context),
+        FFA_RUN => handle_run(context),
+
+        // Notifications
+        FFA_NOTIFICATION_BITMAP_CREATE => handle_notification_bitmap_create(context),
+        FFA_NOTIFICATION_BITMAP_DESTROY => handle_notification_bitmap_destroy(context),
+        FFA_NOTIFICATION_BIND => handle_notification_bind(context),
+        FFA_NOTIFICATION_UNBIND => handle_notification_unbind(context),
+        FFA_NOTIFICATION_SET => handle_notification_set(context),
+        FFA_NOTIFICATION_GET => handle_notification_get(context),
+        FFA_NOTIFICATION_INFO_GET_32 | FFA_NOTIFICATION_INFO_GET_64 => {
+            handle_notification_info_get(context)
+        }
+
+        // Indirect messaging
+        FFA_MSG_SEND2 => handle_msg_send2(context),
+        FFA_MSG_WAIT => handle_msg_wait(context),
+
         // Unknown FF-A: forward to SPMC if present, else NOT_SUPPORTED
         _ => {
             if SPMC_PRESENT.load(Ordering::Relaxed) {
@@ -137,6 +156,18 @@ fn handle_features(context: &mut VcpuContext) -> bool {
             | FFA_MEM_RETRIEVE_REQ_32
             | FFA_MEM_RETRIEVE_REQ_64
             | FFA_MEM_RELINQUISH
+            | FFA_SPM_ID_GET
+            | FFA_RUN
+            | FFA_NOTIFICATION_BITMAP_CREATE
+            | FFA_NOTIFICATION_BITMAP_DESTROY
+            | FFA_NOTIFICATION_BIND
+            | FFA_NOTIFICATION_UNBIND
+            | FFA_NOTIFICATION_SET
+            | FFA_NOTIFICATION_GET
+            | FFA_NOTIFICATION_INFO_GET_32
+            | FFA_NOTIFICATION_INFO_GET_64
+            | FFA_MSG_SEND2
+            | FFA_MSG_WAIT
     );
 
     if supported {
@@ -214,6 +245,7 @@ fn handle_rx_release(context: &mut VcpuContext) -> bool {
     }
 
     mbox.rx_held_by_proxy = true;
+    mbox.msg_pending = false;
     context.gp_regs.x0 = FFA_SUCCESS_32;
     true
 }
@@ -677,6 +709,240 @@ fn handle_mem_relinquish(context: &mut VcpuContext) -> bool {
     stub_spmc::mark_relinquished(handle);
 
     context.gp_regs.x0 = FFA_SUCCESS_32;
+    true
+}
+
+// ── Supplemental Calls ──────────────────────────────────────────────
+
+/// FFA_SPM_ID_GET: Return the SPMC partition ID.
+///
+/// Output: x0 = FFA_SUCCESS_32, x2 = 0x8000 (SPMC ID)
+fn handle_spm_id_get(context: &mut VcpuContext) -> bool {
+    context.gp_regs.x0 = FFA_SUCCESS_32;
+    context.gp_regs.x2 = FFA_SPMC_ID as u64;
+    true
+}
+
+/// FFA_RUN: Resume execution of a Secure Partition.
+///
+/// Input: x1[31:16] = target SP ID, x1[15:0] = vCPU ID
+/// In NS-EL2 stub mode: forward to SPMC if present, else NOT_SUPPORTED.
+fn handle_run(context: &mut VcpuContext) -> bool {
+    if SPMC_PRESENT.load(Ordering::Relaxed) {
+        forward_ffa_to_spmc(context)
+    } else {
+        ffa_error(context, FFA_NOT_SUPPORTED);
+        true
+    }
+}
+
+// ── Notifications ───────────────────────────────────────────────────
+
+/// FFA_NOTIFICATION_BITMAP_CREATE: Create notification bitmap for a partition.
+///
+/// Input: x1 = partition ID, x2 = vCPU count
+fn handle_notification_bitmap_create(context: &mut VcpuContext) -> bool {
+    let part_id = context.gp_regs.x1 as u16;
+    match notifications::bitmap_create(part_id) {
+        Ok(()) => context.gp_regs.x0 = FFA_SUCCESS_32,
+        Err(code) => ffa_error(context, code),
+    }
+    true
+}
+
+/// FFA_NOTIFICATION_BITMAP_DESTROY: Destroy notification bitmap for a partition.
+///
+/// Input: x1 = partition ID
+fn handle_notification_bitmap_destroy(context: &mut VcpuContext) -> bool {
+    let part_id = context.gp_regs.x1 as u16;
+    match notifications::bitmap_destroy(part_id) {
+        Ok(()) => context.gp_regs.x0 = FFA_SUCCESS_32,
+        Err(code) => ffa_error(context, code),
+    }
+    true
+}
+
+/// FFA_NOTIFICATION_BIND: Bind sender to notification IDs on receiver.
+///
+/// Input: x1[31:16] = sender, x1[15:0] = receiver, x2 = flags, x3/x4 = bitmap
+fn handle_notification_bind(context: &mut VcpuContext) -> bool {
+    let sender = ((context.gp_regs.x1 >> 16) & 0xFFFF) as u16;
+    let receiver = (context.gp_regs.x1 & 0xFFFF) as u16;
+    let flags = context.gp_regs.x2 as u32;
+    let bitmap = (context.gp_regs.x3 as u64) | ((context.gp_regs.x4 as u64) << 32);
+    match notifications::bind(sender, receiver, flags, bitmap) {
+        Ok(()) => context.gp_regs.x0 = FFA_SUCCESS_32,
+        Err(code) => ffa_error(context, code),
+    }
+    true
+}
+
+/// FFA_NOTIFICATION_UNBIND: Unbind sender from notification IDs on receiver.
+///
+/// Input: x1[31:16] = sender, x1[15:0] = receiver, x3/x4 = bitmap
+fn handle_notification_unbind(context: &mut VcpuContext) -> bool {
+    let sender = ((context.gp_regs.x1 >> 16) & 0xFFFF) as u16;
+    let receiver = (context.gp_regs.x1 & 0xFFFF) as u16;
+    let bitmap = (context.gp_regs.x3 as u64) | ((context.gp_regs.x4 as u64) << 32);
+    match notifications::unbind(sender, receiver, bitmap) {
+        Ok(()) => context.gp_regs.x0 = FFA_SUCCESS_32,
+        Err(code) => ffa_error(context, code),
+    }
+    true
+}
+
+/// FFA_NOTIFICATION_SET: Set pending notification bits on receiver.
+///
+/// Input: x1[31:16] = sender, x1[15:0] = receiver, x2 = flags, x3/x4 = bitmap
+fn handle_notification_set(context: &mut VcpuContext) -> bool {
+    let sender = ((context.gp_regs.x1 >> 16) & 0xFFFF) as u16;
+    let receiver = (context.gp_regs.x1 & 0xFFFF) as u16;
+    let _flags = context.gp_regs.x2 as u32;
+    let bitmap = (context.gp_regs.x3 as u64) | ((context.gp_regs.x4 as u64) << 32);
+    match notifications::set(sender, receiver, bitmap) {
+        Ok(()) => context.gp_regs.x0 = FFA_SUCCESS_32,
+        Err(code) => ffa_error(context, code),
+    }
+    true
+}
+
+/// FFA_NOTIFICATION_GET: Get and clear pending notification bits.
+///
+/// Input: x1 = receiver partition ID, x2 = flags (bit0=SP, bit1=VM)
+/// Output: x2/x3 = SP notification bitmap, x4/x5 = VM notification bitmap
+fn handle_notification_get(context: &mut VcpuContext) -> bool {
+    let receiver = context.gp_regs.x1 as u16;
+    match notifications::get(receiver) {
+        Ok(pending) => {
+            context.gp_regs.x0 = FFA_SUCCESS_32;
+            // SP pending in x2/x3, VM pending in x4/x5
+            // For simplicity, return all pending in x2/x3 (SP position)
+            context.gp_regs.x2 = pending as u64;
+            context.gp_regs.x3 = 0;
+            context.gp_regs.x4 = 0;
+            context.gp_regs.x5 = 0;
+        }
+        Err(code) => ffa_error(context, code),
+    }
+    true
+}
+
+/// FFA_NOTIFICATION_INFO_GET: Get list of partitions with pending notifications.
+///
+/// Output: x2 = flags (count in bits [6:0]), x3-x7 = partition IDs (16-bit packed)
+fn handle_notification_info_get(context: &mut VcpuContext) -> bool {
+    let (count, ids) = notifications::info_get();
+    if count == 0 {
+        ffa_error(context, FFA_NO_DATA);
+    } else {
+        context.gp_regs.x0 = FFA_SUCCESS_32;
+        // Pack: count in x2[6:0], partition IDs in x3 (16-bit each, up to 4)
+        context.gp_regs.x2 = count as u64;
+        let mut packed: u64 = 0;
+        for i in 0..core::cmp::min(count, 4) {
+            packed |= (ids[i] as u64) << (i * 16);
+        }
+        context.gp_regs.x3 = packed;
+    }
+    true
+}
+
+// ── Indirect Messaging ──────────────────────────────────────────────
+
+/// FFA_MSG_SEND2: Send indirect message via TX/RX buffers.
+///
+/// Input: x1 = flags
+/// TX buffer contains: sender_id(u16) + receiver_id(u16) + size(u32) + payload
+fn handle_msg_send2(context: &mut VcpuContext) -> bool {
+    let vm_id = crate::global::current_vm_id();
+    let sender_mbox = mailbox::get_mailbox(vm_id);
+
+    if !sender_mbox.mapped {
+        ffa_error(context, FFA_DENIED);
+        return true;
+    }
+
+    // Read message header from TX buffer (identity-mapped IPA)
+    let tx_ipa = sender_mbox.tx_ipa;
+    let (msg_sender_id, msg_receiver_id, msg_size) = unsafe {
+        let tx_ptr = tx_ipa as *const u8;
+        let s = core::ptr::read_unaligned(tx_ptr as *const u16);
+        let r = core::ptr::read_unaligned(tx_ptr.add(2) as *const u16);
+        let sz = core::ptr::read_unaligned(tx_ptr.add(4) as *const u32);
+        (s, r, sz)
+    };
+
+    // Validate sender matches caller
+    let expected_sender = vm_id_to_partition_id(vm_id);
+    if msg_sender_id != expected_sender {
+        ffa_error(context, FFA_INVALID_PARAMETERS);
+        return true;
+    }
+
+    // Validate receiver is a valid VM
+    let recv_vm_id = match partition_id_to_vm_id(msg_receiver_id) {
+        Some(id) => id,
+        None => {
+            ffa_error(context, FFA_INVALID_PARAMETERS);
+            return true;
+        }
+    };
+
+    // Copy message to receiver's RX buffer
+    // Need to drop sender_mbox reference before getting recv_mbox
+    let tx_ipa_copy = tx_ipa;
+
+    let recv_mbox = mailbox::get_mailbox(recv_vm_id);
+    if !recv_mbox.mapped {
+        ffa_error(context, FFA_DENIED);
+        return true;
+    }
+    if !recv_mbox.rx_held_by_proxy {
+        ffa_error(context, FFA_BUSY);
+        return true;
+    }
+    if recv_mbox.msg_pending {
+        ffa_error(context, FFA_BUSY);
+        return true;
+    }
+
+    // Copy header + payload from sender TX to receiver RX
+    let copy_len = core::cmp::min((8 + msg_size) as usize, 4096);
+    unsafe {
+        core::ptr::copy_nonoverlapping(
+            tx_ipa_copy as *const u8,
+            recv_mbox.rx_ipa as *mut u8,
+            copy_len,
+        );
+    }
+
+    recv_mbox.msg_pending = true;
+    recv_mbox.msg_sender_id = msg_sender_id;
+    recv_mbox.rx_held_by_proxy = false;
+
+    context.gp_regs.x0 = FFA_SUCCESS_32;
+    true
+}
+
+/// FFA_MSG_WAIT: Wait for an indirect message.
+///
+/// Non-blocking stub: returns pending message or NO_DATA.
+/// Output: x0 = FFA_SUCCESS_32 + x1 = sender_id, or FFA_ERROR + NO_DATA
+fn handle_msg_wait(context: &mut VcpuContext) -> bool {
+    let vm_id = crate::global::current_vm_id();
+    let mbox = mailbox::get_mailbox(vm_id);
+
+    if !mbox.mapped {
+        ffa_error(context, FFA_DENIED);
+        return true;
+    }
+
+    if mbox.msg_pending {
+        context.gp_regs.x0 = FFA_SUCCESS_32;
+        context.gp_regs.x1 = mbox.msg_sender_id as u64;
+    } else {
+        ffa_error(context, FFA_NO_DATA);
+    }
     true
 }
 

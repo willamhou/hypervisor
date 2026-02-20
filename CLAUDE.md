@@ -174,7 +174,7 @@ VirtioMmioTransport<VirtioNet>  @ 0x0a000200 (SPI 17 = INTID 49)
 
 Implements the FF-A (Firmware Framework for Arm) v1.1 hypervisor proxy role (pKVM-compatible). Guest SMC calls trapped via `HCR_EL2.TSC=1` (bit 19) are routed through `handle_smc()` → `ffa::proxy::handle_ffa_call()`.
 
-**Supported calls**: FFA_VERSION, FFA_ID_GET, FFA_FEATURES, FFA_RXTX_MAP/UNMAP, FFA_RX_RELEASE, FFA_PARTITION_INFO_GET, FFA_MSG_SEND_DIRECT_REQ, FFA_MEM_SHARE/LEND/RETRIEVE_REQ/RELINQUISH/RECLAIM. FFA_MEM_DONATE is blocked (returns NOT_SUPPORTED). VM-to-VM memory sharing: sender shares pages via MEM_SHARE, receiver maps them via MEM_RETRIEVE_REQ (dynamic Stage-2 page mapping), receiver unmaps via MEM_RELINQUISH, sender reclaims via MEM_RECLAIM.
+**Supported calls**: FFA_VERSION, FFA_ID_GET, FFA_SPM_ID_GET, FFA_FEATURES, FFA_RXTX_MAP/UNMAP, FFA_RX_RELEASE, FFA_PARTITION_INFO_GET, FFA_MSG_SEND_DIRECT_REQ, FFA_MSG_SEND2, FFA_MSG_WAIT, FFA_RUN, FFA_MEM_SHARE/LEND/RETRIEVE_REQ/RELINQUISH/RECLAIM, FFA_NOTIFICATION_BITMAP_CREATE/DESTROY/BIND/UNBIND/SET/GET/INFO_GET. FFA_MEM_DONATE is blocked (returns NOT_SUPPORTED). VM-to-VM memory sharing: sender shares pages via MEM_SHARE, receiver maps them via MEM_RETRIEVE_REQ (dynamic Stage-2 page mapping), receiver unmaps via MEM_RELINQUISH, sender reclaims via MEM_RECLAIM.
 
 **Stub SPMC** (`src/ffa/stub_spmc.rs`): Simulates 2 Secure Partitions (SP1=0x8001, SP2=0x8002) for testing without a real Secure World. Direct messaging echoes x4-x7 back. Memory sharing tracks multi-range records with `MemShareRecord` (up to 4 ranges per share, `ShareInfo`/`ShareInfoFull` for reclaim/retrieve). `mark_retrieved()`/`mark_relinquished()` track retrieve state; `MEM_RECLAIM` blocked while retrieved.
 
@@ -274,7 +274,7 @@ Array-based routing: `devices: [Option<Device>; 8]`, scan for `dev.contains(addr
 
 ## Tests
 
-~176 assertions across 30 test suites run automatically on `make run` (no feature flags). Orchestrated sequentially in `src/main.rs`. Located in `tests/`:
+~193 assertions across 30 test suites run automatically on `make run` (no feature flags). Orchestrated sequentially in `src/main.rs`. Located in `tests/`:
 
 | Test | Coverage | Assertions |
 |------|----------|------------|
@@ -306,7 +306,7 @@ Array-based routing: `devices: [Option<Device>; 8]`, scan for `dev.contains(addr
 | `test_virtio_net` | VirtioNet: device_id/features/queues/config/mac_for_vm | 8 |
 | `test_page_ownership` | Stage-2 PTE SW bits: read/write OWNED/SHARED_OWNED, unmapped IPA, 2MB block→4KB split | 9 |
 | `test_pl031` | PL031 RTC: RTCDR readable, RTCLR write+readback, PeriphID/PrimeCellID, unknown offset | 4 |
-| `test_ffa` | FF-A proxy: VERSION/ID_GET/FEATURES/RXTX/messaging/MEM_SHARE/RECLAIM/descriptors/SMC forward/VM-to-VM RETRIEVE/RELINQUISH | 27 |
+| `test_ffa` | FF-A proxy: VERSION/ID_GET/FEATURES/RXTX/messaging/MEM_SHARE/RECLAIM/descriptors/SMC forward/VM-to-VM RETRIEVE/RELINQUISH/SPM_ID_GET/RUN/notifications/MSG_SEND2/MSG_WAIT | 44 |
 | `test_guest_interrupt` | Guest interrupt injection + exception vector (blocks) | 1 |
 
 Not wired into `main.rs` (exported but not called):

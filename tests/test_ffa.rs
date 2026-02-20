@@ -615,6 +615,355 @@ pub fn run_ffa_test() {
         }
     }
 
+    // ── Phase 5 tests: Supplemental calls ──────────────────────────
+
+    // Test 28: FFA_SPM_ID_GET returns 0x8000
+    {
+        let mut ctx = VcpuContext::default();
+        ctx.gp_regs.x0 = ffa::FFA_SPM_ID_GET;
+        let cont = ffa::proxy::handle_ffa_call(&mut ctx);
+        if cont && ctx.gp_regs.x0 == ffa::FFA_SUCCESS_32 && ctx.gp_regs.x2 == 0x8000 {
+            hypervisor::uart_puts(b"  [PASS] FFA_SPM_ID_GET returns 0x8000\n");
+            pass += 1;
+        } else {
+            hypervisor::uart_puts(b"  [FAIL] FFA_SPM_ID_GET\n");
+            fail += 1;
+        }
+    }
+
+    // Test 29: FFA_RUN returns NOT_SUPPORTED (no real SPMC)
+    {
+        let mut ctx = VcpuContext::default();
+        ctx.gp_regs.x0 = ffa::FFA_RUN;
+        ctx.gp_regs.x1 = (0x8001u64 << 16) | 0; // SP1, vCPU 0
+        let cont = ffa::proxy::handle_ffa_call(&mut ctx);
+        if cont && ctx.gp_regs.x0 == ffa::FFA_ERROR {
+            hypervisor::uart_puts(b"  [PASS] FFA_RUN returns NOT_SUPPORTED\n");
+            pass += 1;
+        } else {
+            hypervisor::uart_puts(b"  [FAIL] FFA_RUN\n");
+            fail += 1;
+        }
+    }
+
+    // Test 30: FFA_FEATURES(FFA_SPM_ID_GET) = supported
+    {
+        let mut ctx = VcpuContext::default();
+        ctx.gp_regs.x0 = ffa::FFA_FEATURES;
+        ctx.gp_regs.x1 = ffa::FFA_SPM_ID_GET;
+        let cont = ffa::proxy::handle_ffa_call(&mut ctx);
+        if cont && ctx.gp_regs.x0 == ffa::FFA_SUCCESS_32 {
+            hypervisor::uart_puts(b"  [PASS] FEATURES(SPM_ID_GET) supported\n");
+            pass += 1;
+        } else {
+            hypervisor::uart_puts(b"  [FAIL] FEATURES(SPM_ID_GET)\n");
+            fail += 1;
+        }
+    }
+
+    // ── Phase 6 tests: Notifications ────────────────────────────────
+
+    // Test 31: NOTIFICATION_BITMAP_CREATE for VM0
+    {
+        let mut ctx = VcpuContext::default();
+        ctx.gp_regs.x0 = ffa::FFA_NOTIFICATION_BITMAP_CREATE;
+        ctx.gp_regs.x1 = 1; // VM0 partition ID
+        ctx.gp_regs.x2 = 1; // 1 vCPU
+        let cont = ffa::proxy::handle_ffa_call(&mut ctx);
+        if cont && ctx.gp_regs.x0 == ffa::FFA_SUCCESS_32 {
+            hypervisor::uart_puts(b"  [PASS] BITMAP_CREATE for VM0\n");
+            pass += 1;
+        } else {
+            hypervisor::uart_puts(b"  [FAIL] BITMAP_CREATE\n");
+            fail += 1;
+        }
+    }
+
+    // Test 32: NOTIFICATION_BIND (SP1→VM0, bitmap=0x1)
+    {
+        let mut ctx = VcpuContext::default();
+        ctx.gp_regs.x0 = ffa::FFA_NOTIFICATION_BIND;
+        ctx.gp_regs.x1 = (0x8001u64 << 16) | 1; // sender=SP1, receiver=VM0
+        ctx.gp_regs.x2 = 0; // flags: global
+        ctx.gp_regs.x3 = 0x1; // bitmap bit 0
+        ctx.gp_regs.x4 = 0;
+        let cont = ffa::proxy::handle_ffa_call(&mut ctx);
+        if cont && ctx.gp_regs.x0 == ffa::FFA_SUCCESS_32 {
+            hypervisor::uart_puts(b"  [PASS] NOTIFICATION_BIND SP1->VM0\n");
+            pass += 1;
+        } else {
+            hypervisor::uart_puts(b"  [FAIL] NOTIFICATION_BIND\n");
+            fail += 1;
+        }
+    }
+
+    // Test 33: NOTIFICATION_SET (SP1→VM0, bitmap=0x1)
+    {
+        let mut ctx = VcpuContext::default();
+        ctx.gp_regs.x0 = ffa::FFA_NOTIFICATION_SET;
+        ctx.gp_regs.x1 = (0x8001u64 << 16) | 1; // sender=SP1, receiver=VM0
+        ctx.gp_regs.x2 = 0; // flags
+        ctx.gp_regs.x3 = 0x1; // bitmap bit 0
+        ctx.gp_regs.x4 = 0;
+        let cont = ffa::proxy::handle_ffa_call(&mut ctx);
+        if cont && ctx.gp_regs.x0 == ffa::FFA_SUCCESS_32 {
+            hypervisor::uart_puts(b"  [PASS] NOTIFICATION_SET SP1->VM0\n");
+            pass += 1;
+        } else {
+            hypervisor::uart_puts(b"  [FAIL] NOTIFICATION_SET\n");
+            fail += 1;
+        }
+    }
+
+    // Test 34: NOTIFICATION_GET returns pending bit
+    {
+        let mut ctx = VcpuContext::default();
+        ctx.gp_regs.x0 = ffa::FFA_NOTIFICATION_GET;
+        ctx.gp_regs.x1 = 1; // VM0 partition ID
+        ctx.gp_regs.x2 = 0x3; // flags: SP + VM
+        let cont = ffa::proxy::handle_ffa_call(&mut ctx);
+        if cont && ctx.gp_regs.x0 == ffa::FFA_SUCCESS_32 && ctx.gp_regs.x2 == 0x1 {
+            hypervisor::uart_puts(b"  [PASS] NOTIFICATION_GET returns 0x1\n");
+            pass += 1;
+        } else {
+            hypervisor::uart_puts(b"  [FAIL] NOTIFICATION_GET\n");
+            fail += 1;
+        }
+    }
+
+    // Test 35: NOTIFICATION_GET again returns 0 (cleared)
+    {
+        let mut ctx = VcpuContext::default();
+        ctx.gp_regs.x0 = ffa::FFA_NOTIFICATION_GET;
+        ctx.gp_regs.x1 = 1; // VM0
+        ctx.gp_regs.x2 = 0x3;
+        let cont = ffa::proxy::handle_ffa_call(&mut ctx);
+        if cont && ctx.gp_regs.x0 == ffa::FFA_SUCCESS_32 && ctx.gp_regs.x2 == 0 {
+            hypervisor::uart_puts(b"  [PASS] NOTIFICATION_GET cleared\n");
+            pass += 1;
+        } else {
+            hypervisor::uart_puts(b"  [FAIL] NOTIFICATION_GET cleared\n");
+            fail += 1;
+        }
+    }
+
+    // Test 36: NOTIFICATION_UNBIND
+    {
+        let mut ctx = VcpuContext::default();
+        ctx.gp_regs.x0 = ffa::FFA_NOTIFICATION_UNBIND;
+        ctx.gp_regs.x1 = (0x8001u64 << 16) | 1; // sender=SP1, receiver=VM0
+        ctx.gp_regs.x3 = 0x1; // bitmap
+        ctx.gp_regs.x4 = 0;
+        let cont = ffa::proxy::handle_ffa_call(&mut ctx);
+        if cont && ctx.gp_regs.x0 == ffa::FFA_SUCCESS_32 {
+            hypervisor::uart_puts(b"  [PASS] NOTIFICATION_UNBIND\n");
+            pass += 1;
+        } else {
+            hypervisor::uart_puts(b"  [FAIL] NOTIFICATION_UNBIND\n");
+            fail += 1;
+        }
+    }
+
+    // Test 37: SET after UNBIND → DENIED
+    {
+        let mut ctx = VcpuContext::default();
+        ctx.gp_regs.x0 = ffa::FFA_NOTIFICATION_SET;
+        ctx.gp_regs.x1 = (0x8001u64 << 16) | 1;
+        ctx.gp_regs.x2 = 0;
+        ctx.gp_regs.x3 = 0x1;
+        ctx.gp_regs.x4 = 0;
+        let cont = ffa::proxy::handle_ffa_call(&mut ctx);
+        if cont && ctx.gp_regs.x0 == ffa::FFA_ERROR {
+            hypervisor::uart_puts(b"  [PASS] SET after UNBIND denied\n");
+            pass += 1;
+        } else {
+            hypervisor::uart_puts(b"  [FAIL] SET after UNBIND\n");
+            fail += 1;
+        }
+    }
+
+    // Test 38: FEATURES(NOTIFICATION_BIND) = supported
+    {
+        let mut ctx = VcpuContext::default();
+        ctx.gp_regs.x0 = ffa::FFA_FEATURES;
+        ctx.gp_regs.x1 = ffa::FFA_NOTIFICATION_BIND;
+        let cont = ffa::proxy::handle_ffa_call(&mut ctx);
+        if cont && ctx.gp_regs.x0 == ffa::FFA_SUCCESS_32 {
+            hypervisor::uart_puts(b"  [PASS] FEATURES(NOTIFICATION_BIND)\n");
+            pass += 1;
+        } else {
+            hypervisor::uart_puts(b"  [FAIL] FEATURES(NOTIFICATION_BIND)\n");
+            fail += 1;
+        }
+    }
+
+    // ── Phase 7 tests: Indirect messaging ───────────────────────────
+
+    // Test 39: MSG_SEND2 without mailbox → DENIED
+    {
+        // Ensure mailbox is unmapped (test 8 already unmapped it)
+        let mut ctx = VcpuContext::default();
+        ctx.gp_regs.x0 = ffa::FFA_MSG_SEND2;
+        ctx.gp_regs.x1 = 0; // flags
+        let cont = ffa::proxy::handle_ffa_call(&mut ctx);
+        if cont && ctx.gp_regs.x0 == ffa::FFA_ERROR {
+            hypervisor::uart_puts(b"  [PASS] MSG_SEND2 no mailbox denied\n");
+            pass += 1;
+        } else {
+            hypervisor::uart_puts(b"  [FAIL] MSG_SEND2 no mailbox\n");
+            fail += 1;
+        }
+    }
+
+    // Test 40-42: MSG_SEND2 from VM0→VM1, MSG_WAIT, MSG_WAIT no msg
+    {
+        // Set up TX/RX buffers using page-aligned arrays.
+        // FFA_RXTX_MAP requires page-aligned buffers.
+        #[repr(C, align(4096))]
+        struct PageBuf([u8; 4096]);
+        let mut tx_buf = PageBuf([0u8; 4096]);
+        let mut rx_buf_vm0 = PageBuf([0u8; 4096]);
+        let tx_buf_vm1 = PageBuf([0u8; 4096]);
+        let mut rx_buf_vm1 = PageBuf([0u8; 4096]);
+
+        // Map VM0 mailbox
+        {
+            let mut ctx = VcpuContext::default();
+            ctx.gp_regs.x0 = ffa::FFA_RXTX_MAP;
+            ctx.gp_regs.x1 = tx_buf.0.as_ptr() as u64;
+            ctx.gp_regs.x2 = rx_buf_vm0.0.as_mut_ptr() as u64;
+            ctx.gp_regs.x3 = 1;
+            ffa::proxy::handle_ffa_call(&mut ctx);
+        }
+
+        // Map VM1 mailbox
+        hypervisor::global::CURRENT_VM_ID.store(1, core::sync::atomic::Ordering::Relaxed);
+        {
+            let mut ctx = VcpuContext::default();
+            ctx.gp_regs.x0 = ffa::FFA_RXTX_MAP;
+            ctx.gp_regs.x1 = tx_buf_vm1.0.as_ptr() as u64;
+            ctx.gp_regs.x2 = rx_buf_vm1.0.as_mut_ptr() as u64;
+            ctx.gp_regs.x3 = 1;
+            ffa::proxy::handle_ffa_call(&mut ctx);
+        }
+        hypervisor::global::CURRENT_VM_ID.store(0, core::sync::atomic::Ordering::Relaxed);
+
+        // Write indirect message header in VM0's TX buffer
+        // Header: sender_id(u16=1) + receiver_id(u16=2) + size(u32=4) + payload
+        unsafe {
+            core::ptr::write_unaligned(tx_buf.0.as_mut_ptr() as *mut u16, 1u16); // sender VM0
+            core::ptr::write_unaligned(tx_buf.0.as_mut_ptr().add(2) as *mut u16, 2u16); // receiver VM1
+            core::ptr::write_unaligned(tx_buf.0.as_mut_ptr().add(4) as *mut u32, 4u32); // payload size
+            core::ptr::write_unaligned(tx_buf.0.as_mut_ptr().add(8) as *mut u32, 0xCAFE_BABE); // payload
+        }
+
+        // Test 40: MSG_SEND2 from VM0 to VM1
+        {
+            let mut ctx = VcpuContext::default();
+            ctx.gp_regs.x0 = ffa::FFA_MSG_SEND2;
+            ctx.gp_regs.x1 = 0;
+            let cont = ffa::proxy::handle_ffa_call(&mut ctx);
+            if cont && ctx.gp_regs.x0 == ffa::FFA_SUCCESS_32 {
+                hypervisor::uart_puts(b"  [PASS] MSG_SEND2 VM0->VM1\n");
+                pass += 1;
+            } else {
+                hypervisor::uart_puts(b"  [FAIL] MSG_SEND2 VM0->VM1\n");
+                fail += 1;
+            }
+        }
+
+        // Test 41: MSG_WAIT by VM1 returns pending message
+        hypervisor::global::CURRENT_VM_ID.store(1, core::sync::atomic::Ordering::Relaxed);
+        {
+            let mut ctx = VcpuContext::default();
+            ctx.gp_regs.x0 = ffa::FFA_MSG_WAIT;
+            let cont = ffa::proxy::handle_ffa_call(&mut ctx);
+            if cont && ctx.gp_regs.x0 == ffa::FFA_SUCCESS_32 && ctx.gp_regs.x1 == 1 {
+                hypervisor::uart_puts(b"  [PASS] MSG_WAIT returns sender=VM0\n");
+                pass += 1;
+            } else {
+                hypervisor::uart_puts(b"  [FAIL] MSG_WAIT\n");
+                fail += 1;
+            }
+        }
+
+        // Release RX buffer so msg_pending clears
+        {
+            let mut ctx = VcpuContext::default();
+            ctx.gp_regs.x0 = ffa::FFA_RX_RELEASE;
+            ffa::proxy::handle_ffa_call(&mut ctx);
+        }
+
+        // Test 42: MSG_WAIT with no message → NO_DATA
+        {
+            let mut ctx = VcpuContext::default();
+            ctx.gp_regs.x0 = ffa::FFA_MSG_WAIT;
+            let cont = ffa::proxy::handle_ffa_call(&mut ctx);
+            if cont && ctx.gp_regs.x0 == ffa::FFA_ERROR {
+                hypervisor::uart_puts(b"  [PASS] MSG_WAIT no msg -> NO_DATA\n");
+                pass += 1;
+            } else {
+                hypervisor::uart_puts(b"  [FAIL] MSG_WAIT no msg\n");
+                fail += 1;
+            }
+        }
+        hypervisor::global::CURRENT_VM_ID.store(0, core::sync::atomic::Ordering::Relaxed);
+
+        // Test 43: MSG_SEND2 when receiver RX busy → BUSY
+        {
+            // Send first message (RX now owned by VM1)
+            unsafe {
+                core::ptr::write_unaligned(tx_buf.0.as_mut_ptr() as *mut u16, 1u16);
+                core::ptr::write_unaligned(tx_buf.0.as_mut_ptr().add(2) as *mut u16, 2u16);
+                core::ptr::write_unaligned(tx_buf.0.as_mut_ptr().add(4) as *mut u32, 4u32);
+            }
+            let mut ctx = VcpuContext::default();
+            ctx.gp_regs.x0 = ffa::FFA_MSG_SEND2;
+            ffa::proxy::handle_ffa_call(&mut ctx);
+
+            // Second send should fail (RX busy)
+            let mut ctx2 = VcpuContext::default();
+            ctx2.gp_regs.x0 = ffa::FFA_MSG_SEND2;
+            let cont = ffa::proxy::handle_ffa_call(&mut ctx2);
+            if cont && ctx2.gp_regs.x0 == ffa::FFA_ERROR {
+                hypervisor::uart_puts(b"  [PASS] MSG_SEND2 RX busy\n");
+                pass += 1;
+            } else {
+                hypervisor::uart_puts(b"  [FAIL] MSG_SEND2 RX busy\n");
+                fail += 1;
+            }
+        }
+
+        // Test 44: FEATURES(MSG_SEND2) = supported
+        {
+            let mut ctx = VcpuContext::default();
+            ctx.gp_regs.x0 = ffa::FFA_FEATURES;
+            ctx.gp_regs.x1 = ffa::FFA_MSG_SEND2;
+            let cont = ffa::proxy::handle_ffa_call(&mut ctx);
+            if cont && ctx.gp_regs.x0 == ffa::FFA_SUCCESS_32 {
+                hypervisor::uart_puts(b"  [PASS] FEATURES(MSG_SEND2)\n");
+                pass += 1;
+            } else {
+                hypervisor::uart_puts(b"  [FAIL] FEATURES(MSG_SEND2)\n");
+                fail += 1;
+            }
+        }
+
+        // Cleanup: unmap both mailboxes
+        {
+            let mut ctx = VcpuContext::default();
+            ctx.gp_regs.x0 = ffa::FFA_RXTX_UNMAP;
+            ffa::proxy::handle_ffa_call(&mut ctx);
+        }
+        hypervisor::global::CURRENT_VM_ID.store(1, core::sync::atomic::Ordering::Relaxed);
+        {
+            let mut ctx = VcpuContext::default();
+            ctx.gp_regs.x0 = ffa::FFA_RXTX_UNMAP;
+            ffa::proxy::handle_ffa_call(&mut ctx);
+        }
+        hypervisor::global::CURRENT_VM_ID.store(0, core::sync::atomic::Ordering::Relaxed);
+    }
+
     hypervisor::uart_puts(b"  Results: ");
     hypervisor::uart_put_u64(pass);
     hypervisor::uart_puts(b" passed, ");

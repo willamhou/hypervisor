@@ -7,6 +7,7 @@
 pub mod descriptors;
 pub mod mailbox;
 pub mod memory;
+pub mod notifications;
 pub mod proxy;
 pub mod smc_forward;
 pub mod stage2_walker;
@@ -34,6 +35,17 @@ pub const FFA_MEM_RECLAIM: u64 = 0x84000077;
 pub const FFA_MEM_FRAG_RX: u64 = 0x8400007A;
 #[allow(dead_code)]
 pub const FFA_MEM_FRAG_TX: u64 = 0x8400007B;
+pub const FFA_NOTIFICATION_BITMAP_CREATE: u64 = 0x8400007D;
+pub const FFA_NOTIFICATION_BITMAP_DESTROY: u64 = 0x8400007E;
+pub const FFA_NOTIFICATION_BIND: u64 = 0x8400007F;
+pub const FFA_NOTIFICATION_UNBIND: u64 = 0x84000080;
+pub const FFA_NOTIFICATION_SET: u64 = 0x84000081;
+pub const FFA_NOTIFICATION_GET: u64 = 0x84000082;
+pub const FFA_NOTIFICATION_INFO_GET_32: u64 = 0x84000083;
+pub const FFA_SPM_ID_GET: u64 = 0x84000085;
+pub const FFA_MSG_SEND2: u64 = 0x84000086;
+pub const FFA_MSG_WAIT: u64 = 0x8400006B;
+pub const FFA_RUN: u64 = 0x8400006D;
 
 // ── FF-A Function IDs (SMC64) ─────────────────────────────────────
 #[allow(dead_code)]
@@ -45,6 +57,7 @@ pub const FFA_MEM_DONATE_64: u64 = 0xC4000071;
 pub const FFA_MEM_LEND_64: u64 = 0xC4000072;
 pub const FFA_MEM_SHARE_64: u64 = 0xC4000073;
 pub const FFA_MEM_RETRIEVE_REQ_64: u64 = 0xC4000074;
+pub const FFA_NOTIFICATION_INFO_GET_64: u64 = 0xC4000083;
 
 // ── FF-A Version ──────────────────────────────────────────────────
 pub const FFA_VERSION_1_1: u32 = 0x00010001; // Major=1, Minor=1
