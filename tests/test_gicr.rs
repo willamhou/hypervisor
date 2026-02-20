@@ -47,7 +47,8 @@ pub fn run_gicr_test() {
     // Test 3: WAKER — reset state has ProcessorSleep=1, ChildrenAsleep=1
     uart_puts(b"[GICR] Test 3: WAKER reset state...\n");
     let waker = gicr.read(0x0014, 4).unwrap() as u32; // vCPU 0 WAKER
-    if waker != 0x06 { // bits 1+2 set
+    if waker != 0x06 {
+        // bits 1+2 set
         uart_puts(b"[GICR] FAILED: WAKER reset should be 0x06, got 0x");
         hypervisor::uart_put_hex(waker as u64);
         uart_puts(b"\n");

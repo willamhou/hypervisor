@@ -1,5 +1,5 @@
-use core::cell::UnsafeCell;
 use crate::platform::MAX_SMP_CPUS;
+use core::cell::UnsafeCell;
 
 pub struct PerCpuContext {
     pub vcpu_id: usize,

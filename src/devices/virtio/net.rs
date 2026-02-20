@@ -4,8 +4,8 @@
 //! TX: strips virtio_net_hdr, forwards Ethernet frame via VSwitch.
 //! RX: inject_rx() writes virtio_net_hdr + frame into guest RX queue.
 
-use super::VirtioDevice;
 use super::queue::Virtqueue;
+use super::VirtioDevice;
 
 // ── Feature bits ────────────────────────────────────────────────────
 const VIRTIO_NET_F_MAC: u64 = 1 << 5;
@@ -98,7 +98,9 @@ impl VirtioNet {
 }
 
 impl VirtioDevice for VirtioNet {
-    fn device_id(&self) -> u32 { 1 } // VIRTIO_ID_NET
+    fn device_id(&self) -> u32 {
+        1
+    } // VIRTIO_ID_NET
 
     fn device_features(&self) -> u64 {
         VIRTIO_F_VERSION_1 | VIRTIO_NET_F_MAC | VIRTIO_NET_F_STATUS
@@ -121,9 +123,7 @@ impl VirtioDevice for VirtioNet {
                     | ((self.mac[3] as u64) << 24)
             }
             (4, 4) => {
-                (self.mac[4] as u64)
-                    | ((self.mac[5] as u64) << 8)
-                    | ((self.status as u64) << 16)
+                (self.mac[4] as u64) | ((self.mac[5] as u64) << 8) | ((self.status as u64) << 16)
             }
             _ => 0,
         }
@@ -141,7 +141,11 @@ impl VirtioDevice for VirtioNet {
         }
     }
 
-    fn num_queues(&self) -> u16 { 2 } // RX=0, TX=1
+    fn num_queues(&self) -> u16 {
+        2
+    } // RX=0, TX=1
 
-    fn max_queue_size(&self) -> u16 { 256 }
+    fn max_queue_size(&self) -> u16 {
+        256
+    }
 }

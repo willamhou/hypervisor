@@ -1,8 +1,8 @@
 //! Global heap management
 
 use super::BumpAllocator;
-use core::cell::UnsafeCell;
 use crate::platform;
+use core::cell::UnsafeCell;
 
 struct GlobalHeap {
     allocator: UnsafeCell<Option<BumpAllocator>>,
@@ -40,11 +40,7 @@ pub fn alloc_aligned(size: u64, align: u64) -> Option<u64> {
 
 /// Allocate memory with default alignment (8 bytes)
 pub fn alloc(size: u64) -> Option<u64> {
-    unsafe {
-        (*HEAP.allocator.get())
-            .as_mut()
-            .and_then(|a| a.alloc(size))
-    }
+    unsafe { (*HEAP.allocator.get()).as_mut().and_then(|a| a.alloc(size)) }
 }
 
 /// Return a 4KB page to the free-list for reuse.
@@ -53,9 +49,7 @@ pub fn alloc(size: u64) -> Option<u64> {
 /// Caller must ensure `addr` was previously allocated via `alloc_page()`,
 /// is 4KB-aligned, and is no longer in use.
 pub unsafe fn free_page(addr: u64) {
-    (*HEAP.allocator.get())
-        .as_mut()
-        .map(|a| a.free_page(addr));
+    (*HEAP.allocator.get()).as_mut().map(|a| a.free_page(addr));
 }
 
 /// Get remaining heap space

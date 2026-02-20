@@ -1,7 +1,7 @@
 //! NetRxRing SPSC ring buffer tests
 
-use hypervisor::vswitch::{NetRxRing, MAX_FRAME_SIZE};
 use hypervisor::uart_puts;
+use hypervisor::vswitch::{NetRxRing, MAX_FRAME_SIZE};
 
 pub fn run_net_rx_ring_test() {
     uart_puts(b"\n========================================\n");

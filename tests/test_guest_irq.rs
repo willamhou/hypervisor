@@ -33,7 +33,8 @@ pub fn run_irq_test() {
     vm_state(0).pending_sgis[2].fetch_or(1 << 0, Ordering::Release); // SGI 0
     vm_state(0).pending_sgis[2].fetch_or(1 << 7, Ordering::Release); // SGI 7
     let pending = vm_state(0).pending_sgis[2].load(Ordering::Acquire);
-    if pending != 0x83 { // bits 0,1,7
+    if pending != 0x83 {
+        // bits 0,1,7
         uart_puts(b"[IRQ Q] FAILED: expected 0x83\n");
         return;
     }

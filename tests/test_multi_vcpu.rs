@@ -1,7 +1,7 @@
 //! Multi-vCPU support tests
 
-use hypervisor::vm::Vm;
 use hypervisor::uart_puts;
+use hypervisor::vm::Vm;
 
 pub fn run_multi_vcpu_test() {
     uart_puts(b"\n========================================\n");

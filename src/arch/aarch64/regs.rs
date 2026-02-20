@@ -3,9 +3,9 @@
 //! This module defines the register context that needs to be saved/restored
 //! when entering/exiting a virtual machine.
 
-use core::fmt;
 use super::defs::*;
-use crate::arch::traits::{VcpuContextOps, ExceptionInfo};
+use crate::arch::traits::{ExceptionInfo, VcpuContextOps};
+use core::fmt;
 
 /// General Purpose Registers (x0-x30)
 ///
@@ -53,10 +53,37 @@ pub struct GeneralPurposeRegs {
 impl Default for GeneralPurposeRegs {
     fn default() -> Self {
         Self {
-            x0: 0, x1: 0, x2: 0, x3: 0, x4: 0, x5: 0, x6: 0, x7: 0,
-            x8: 0, x9: 0, x10: 0, x11: 0, x12: 0, x13: 0, x14: 0, x15: 0,
-            x16: 0, x17: 0, x18: 0, x19: 0, x20: 0, x21: 0, x22: 0, x23: 0,
-            x24: 0, x25: 0, x26: 0, x27: 0, x28: 0, x29: 0, x30: 0,
+            x0: 0,
+            x1: 0,
+            x2: 0,
+            x3: 0,
+            x4: 0,
+            x5: 0,
+            x6: 0,
+            x7: 0,
+            x8: 0,
+            x9: 0,
+            x10: 0,
+            x11: 0,
+            x12: 0,
+            x13: 0,
+            x14: 0,
+            x15: 0,
+            x16: 0,
+            x17: 0,
+            x18: 0,
+            x19: 0,
+            x20: 0,
+            x21: 0,
+            x22: 0,
+            x23: 0,
+            x24: 0,
+            x25: 0,
+            x26: 0,
+            x27: 0,
+            x28: 0,
+            x29: 0,
+            x30: 0,
         }
     }
 }
@@ -184,9 +211,9 @@ pub struct SystemRegs {
     pub contextidr_el1: u64,
 
     /// Thread ID Registers
-    pub tpidr_el1: u64,     // OS thread ID
-    pub tpidrro_el0: u64,   // User read-only thread ID
-    pub tpidr_el0: u64,     // User read-write thread ID
+    pub tpidr_el1: u64, // OS thread ID
+    pub tpidrro_el0: u64, // User read-only thread ID
+    pub tpidr_el0: u64,   // User read-write thread ID
 
     /// Exception Syndrome Register (EL2) - Why did we exit?
     pub esr_el2: u64,

@@ -3,10 +3,10 @@
 //! Verifies that DEVICES[0] and DEVICES[1] are independent and
 //! can register/route devices without cross-contamination.
 
-use hypervisor::global::DEVICES;
-use hypervisor::devices::Device;
-use hypervisor::devices::pl011::VirtualUart;
 use hypervisor::devices::gic::VirtualGicd;
+use hypervisor::devices::pl011::VirtualUart;
+use hypervisor::devices::Device;
+use hypervisor::global::DEVICES;
 use hypervisor::uart_puts;
 
 pub fn run_multi_vm_devices_test() {
@@ -24,8 +24,12 @@ pub fn run_multi_vm_devices_test() {
     // addresses.
     uart_puts(b"[MV-DEV] Test 1: Device registration isolation...\n");
     DEVICES[0].register_device(Device::Uart(VirtualUart::new()));
-    let uart_fr_0 = DEVICES[0].handle_mmio(0x0900_0018, 0, 4, false).unwrap_or(0);
-    let uart_fr_1 = DEVICES[1].handle_mmio(0x0900_0018, 0, 4, false).unwrap_or(0);
+    let uart_fr_0 = DEVICES[0]
+        .handle_mmio(0x0900_0018, 0, 4, false)
+        .unwrap_or(0);
+    let uart_fr_1 = DEVICES[1]
+        .handle_mmio(0x0900_0018, 0, 4, false)
+        .unwrap_or(0);
     if uart_fr_0 == 0 {
         uart_puts(b"[MV-DEV] FAILED: VM 0 UARTFR should be non-zero\n");
         return;
@@ -41,8 +45,12 @@ pub fn run_multi_vm_devices_test() {
     // when registered, 0 when not.
     uart_puts(b"[MV-DEV] Test 2: Independent GICD registration...\n");
     DEVICES[1].register_device(Device::Gicd(VirtualGicd::new()));
-    let vm1_gicd = DEVICES[1].handle_mmio(0x0800_0000, 0, 4, false).unwrap_or(0);
-    let vm0_gicd = DEVICES[0].handle_mmio(0x0800_0000, 0, 4, false).unwrap_or(0);
+    let vm1_gicd = DEVICES[1]
+        .handle_mmio(0x0800_0000, 0, 4, false)
+        .unwrap_or(0);
+    let vm0_gicd = DEVICES[0]
+        .handle_mmio(0x0800_0000, 0, 4, false)
+        .unwrap_or(0);
     if vm1_gicd == 0 {
         uart_puts(b"[MV-DEV] FAILED: VM 1 GICD_CTLR should be non-zero\n");
         return;
@@ -55,8 +63,12 @@ pub fn run_multi_vm_devices_test() {
 
     // Test 3: Cross-check — VM 0 has UART, VM 1 has GICD, no cross-leak
     uart_puts(b"[MV-DEV] Test 3: No cross-leak...\n");
-    let vm0_uart_fr = DEVICES[0].handle_mmio(0x0900_0018, 0, 4, false).unwrap_or(0);
-    let vm1_uart_fr = DEVICES[1].handle_mmio(0x0900_0018, 0, 4, false).unwrap_or(0);
+    let vm0_uart_fr = DEVICES[0]
+        .handle_mmio(0x0900_0018, 0, 4, false)
+        .unwrap_or(0);
+    let vm1_uart_fr = DEVICES[1]
+        .handle_mmio(0x0900_0018, 0, 4, false)
+        .unwrap_or(0);
     if vm0_uart_fr == 0 {
         uart_puts(b"[MV-DEV] FAILED: VM 0 UARTFR should be non-zero\n");
         return;

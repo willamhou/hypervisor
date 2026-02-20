@@ -3,9 +3,9 @@
 //! Routes MMIO accesses to emulated devices via enum dispatch.
 //! Devices are registered dynamically into an array of up to `MAX_DEVICES` slots.
 
+pub mod gic;
 pub mod pl011;
 pub mod pl031;
-pub mod gic;
 pub mod virtio;
 
 /// Trait for MMIO-accessible devices
@@ -25,10 +25,12 @@ pub trait MmioDevice {
     }
 
     /// Return a pending SPI INTID if the device wants to assert an interrupt.
-    fn pending_irq(&self) -> Option<u32> { None }
+    fn pending_irq(&self) -> Option<u32> {
+        None
+    }
 
     /// Acknowledge/clear the device-side interrupt.
-    fn ack_irq(&mut self) { }
+    fn ack_irq(&mut self) {}
 }
 
 // ── Enum dispatch ──────────────────────────────────────────────────
@@ -156,9 +158,8 @@ impl DeviceManager {
     /// Attach a virtio-blk device backed by an in-memory disk image.
     pub fn attach_virtio_blk(&mut self, disk_base: u64, disk_size: u64) {
         let blk = virtio::blk::VirtioBlk::new(disk_base, disk_size);
-        let transport = virtio::mmio::VirtioMmioTransport::new(
-            VIRTIO_BLK_BASE, blk, VIRTIO_BLK_INTID,
-        );
+        let transport =
+            virtio::mmio::VirtioMmioTransport::new(VIRTIO_BLK_BASE, blk, VIRTIO_BLK_INTID);
         self.register_device(Device::VirtioBlk(transport));
     }
 
@@ -172,7 +173,9 @@ impl DeviceManager {
     }
 
     /// Get a mutable reference to the virtio-net transport (for RX injection).
-    pub fn virtio_net_mut(&mut self) -> Option<&mut virtio::mmio::VirtioMmioTransport<virtio::net::VirtioNet>> {
+    pub fn virtio_net_mut(
+        &mut self,
+    ) -> Option<&mut virtio::mmio::VirtioMmioTransport<virtio::net::VirtioNet>> {
         for slot in self.devices.iter_mut() {
             if let Some(Device::VirtioNet(transport)) = slot {
                 return Some(transport);
@@ -197,7 +200,11 @@ impl DeviceManager {
             }
         }
         // Unknown device — return 0 for reads, ignore writes
-        if is_write { None } else { Some(0) }
+        if is_write {
+            None
+        } else {
+            Some(0)
+        }
     }
 
     /// Look up SPI routing via GICD_IROUTER.

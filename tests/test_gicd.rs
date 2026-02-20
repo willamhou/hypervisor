@@ -27,7 +27,8 @@ pub fn run_gicd_test() {
     uart_puts(b"[GICD] Test 2: CTLR write preserves ARE_NS...\n");
     gicd.write(0x000, 0x01, 4); // EnableGrp1NS only
     let ctlr = gicd.read(0x000, 4).unwrap();
-    if ctlr != 0x11 { // EnableGrp1NS | ARE_NS
+    if ctlr != 0x11 {
+        // EnableGrp1NS | ARE_NS
         uart_puts(b"[GICD] FAILED: CTLR should be 0x11, got 0x");
         hypervisor::uart_put_hex(ctlr);
         uart_puts(b"\n");

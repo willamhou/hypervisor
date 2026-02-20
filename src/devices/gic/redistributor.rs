@@ -5,7 +5,6 @@
 ///   - SGI frame  (0x10000..0x1FFFF): IGROUPR0, ISENABLER0, IPRIORITYR, etc.
 ///
 /// Address routing: base = 0x080A_0000, vcpu_id = offset / 0x20000.
-
 use crate::devices::MmioDevice;
 
 /// Size per redistributor (RD + SGI frames)
@@ -16,7 +15,7 @@ const MAX_VCPUS: usize = crate::platform::MAX_SMP_CPUS;
 // ── RD frame register offsets ────────────────────────────────────────
 const GICR_CTLR: u64 = 0x0000;
 const GICR_IIDR: u64 = 0x0004;
-const GICR_TYPER: u64 = 0x0008;     // 64-bit
+const GICR_TYPER: u64 = 0x0008; // 64-bit
 const GICR_STATUSR: u64 = 0x0010;
 const GICR_WAKER: u64 = 0x0014;
 const GICR_PIDR2: u64 = 0xFFE8;
@@ -94,9 +93,13 @@ impl VirtualGicr {
     ///   [23:8]  Processor_Number
     ///   [4]     Last (1 = last redistributor in this series)
     fn typer_value(&self, vcpu_id: usize) -> u64 {
-        let aff0 = (vcpu_id as u64) << 32;    // Aff0 at bits [39:32]
-        let proc_num = (vcpu_id as u64) << 8;  // Processor_Number at bits [23:8]
-        let last = if vcpu_id == self.num_vcpus - 1 { 1u64 << 4 } else { 0 };
+        let aff0 = (vcpu_id as u64) << 32; // Aff0 at bits [39:32]
+        let proc_num = (vcpu_id as u64) << 8; // Processor_Number at bits [23:8]
+        let last = if vcpu_id == self.num_vcpus - 1 {
+            1u64 << 4
+        } else {
+            0
+        };
         aff0 | proc_num | last
     }
 
@@ -126,7 +129,7 @@ impl VirtualGicr {
             GICR_STATUSR => Some(0),
             GICR_WAKER => Some(st.waker as u64),
             GICR_PIDR2 => Some(0x30), // GICv3
-            _ => Some(0), // RAZ for unimplemented
+            _ => Some(0),             // RAZ for unimplemented
         }
     }
 
@@ -162,7 +165,11 @@ impl VirtualGicr {
             GICR_ICACTIVER0 => Some(st.isactiver0 as u64),
             GICR_IPRIORITYR_BASE..=GICR_IPRIORITYR_END => {
                 let idx = ((offset - GICR_IPRIORITYR_BASE) / 4) as usize;
-                if idx < 8 { Some(st.ipriorityr[idx] as u64) } else { Some(0) }
+                if idx < 8 {
+                    Some(st.ipriorityr[idx] as u64)
+                } else {
+                    Some(0)
+                }
             }
             GICR_ICFGR0 => Some(st.icfgr[0] as u64),
             GICR_ICFGR1 => Some(st.icfgr[1] as u64),
@@ -176,15 +183,17 @@ impl VirtualGicr {
         let st = &mut self.state[vcpu_id];
         match offset {
             GICR_IGROUPR0 => st.igroupr0 = val,
-            GICR_ISENABLER0 => st.isenabler0 |= val,       // write-1-to-set
-            GICR_ICENABLER0 => st.isenabler0 &= !val,      // write-1-to-clear
+            GICR_ISENABLER0 => st.isenabler0 |= val, // write-1-to-set
+            GICR_ICENABLER0 => st.isenabler0 &= !val, // write-1-to-clear
             GICR_ISPENDR0 => st.ispendr0 |= val,
             GICR_ICPENDR0 => st.ispendr0 &= !val,
             GICR_ISACTIVER0 => st.isactiver0 |= val,
             GICR_ICACTIVER0 => st.isactiver0 &= !val,
             GICR_IPRIORITYR_BASE..=GICR_IPRIORITYR_END => {
                 let idx = ((offset - GICR_IPRIORITYR_BASE) / 4) as usize;
-                if idx < 8 { st.ipriorityr[idx] = val; }
+                if idx < 8 {
+                    st.ipriorityr[idx] = val;
+                }
             }
             GICR_ICFGR0 => {} // SGI config is RO (always edge-triggered)
             GICR_ICFGR1 => st.icfgr[1] = val,

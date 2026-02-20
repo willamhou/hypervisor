@@ -1,21 +1,21 @@
 #![no_std]
 
-pub mod uart;
 pub mod arch;
-pub mod platform;
-pub mod vcpu;
-pub mod vm;
 pub mod devices;
-pub mod global;
-pub mod vcpu_interrupt;
-pub mod mm;
-pub mod scheduler;
-pub mod guest_loader;
-pub mod sync;
-pub mod percpu;
 pub mod dtb;
-pub mod vswitch;
 pub mod ffa;
+pub mod global;
+pub mod guest_loader;
+pub mod mm;
+pub mod percpu;
+pub mod platform;
+pub mod scheduler;
+pub mod sync;
+pub mod uart;
+pub mod vcpu;
+pub mod vcpu_interrupt;
+pub mod vm;
+pub mod vswitch;
 
 // Note: println! macro is exported at the crate root via #[macro_export]
 // It can be used as: use hypervisor::println;

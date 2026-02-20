@@ -4,9 +4,9 @@
 //! Wraps a concrete `VirtioDevice` backend and handles feature negotiation,
 //! queue setup, and interrupt signaling.
 
-use crate::devices::MmioDevice;
-use super::VirtioDevice;
 use super::queue::Virtqueue;
+use super::VirtioDevice;
+use crate::devices::MmioDevice;
 
 /// Maximum number of virtqueues per device
 const MAX_QUEUES: usize = 2;
@@ -39,8 +39,8 @@ const CONFIG_SPACE: u64 = 0x100;
 
 // ── Magic and version ───────────────────────────────────────────────
 const VIRTIO_MMIO_MAGIC: u32 = 0x74726976; // "virt"
-const VIRTIO_MMIO_VERSION: u32 = 2;        // Modern (non-legacy)
-const VIRTIO_VENDOR_ID: u32 = 0x554D4551;  // "QEMU"
+const VIRTIO_MMIO_VERSION: u32 = 2; // Modern (non-legacy)
+const VIRTIO_VENDOR_ID: u32 = 0x554D4551; // "QEMU"
 
 // ── Interrupt status bits ───────────────────────────────────────────
 const VIRTIO_INT_VRING: u32 = 1;
@@ -200,11 +200,11 @@ impl<D: VirtioDevice> MmioDevice for VirtioMmioTransport<D> {
 
             DRIVER_FEATURES => {
                 if self.driver_features_sel == 0 {
-                    self.driver_features = (self.driver_features & 0xFFFF_FFFF_0000_0000)
-                        | (val as u64);
+                    self.driver_features =
+                        (self.driver_features & 0xFFFF_FFFF_0000_0000) | (val as u64);
                 } else {
-                    self.driver_features = (self.driver_features & 0x0000_0000_FFFF_FFFF)
-                        | ((val as u64) << 32);
+                    self.driver_features =
+                        (self.driver_features & 0x0000_0000_FFFF_FFFF) | ((val as u64) << 32);
                 }
             }
 
@@ -364,18 +364,30 @@ impl VirtioMmioTransport<super::net::VirtioNet> {
             let buf_addr = desc.addr as *mut u8;
             let buf_cap = desc.len as usize;
             let remaining = combined_len - written;
-            let to_write = if remaining < buf_cap { remaining } else { buf_cap };
+            let to_write = if remaining < buf_cap {
+                remaining
+            } else {
+                buf_cap
+            };
 
             unsafe {
                 let dst = buf_addr;
                 // Determine how much of header vs frame goes into this descriptor
                 if written < 12 {
                     let hdr_remaining = 12 - written;
-                    let hdr_bytes = if hdr_remaining < to_write { hdr_remaining } else { to_write };
+                    let hdr_bytes = if hdr_remaining < to_write {
+                        hdr_remaining
+                    } else {
+                        to_write
+                    };
                     core::ptr::copy_nonoverlapping(hdr.as_ptr().add(written), dst, hdr_bytes);
                     if to_write > hdr_bytes {
                         let frame_bytes = to_write - hdr_bytes;
-                        core::ptr::copy_nonoverlapping(frame.as_ptr(), dst.add(hdr_bytes), frame_bytes);
+                        core::ptr::copy_nonoverlapping(
+                            frame.as_ptr(),
+                            dst.add(hdr_bytes),
+                            frame_bytes,
+                        );
                     }
                 } else {
                     let frame_offset = written - 12;

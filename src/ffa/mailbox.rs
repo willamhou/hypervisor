@@ -1,7 +1,7 @@
 //! FF-A RXTX Mailbox management — per-VM TX/RX buffer tracking.
 
-use core::cell::UnsafeCell;
 use crate::ffa::FFA_MAX_VMS;
+use core::cell::UnsafeCell;
 
 /// Per-VM RXTX buffer state.
 pub struct FfaMailbox {

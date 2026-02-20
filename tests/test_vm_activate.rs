@@ -3,8 +3,8 @@
 //! Verifies that Vm stores VTTBR/VTCR fields and that
 //! activate_stage2() is callable.
 
-use hypervisor::vm::Vm;
 use hypervisor::uart_puts;
+use hypervisor::vm::Vm;
 
 pub fn run_vm_activate_test() {
     uart_puts(b"\n========================================\n");

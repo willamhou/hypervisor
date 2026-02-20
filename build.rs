@@ -35,11 +35,7 @@ fn main() {
                 .or_else(|_| {
                     // Fallback to using assembler directly
                     Command::new("aarch64-linux-gnu-as")
-                        .args(&[
-                            asm_src,
-                            "-o",
-                            obj_path.to_str().unwrap(),
-                        ])
+                        .args(&[asm_src, "-o", obj_path.to_str().unwrap()])
                         .status()
                 })
                 .unwrap_or_else(|_| panic!("Failed to compile {}", asm_src));
@@ -58,8 +54,7 @@ fn main() {
             ar_cmd.arg(obj.to_str().unwrap());
         }
 
-        let status = ar_cmd.status()
-            .expect("Failed to create archive");
+        let status = ar_cmd.status().expect("Failed to create archive");
 
         assert!(status.success(), "Failed to create archive");
 

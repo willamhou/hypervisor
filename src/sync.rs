@@ -55,6 +55,8 @@ impl<T> Drop for SpinLockGuard<'_, T> {
         // Currently spin_loop() emits YIELD, but SEV is cheap and
         // future-proofs against switching to WFE.
         #[cfg(target_arch = "aarch64")]
-        unsafe { core::arch::asm!("sev", options(nostack, nomem)) };
+        unsafe {
+            core::arch::asm!("sev", options(nostack, nomem))
+        };
     }
 }

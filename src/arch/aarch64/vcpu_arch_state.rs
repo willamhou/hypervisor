@@ -123,7 +123,7 @@ impl VcpuArchState {
         // TALL1 traps ICC_SGI1R_EL1 writes (SGI generation) to EL2 for emulation.
         // With En=1, other ICC registers are redirected to virtual ICV_* (not trapped).
         self.ich_hcr = (1 << 13) | 1; // TALL1 | En
-        // VMCR: VPMR=0xFF (allow all priorities), VENG1=1 (enable Group 1)
+                                      // VMCR: VPMR=0xFF (allow all priorities), VENG1=1 (enable Group 1)
         self.ich_vmcr = (0xFF << 24) | (1 << 1);
         self.ich_lr = [0; NUM_LRS];
 

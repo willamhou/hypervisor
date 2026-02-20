@@ -113,7 +113,10 @@ impl ParsedMemRegion {
 ///
 /// `tx_ptr` must point to a valid, identity-mapped TX buffer of at least
 /// `total_length` bytes.
-pub unsafe fn parse_mem_region(tx_ptr: *const u8, total_length: u32) -> Result<ParsedMemRegion, i32> {
+pub unsafe fn parse_mem_region(
+    tx_ptr: *const u8,
+    total_length: u32,
+) -> Result<ParsedMemRegion, i32> {
     let total = total_length as usize;
 
     // Validate minimum size for the top-level region header

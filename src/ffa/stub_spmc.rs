@@ -72,8 +72,10 @@ static SHARE_RECORDS: ShareRecordArray = ShareRecordArray(UnsafeCell::new({
         is_lend: false,
         retrieved: false,
     };
-    [EMPTY, EMPTY, EMPTY, EMPTY, EMPTY, EMPTY, EMPTY, EMPTY,
-     EMPTY, EMPTY, EMPTY, EMPTY, EMPTY, EMPTY, EMPTY, EMPTY]
+    [
+        EMPTY, EMPTY, EMPTY, EMPTY, EMPTY, EMPTY, EMPTY, EMPTY, EMPTY, EMPTY, EMPTY, EMPTY, EMPTY,
+        EMPTY, EMPTY, EMPTY,
+    ]
 }));
 
 /// Allocate a new memory sharing handle.

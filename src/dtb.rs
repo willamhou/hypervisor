@@ -60,7 +60,9 @@ static PLATFORM_INFO: PlatformInfoCell = PlatformInfoCell {
 /// are retained — all existing behavior is preserved.
 pub fn init(dtb_addr: usize) {
     if let Some(info) = parse_host_dtb(dtb_addr) {
-        unsafe { *PLATFORM_INFO.inner.get() = info; }
+        unsafe {
+            *PLATFORM_INFO.inner.get() = info;
+        }
         PLATFORM_INFO.initialized.store(true, Ordering::Release);
     }
 }

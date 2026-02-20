@@ -14,7 +14,6 @@
 ///   0x018 RTCMIS — Masked Interrupt Status (stub)
 ///   0x01C RTCICR — Interrupt Clear Register (stub)
 ///   0xFE0-0xFFC — PrimeCell identification registers
-
 use crate::devices::MmioDevice;
 
 /// PL031 RTC base address (QEMU virt machine)
@@ -179,8 +178,8 @@ impl MmioDevice for VirtualPl031 {
                 self.ris &= !(value as u32);
                 true
             }
-            RTCDR => true,  // read-only, ignore writes
-            _ => true,       // unknown — accept silently
+            RTCDR => true, // read-only, ignore writes
+            _ => true,     // unknown — accept silently
         }
     }
 

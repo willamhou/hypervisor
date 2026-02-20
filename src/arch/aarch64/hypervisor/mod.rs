@@ -4,8 +4,8 @@
 //! - Exception handling and trap processing
 //! - Instruction decoding for MMIO emulation
 
-pub mod exception;
 pub mod decode;
+pub mod exception;
 
-pub use exception::*;
 pub use decode::*;
+pub use exception::*;

@@ -9,7 +9,9 @@ pub fn run_page_ownership_test() {
 
     // Create a mapper and map a 2MB region
     let mut mapper = DynamicIdentityMapper::new();
-    mapper.map_region(0x5000_0000, 0x0020_0000, MemoryAttribute::Normal).unwrap();
+    mapper
+        .map_region(0x5000_0000, 0x0020_0000, MemoryAttribute::Normal)
+        .unwrap();
 
     // Test 1: Default SW bits should be 0 (OWNED)
     {

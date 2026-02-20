@@ -1,38 +1,37 @@
+use crate::platform;
 /// ARM Generic Interrupt Controller (GICv2) support
-/// 
+///
 /// This module provides basic GIC configuration for handling interrupts in the hypervisor.
-/// 
+///
 /// GIC Architecture:
 /// - GICD (Distributor): Manages interrupt prioritization and distribution
 /// - GICC (CPU Interface): Per-CPU interface for interrupt acknowledgment and EOI
-/// 
+///
 /// Interrupt Types:
 /// - SGI (0-15): Software Generated Interrupts
 /// - PPI (16-31): Private Peripheral Interrupts (per-CPU, includes timers)
 /// - SPI (32-1019): Shared Peripheral Interrupts
-
 use core::ptr::{read_volatile, write_volatile};
-use crate::platform;
 
 /// GICD Register offsets
-const GICD_CTLR: u64 = 0x000;        // Distributor Control Register
-const GICD_TYPER: u64 = 0x004;       // Interrupt Controller Type Register
-const GICD_ISENABLER: u64 = 0x100;   // Interrupt Set-Enable Registers
-const GICD_ICENABLER: u64 = 0x180;   // Interrupt Clear-Enable Registers
+const GICD_CTLR: u64 = 0x000; // Distributor Control Register
+const GICD_TYPER: u64 = 0x004; // Interrupt Controller Type Register
+const GICD_ISENABLER: u64 = 0x100; // Interrupt Set-Enable Registers
+const GICD_ICENABLER: u64 = 0x180; // Interrupt Clear-Enable Registers
 #[allow(dead_code)]
-const GICD_ISPENDR: u64 = 0x200;     // Interrupt Set-Pending Registers
-const GICD_ICPENDR: u64 = 0x280;     // Interrupt Clear-Pending Registers
-const GICD_IPRIORITYR: u64 = 0x400;  // Interrupt Priority Registers
+const GICD_ISPENDR: u64 = 0x200; // Interrupt Set-Pending Registers
+const GICD_ICPENDR: u64 = 0x280; // Interrupt Clear-Pending Registers
+const GICD_IPRIORITYR: u64 = 0x400; // Interrupt Priority Registers
 #[allow(dead_code)]
-const GICD_ITARGETSR: u64 = 0x800;   // Interrupt Processor Targets Registers
+const GICD_ITARGETSR: u64 = 0x800; // Interrupt Processor Targets Registers
 #[allow(dead_code)]
-const GICD_ICFGR: u64 = 0xC00;       // Interrupt Configuration Registers
+const GICD_ICFGR: u64 = 0xC00; // Interrupt Configuration Registers
 
 /// GICC Register offsets
-const GICC_CTLR: u64 = 0x000;        // CPU Interface Control Register
-const GICC_PMR: u64 = 0x004;         // Interrupt Priority Mask Register
-const GICC_IAR: u64 = 0x00C;         // Interrupt Acknowledge Register
-const GICC_EOIR: u64 = 0x010;        // End of Interrupt Register
+const GICC_CTLR: u64 = 0x000; // CPU Interface Control Register
+const GICC_PMR: u64 = 0x004; // Interrupt Priority Mask Register
+const GICC_IAR: u64 = 0x00C; // Interrupt Acknowledge Register
+const GICC_EOIR: u64 = 0x010; // End of Interrupt Register
 
 /// Virtual Timer interrupt number (PPI 27)
 pub const VTIMER_IRQ: u32 = 27;
@@ -155,10 +154,10 @@ pub static GICC: GicCpuInterface = GicCpuInterface::new(platform::GICC_BASE);
 /// Initialize the GIC
 pub fn init() {
     crate::uart_puts(b"[GIC] Initializing GICv2 (system register interface)...\n");
-    
+
     // For GICv2 in QEMU, we'll skip detailed initialization for now
     // The GIC should be in a usable state by default
     // We'll enable interrupt routing through HCR_EL2 (already done in exception::init)
-    
+
     crate::uart_puts(b"[GIC] Using default GIC configuration\n");
 }

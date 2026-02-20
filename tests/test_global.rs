@@ -80,7 +80,7 @@ pub fn run_global_test() {
         ring2.push(i);
     }
     ring2.push(0xFF); // Should be dropped (full)
-    // Drain and verify
+                      // Drain and verify
     let mut last = 0u8;
     let mut count = 0u32;
     while let Some(ch) = ring2.pop() {

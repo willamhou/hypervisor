@@ -1,3 +1,4 @@
+use super::super::defs::*;
 /// ARM Generic Timer support
 ///
 /// ARM provides several timers:
@@ -6,15 +7,13 @@
 /// - Hypervisor Timer (EL2): Accessed via CNTHCTL_EL2
 ///
 /// For guest VMs, we use the Virtual Timer which generates PPI 27.
-
 use core::arch::asm;
-use super::super::defs::*;
 
 /// Timer control register bits
-const TIMER_ENABLE: u64 = 1 << 0;    // Enable timer
+const TIMER_ENABLE: u64 = 1 << 0; // Enable timer
 #[allow(dead_code)]
-const TIMER_IMASK: u64 = 1 << 1;     // Interrupt mask (1 = masked)
-const TIMER_ISTATUS: u64 = 1 << 2;   // Interrupt status (read-only)
+const TIMER_IMASK: u64 = 1 << 1; // Interrupt mask (1 = masked)
+const TIMER_ISTATUS: u64 = 1 << 2; // Interrupt status (read-only)
 
 /// Read the virtual counter frequency
 pub fn get_frequency() -> u64 {

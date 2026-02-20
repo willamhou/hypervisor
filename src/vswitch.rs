@@ -48,9 +48,15 @@ impl NetRxRing {
     pub const fn new() -> Self {
         Self {
             frames: UnsafeCell::new([
-                FrameSlot::new(), FrameSlot::new(), FrameSlot::new(),
-                FrameSlot::new(), FrameSlot::new(), FrameSlot::new(),
-                FrameSlot::new(), FrameSlot::new(), FrameSlot::new(),
+                FrameSlot::new(),
+                FrameSlot::new(),
+                FrameSlot::new(),
+                FrameSlot::new(),
+                FrameSlot::new(),
+                FrameSlot::new(),
+                FrameSlot::new(),
+                FrameSlot::new(),
+                FrameSlot::new(),
             ]),
             head: AtomicUsize::new(0),
             tail: AtomicUsize::new(0),
@@ -92,7 +98,8 @@ impl NetRxRing {
             let copy_len = core::cmp::min(len, buf.len());
             buf[..copy_len].copy_from_slice(&slots[head].buf[..copy_len]);
         }
-        self.head.store((head + 1) % NET_RX_RING_SIZE, Ordering::Release);
+        self.head
+            .store((head + 1) % NET_RX_RING_SIZE, Ordering::Release);
         Some(len)
     }
 
@@ -104,10 +111,7 @@ impl NetRxRing {
 }
 
 /// Per-port RX ring buffers. Index = VM ID (= port ID).
-pub static PORT_RX: [NetRxRing; MAX_PORTS] = [
-    NetRxRing::new(),
-    NetRxRing::new(),
-];
+pub static PORT_RX: [NetRxRing; MAX_PORTS] = [NetRxRing::new(), NetRxRing::new()];
 
 // ── VSwitch L2 Virtual Switch ─────────────────────────────────────
 
@@ -145,10 +149,22 @@ impl VSwitch {
     const fn new() -> Self {
         Self {
             mac_table: [
-                MacEntry::new(), MacEntry::new(), MacEntry::new(), MacEntry::new(),
-                MacEntry::new(), MacEntry::new(), MacEntry::new(), MacEntry::new(),
-                MacEntry::new(), MacEntry::new(), MacEntry::new(), MacEntry::new(),
-                MacEntry::new(), MacEntry::new(), MacEntry::new(), MacEntry::new(),
+                MacEntry::new(),
+                MacEntry::new(),
+                MacEntry::new(),
+                MacEntry::new(),
+                MacEntry::new(),
+                MacEntry::new(),
+                MacEntry::new(),
+                MacEntry::new(),
+                MacEntry::new(),
+                MacEntry::new(),
+                MacEntry::new(),
+                MacEntry::new(),
+                MacEntry::new(),
+                MacEntry::new(),
+                MacEntry::new(),
+                MacEntry::new(),
             ],
             mac_count: 0,
             port_count: 0,
@@ -249,15 +265,21 @@ static VSWITCH: VSwitchCell = VSwitchCell(UnsafeCell::new(VSwitch::new()));
 
 /// Public API — called from VirtioNet::process_tx() inside DEVICES lock.
 pub fn vswitch_forward(src_port: usize, frame: &[u8]) {
-    unsafe { (*VSWITCH.0.get()).forward(src_port, frame); }
+    unsafe {
+        (*VSWITCH.0.get()).forward(src_port, frame);
+    }
 }
 
 /// Register a port (called during attach_virtio_net).
 pub fn vswitch_add_port(port_id: usize) {
-    unsafe { (*VSWITCH.0.get()).add_port(port_id); }
+    unsafe {
+        (*VSWITCH.0.get()).add_port(port_id);
+    }
 }
 
 /// Reset VSwitch state (for tests).
 pub fn vswitch_reset() {
-    unsafe { (*VSWITCH.0.get()).reset(); }
+    unsafe {
+        (*VSWITCH.0.get()).reset();
+    }
 }

@@ -72,8 +72,8 @@
 //! as pending and will be delivered when the guest resumes execution with
 //! interrupts enabled.
 
-use crate::arch::aarch64::{VcpuContext, enter_guest};
 use crate::arch::aarch64::vcpu_arch_state::VcpuArchState;
+use crate::arch::aarch64::{enter_guest, VcpuContext};
 use crate::vcpu_interrupt::VirtualInterruptState;
 
 /// Virtual CPU execution state
@@ -143,7 +143,7 @@ pub struct Vcpu {
 
 impl Vcpu {
     /// Create a new vCPU
-    /// 
+    ///
     /// # Arguments
     /// * `id` - Unique identifier for this vCPU
     /// * `entry_point` - Guest code entry point (physical address)
@@ -159,22 +159,22 @@ impl Vcpu {
             arch_state,
         }
     }
-    
+
     /// Get vCPU ID
     pub fn id(&self) -> usize {
         self.id
     }
-    
+
     /// Get current state
     pub fn state(&self) -> VcpuState {
         self.state
     }
-    
+
     /// Get mutable reference to context
     pub fn context_mut(&mut self) -> &mut VcpuContext {
         &mut self.context
     }
-    
+
     /// Get reference to context
     pub fn context(&self) -> &VcpuContext {
         &self.context
@@ -184,11 +184,11 @@ impl Vcpu {
     pub fn arch_state_mut(&mut self) -> &mut VcpuArchState {
         &mut self.arch_state
     }
-    
+
     /// Run the vCPU
-    /// 
+    ///
     /// This will enter the guest and execute code until an exit occurs.
-    /// 
+    ///
     /// # Returns
     /// * `Ok(())` - Guest exited normally (HVC #0)
     /// * `Err("WFI")` - Guest executed WFI (waiting for interrupt)
@@ -212,9 +212,7 @@ impl Vcpu {
         }
 
         // Enter the guest
-        let result = unsafe {
-            enter_guest(&mut self.context as *mut VcpuContext)
-        };
+        let result = unsafe { enter_guest(&mut self.context as *mut VcpuContext) };
 
         // Save per-vCPU architectural state
         self.arch_state.save();
@@ -228,23 +226,23 @@ impl Vcpu {
         }
 
         match result {
-            0 => Ok(()),          // Normal exit (HVC #0)
-            1 => Err("WFI"),      // Guest executed WFI
+            0 => Ok(()),     // Normal exit (HVC #0)
+            1 => Err("WFI"), // Guest executed WFI
             _ => Err("Guest exit with error"),
         }
     }
-    
+
     /// Stop the vCPU
     pub fn stop(&mut self) {
         self.state = VcpuState::Stopped;
     }
-    
+
     /// Reset the vCPU to initial state
     pub fn reset(&mut self, entry_point: u64, stack_pointer: u64) {
         self.context = VcpuContext::new(entry_point, stack_pointer);
         self.state = VcpuState::Ready;
     }
-    
+
     /// Inject a virtual IRQ into the guest
     ///
     /// # Arguments
@@ -252,22 +250,22 @@ impl Vcpu {
     pub fn inject_irq(&mut self, irq_num: u32) {
         self.virt_irq.inject_irq(irq_num);
     }
-    
+
     /// Check if vCPU has pending interrupts
     pub fn has_pending_interrupt(&self) -> bool {
         self.virt_irq.has_pending_interrupt()
     }
-    
+
     /// Clear pending IRQ
     pub fn clear_irq(&mut self) {
         self.virt_irq.clear_irq();
     }
-    
+
     /// Get virtual interrupt state
     pub fn virt_irq(&self) -> &VirtualInterruptState {
         &self.virt_irq
     }
-    
+
     /// Get mutable virtual interrupt state
     pub fn virt_irq_mut(&mut self) -> &mut VirtualInterruptState {
         &mut self.virt_irq

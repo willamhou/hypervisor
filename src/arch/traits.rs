@@ -48,7 +48,8 @@ pub enum MemoryType {
 
 /// Stage-2 / G-stage page table mapper
 pub trait Stage2Mapper {
-    fn map_region(&mut self, ipa: u64, size: u64, mem_type: MemoryType) -> Result<(), &'static str>;
+    fn map_region(&mut self, ipa: u64, size: u64, mem_type: MemoryType)
+        -> Result<(), &'static str>;
     fn reset(&mut self);
     fn install(&self);
     fn root_table_addr(&self) -> u64;

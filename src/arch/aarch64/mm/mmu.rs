@@ -10,7 +10,7 @@
 //! - Level 3: 4KB pages (entry covers bits [20:12])
 
 use crate::arch::aarch64::defs::*;
-use crate::arch::traits::{Stage2Mapper, MemoryType};
+use crate::arch::traits::{MemoryType, Stage2Mapper};
 
 /// Page size (4KB)
 pub const PAGE_SIZE: usize = 4096;
@@ -32,7 +32,7 @@ impl S2PageTableEntry {
         let entry = (addr & PTE_ADDR_MASK) // Address bits [47:12]
             | PTE_VALID                      // Valid bit
             | (0 << 1)                       // Block entry (not table)
-            | (attrs.bits() << 2);           // Attributes
+            | (attrs.bits() << 2); // Attributes
         Self(entry)
     }
 
@@ -47,9 +47,7 @@ impl S2PageTableEntry {
 
     /// Create a table entry (points to next level)
     pub const fn table(next_level_addr: u64) -> Self {
-        let entry = (next_level_addr & PTE_ADDR_MASK)
-            | PTE_VALID
-            | PTE_TABLE;
+        let entry = (next_level_addr & PTE_ADDR_MASK) | PTE_VALID | PTE_TABLE;
         Self(entry)
     }
 
@@ -92,7 +90,7 @@ impl MemoryAttributes {
         bits: (0b1111 << 0)  // MemAttr[3:0] = Normal, Write-back
             | (0b11 << 4)     // S2AP[1:0] = Read-Write
             | (0b11 << 6)     // SH[1:0] = Inner shareable
-            | (1 << 8),       // AF = 1
+            | (1 << 8), // AF = 1
     };
 
     /// Device memory (MMIO), read-write
@@ -100,7 +98,7 @@ impl MemoryAttributes {
         bits: (0b0000 << 0)  // MemAttr[3:0] = Device-nGnRnE
             | (0b11 << 4)     // S2AP[1:0] = Read-Write
             | (0b00 << 6)     // SH[1:0] = Non-shareable
-            | (1 << 8),       // AF = 1
+            | (1 << 8), // AF = 1
     };
 
     /// Read-only memory
@@ -108,7 +106,7 @@ impl MemoryAttributes {
         bits: (0b1111 << 0)  // MemAttr[3:0] = Normal
             | (0b01 << 4)     // S2AP[1:0] = Read-Only
             | (0b11 << 6)     // SH[1:0] = Inner shareable
-            | (1 << 8),       // AF = 1
+            | (1 << 8), // AF = 1
     };
 
     /// Get raw bits
@@ -176,8 +174,7 @@ impl Stage2Config {
             | VTCR_PS_48BIT;
 
         // VTTBR_EL2: VMID[63:48] | page table base[47:1]
-        let vttbr = (page_table_addr & 0x0000_FFFF_FFFF_FFFE)
-            | ((vmid as u64) << 48);
+        let vttbr = (page_table_addr & 0x0000_FFFF_FFFF_FFFE) | ((vmid as u64) << 48);
 
         Self { vttbr, vtcr }
     }
@@ -263,7 +260,8 @@ impl IdentityMapper {
         // Ensure L0 entry points to L1 table
         if !self.l0_table.entry(l0_index).is_valid() {
             let l1_addr = self.l1_table.addr();
-            self.l0_table.set_entry(l0_index, S2PageTableEntry::table(l1_addr));
+            self.l0_table
+                .set_entry(l0_index, S2PageTableEntry::table(l1_addr));
         }
 
         // Check if L1 entry exists, allocate L2 table if needed
@@ -274,7 +272,8 @@ impl IdentityMapper {
 
             let idx = self.l2_count;
             let l2_addr = self.l2_tables[idx].addr();
-            self.l1_table.set_entry(l1_index, S2PageTableEntry::table(l2_addr));
+            self.l1_table
+                .set_entry(l1_index, S2PageTableEntry::table(l2_addr));
             self.l2_count += 1;
             idx
         } else {
@@ -332,10 +331,8 @@ pub struct DynamicIdentityMapper {
 impl DynamicIdentityMapper {
     /// Create a new dynamic identity mapper
     pub fn new() -> Self {
-        let l0 = crate::mm::heap::alloc_page()
-            .expect("Failed to allocate L0 table");
-        let l1 = crate::mm::heap::alloc_page()
-            .expect("Failed to allocate L1 table");
+        let l0 = crate::mm::heap::alloc_page().expect("Failed to allocate L0 table");
+        let l1 = crate::mm::heap::alloc_page().expect("Failed to allocate L1 table");
 
         unsafe {
             core::ptr::write_bytes(l0 as *mut u8, 0, PAGE_SIZE);
@@ -354,7 +351,12 @@ impl DynamicIdentityMapper {
     }
 
     /// Map a memory region with identity mapping
-    pub fn map_region(&mut self, ipa: u64, size: u64, attr: MemoryAttribute) -> Result<(), &'static str> {
+    pub fn map_region(
+        &mut self,
+        ipa: u64,
+        size: u64,
+        attr: MemoryAttribute,
+    ) -> Result<(), &'static str> {
         let mut offset = 0;
 
         while offset < size {
@@ -391,8 +393,7 @@ impl DynamicIdentityMapper {
             return Err("Too many L2 tables");
         }
 
-        let l2 = crate::mm::heap::alloc_page()
-            .ok_or("Failed to allocate L2 table")?;
+        let l2 = crate::mm::heap::alloc_page().ok_or("Failed to allocate L2 table")?;
 
         unsafe {
             core::ptr::write_bytes(l2 as *mut u8, 0, PAGE_SIZE);
@@ -414,15 +415,9 @@ impl DynamicIdentityMapper {
     /// Create a 2MB block entry
     fn make_block_entry(&self, pa: u64, attr: MemoryAttribute) -> u64 {
         let attr_bits = match attr {
-            MemoryAttribute::Normal => {
-                (0b1111 << 2) | (0b11 << 6) | (0b11 << 8) | (1 << 10)
-            }
-            MemoryAttribute::Device => {
-                (0b0000 << 2) | (0b11 << 6) | (0b00 << 8) | (1 << 10)
-            }
-            MemoryAttribute::ReadOnly => {
-                (0b1111 << 2) | (0b01 << 6) | (0b11 << 8) | (1 << 10)
-            }
+            MemoryAttribute::Normal => (0b1111 << 2) | (0b11 << 6) | (0b11 << 8) | (1 << 10),
+            MemoryAttribute::Device => (0b0000 << 2) | (0b11 << 6) | (0b00 << 8) | (1 << 10),
+            MemoryAttribute::ReadOnly => (0b1111 << 2) | (0b01 << 6) | (0b11 << 8) | (1 << 10),
         };
         (pa & !BLOCK_MASK_2MB) | attr_bits | PTE_VALID
     }
@@ -447,17 +442,22 @@ impl DynamicIdentityMapper {
             l2_entry & PTE_ADDR_MASK
         } else {
             // L2 entry invalid — create fresh L3 table (all invalid entries)
-            let l3 = crate::mm::heap::alloc_page()
-                .ok_or("Failed to allocate L3 table")?;
-            unsafe { core::ptr::write_bytes(l3 as *mut u8, 0, PAGE_SIZE); }
+            let l3 = crate::mm::heap::alloc_page().ok_or("Failed to allocate L3 table")?;
+            unsafe {
+                core::ptr::write_bytes(l3 as *mut u8, 0, PAGE_SIZE);
+            }
             let l3_desc = l3 | PTE_VALID | PTE_TABLE;
-            unsafe { *(l2_table as *mut u64).add(l2_idx) = l3_desc; }
+            unsafe {
+                *(l2_table as *mut u64).add(l2_idx) = l3_desc;
+            }
             l3
         };
 
         // Write the 4KB page entry (L3 page descriptor: bit[1]=1 means page at L3)
         let page_entry = self.make_page_entry(ipa & !PAGE_MASK_4KB, attr);
-        unsafe { *(l3_table as *mut u64).add(l3_idx) = page_entry; }
+        unsafe {
+            *(l3_table as *mut u64).add(l3_idx) = page_entry;
+        }
 
         // TLB invalidate for this IPA
         Self::tlbi_ipa(ipa);
@@ -488,7 +488,9 @@ impl DynamicIdentityMapper {
         };
 
         let l3_idx = ((ipa >> 12) & PT_INDEX_MASK) as usize;
-        unsafe { *(l3_table as *mut u64).add(l3_idx) = 0; }
+        unsafe {
+            *(l3_table as *mut u64).add(l3_idx) = 0;
+        }
         Self::tlbi_ipa(ipa);
         Ok(())
     }
@@ -496,13 +498,17 @@ impl DynamicIdentityMapper {
     /// Split a 2MB block entry into 512 x 4KB page entries.
     ///
     /// Uses break-before-make: invalidate L2 entry → TLB flush → write new table.
-    fn split_2mb_block(&self, l2_table: u64, l2_idx: usize, block_entry: u64) -> Result<u64, &'static str> {
+    fn split_2mb_block(
+        &self,
+        l2_table: u64,
+        l2_idx: usize,
+        block_entry: u64,
+    ) -> Result<u64, &'static str> {
         let block_pa = block_entry & !BLOCK_MASK_2MB;
         let block_attr_bits = block_entry & BLOCK_MASK_2MB & !0x3; // strip valid+type bits
 
         // Allocate L3 table
-        let l3 = crate::mm::heap::alloc_page()
-            .ok_or("Failed to allocate L3 table for split")?;
+        let l3 = crate::mm::heap::alloc_page().ok_or("Failed to allocate L3 table for split")?;
 
         // Fill L3 with 512 page entries preserving original attributes.
         // L3 page descriptor: [PA | attrs | bit1=1(page) | bit0=1(valid)]
@@ -517,12 +523,16 @@ impl DynamicIdentityMapper {
         }
 
         // Break-before-make: invalidate old L2 entry
-        unsafe { *(l2_table as *mut u64).add(l2_idx) = 0; }
+        unsafe {
+            *(l2_table as *mut u64).add(l2_idx) = 0;
+        }
         Self::tlbi_all();
 
         // Write new L2 table descriptor pointing to L3
         let l2_desc = l3 | PTE_VALID | PTE_TABLE;
-        unsafe { *(l2_table as *mut u64).add(l2_idx) = l2_desc; }
+        unsafe {
+            *(l2_table as *mut u64).add(l2_idx) = l2_desc;
+        }
         Self::tlbi_all();
 
         Ok(l3)
@@ -531,15 +541,9 @@ impl DynamicIdentityMapper {
     /// Create a 4KB page entry (L3 level).
     fn make_page_entry(&self, pa: u64, attr: MemoryAttribute) -> u64 {
         let attr_bits = match attr {
-            MemoryAttribute::Normal => {
-                (0b1111 << 2) | (0b11 << 6) | (0b11 << 8) | (1 << 10)
-            }
-            MemoryAttribute::Device => {
-                (0b0000 << 2) | (0b11 << 6) | (0b00 << 8) | (1 << 10)
-            }
-            MemoryAttribute::ReadOnly => {
-                (0b1111 << 2) | (0b01 << 6) | (0b11 << 8) | (1 << 10)
-            }
+            MemoryAttribute::Normal => (0b1111 << 2) | (0b11 << 6) | (0b11 << 8) | (1 << 10),
+            MemoryAttribute::Device => (0b0000 << 2) | (0b11 << 6) | (0b00 << 8) | (1 << 10),
+            MemoryAttribute::ReadOnly => (0b1111 << 2) | (0b01 << 6) | (0b11 << 8) | (1 << 10),
         };
         // L3 page: bit[1] = 1 (page), bit[0] = 1 (valid)
         (pa & !PAGE_MASK_4KB) | attr_bits | PTE_TABLE | PTE_VALID
@@ -670,7 +674,12 @@ impl Default for DynamicIdentityMapper {
 // ── Stage2Mapper trait implementation ─────────────────────────────────
 
 impl Stage2Mapper for DynamicIdentityMapper {
-    fn map_region(&mut self, ipa: u64, size: u64, mem_type: MemoryType) -> Result<(), &'static str> {
+    fn map_region(
+        &mut self,
+        ipa: u64,
+        size: u64,
+        mem_type: MemoryType,
+    ) -> Result<(), &'static str> {
         let attr = match mem_type {
             MemoryType::Normal => MemoryAttribute::Normal,
             MemoryType::Device => MemoryAttribute::Device,

@@ -4,13 +4,13 @@
 //! The disk image is loaded into guest physical memory by QEMU's -device loader.
 //! Since we use identity mapping, the hypervisor reads/writes the image directly.
 
-use super::VirtioDevice;
 use super::queue::Virtqueue;
+use super::VirtioDevice;
 
 // ── Virtio-blk request types ────────────────────────────────────────
-const VIRTIO_BLK_T_IN: u32 = 0;      // Read from disk
-const VIRTIO_BLK_T_OUT: u32 = 1;     // Write to disk
-const VIRTIO_BLK_T_GET_ID: u32 = 8;  // Get device ID string
+const VIRTIO_BLK_T_IN: u32 = 0; // Read from disk
+const VIRTIO_BLK_T_OUT: u32 = 1; // Write to disk
+const VIRTIO_BLK_T_GET_ID: u32 = 8; // Get device ID string
 
 // ── Virtio-blk status codes ────────────────────────────────────────
 const VIRTIO_BLK_S_OK: u8 = 0;
@@ -56,7 +56,13 @@ impl VirtioBlk {
     }
 
     /// Process a single virtio-blk request from a descriptor chain.
-    fn process_request(&mut self, queue: &mut Virtqueue, head: u16, descs: &[super::queue::VirtqDesc], count: usize) {
+    fn process_request(
+        &mut self,
+        queue: &mut Virtqueue,
+        head: u16,
+        descs: &[super::queue::VirtqDesc],
+        count: usize,
+    ) {
         if count < 2 {
             // Need at least header + status
             return;
@@ -64,9 +70,8 @@ impl VirtioBlk {
 
         // Descriptor 0: request header (device-readable, 16 bytes)
         let hdr_addr = descs[0].addr;
-        let header: VirtioBlkReqHeader = unsafe {
-            core::ptr::read_volatile(hdr_addr as *const VirtioBlkReqHeader)
-        };
+        let header: VirtioBlkReqHeader =
+            unsafe { core::ptr::read_volatile(hdr_addr as *const VirtioBlkReqHeader) };
 
         let mut status = VIRTIO_BLK_S_OK;
         let mut total_written = 0u32;
@@ -131,11 +136,7 @@ impl VirtioBlk {
                     let id = b"hypervisor-vda\0\0\0\0\0\0";
                     let copy_len = core::cmp::min(desc.len as usize, 20);
                     unsafe {
-                        core::ptr::copy_nonoverlapping(
-                            id.as_ptr(),
-                            desc.addr as *mut u8,
-                            copy_len,
-                        );
+                        core::ptr::copy_nonoverlapping(id.as_ptr(), desc.addr as *mut u8, copy_len);
                     }
                     total_written = copy_len as u32;
                 }
@@ -158,7 +159,9 @@ impl VirtioBlk {
 }
 
 impl VirtioDevice for VirtioBlk {
-    fn device_id(&self) -> u32 { 2 } // VIRTIO_ID_BLOCK
+    fn device_id(&self) -> u32 {
+        2
+    } // VIRTIO_ID_BLOCK
 
     fn device_features(&self) -> u64 {
         VIRTIO_F_VERSION_1 | VIRTIO_BLK_F_BLK_SIZE | VIRTIO_BLK_F_SIZE_MAX | VIRTIO_BLK_F_SEG_MAX
@@ -196,7 +199,11 @@ impl VirtioDevice for VirtioBlk {
         }
     }
 
-    fn num_queues(&self) -> u16 { 1 } // Single request queue
+    fn num_queues(&self) -> u16 {
+        1
+    } // Single request queue
 
-    fn max_queue_size(&self) -> u16 { 256 }
+    fn max_queue_size(&self) -> u16 {
+        256
+    }
 }

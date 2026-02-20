@@ -1,3 +1,4 @@
+use super::super::defs::*;
 /// ARM Generic Interrupt Controller v3/v4 support
 ///
 /// GICv3 introduces major architectural changes:
@@ -9,9 +10,7 @@
 /// For EL2 hypervisor usage, we primarily use:
 /// - ICC_*_EL2 system registers for interrupt control
 /// - ICH_*_EL2 system registers for virtual interrupt injection
-
 use core::arch::asm;
-use super::super::defs::*;
 
 /// Virtual Timer interrupt (PPI 27)
 pub const VTIMER_IRQ: u32 = 27;
@@ -359,11 +358,19 @@ impl GicV3VirtualInterface {
     pub fn write_lr(n: u32, value: u64) {
         unsafe {
             match n {
-                0 => asm!("msr ICH_LR0_EL2, {value}", value = in(reg) value, options(nostack, nomem)),
-                1 => asm!("msr ICH_LR1_EL2, {value}", value = in(reg) value, options(nostack, nomem)),
-                2 => asm!("msr ICH_LR2_EL2, {value}", value = in(reg) value, options(nostack, nomem)),
-                3 => asm!("msr ICH_LR3_EL2, {value}", value = in(reg) value, options(nostack, nomem)),
-                _ => {}, // Ignore invalid LR number
+                0 => {
+                    asm!("msr ICH_LR0_EL2, {value}", value = in(reg) value, options(nostack, nomem))
+                }
+                1 => {
+                    asm!("msr ICH_LR1_EL2, {value}", value = in(reg) value, options(nostack, nomem))
+                }
+                2 => {
+                    asm!("msr ICH_LR2_EL2, {value}", value = in(reg) value, options(nostack, nomem))
+                }
+                3 => {
+                    asm!("msr ICH_LR3_EL2, {value}", value = in(reg) value, options(nostack, nomem))
+                }
+                _ => {} // Ignore invalid LR number
             }
             asm!("isb", options(nostack, nomem));
         }
@@ -382,9 +389,9 @@ impl GicV3VirtualInterface {
             // If state is 00 (Invalid), this LR is free
             if state == 0 {
                 let lr_value = (Self::LR_STATE_PENDING << LR_STATE_SHIFT)
-                              | LR_GROUP1_BIT
-                              | ((priority as u64) << LR_PRIORITY_SHIFT)
-                              | (intid as u64);
+                    | LR_GROUP1_BIT
+                    | ((priority as u64) << LR_PRIORITY_SHIFT)
+                    | (intid as u64);
 
                 Self::write_lr(i, lr_value);
                 return Ok(());
@@ -419,11 +426,11 @@ impl GicV3VirtualInterface {
 
             if state == 0 {
                 let lr_value = (Self::LR_STATE_PENDING << LR_STATE_SHIFT)
-                              | LR_HW_BIT
-                              | LR_GROUP1_BIT
-                              | ((priority as u64) << LR_PRIORITY_SHIFT)
-                              | (((pintid as u64) & LR_PINTID_MASK) << LR_PINTID_SHIFT)
-                              | (intid as u64);
+                    | LR_HW_BIT
+                    | LR_GROUP1_BIT
+                    | ((priority as u64) << LR_PRIORITY_SHIFT)
+                    | (((pintid as u64) & LR_PINTID_MASK) << LR_PINTID_SHIFT)
+                    | (intid as u64);
 
                 Self::write_lr(i, lr_value);
                 return Ok(());
@@ -462,7 +469,7 @@ impl GicV3VirtualInterface {
         // Bits [31:24]: VPMR = 0xFF (allow all priorities)
         // Bit 1: VENG1 = 1 (enable Group 1 interrupts for guest)
         let vmcr: u32 = ((ICC_PMR_ALLOW_ALL as u32) << 24) // VPMR
-                        | (1 << 1);                          // VENG1
+                        | (1 << 1); // VENG1
         Self::write_vmcr(vmcr);
 
         // Clear all list registers
@@ -642,9 +649,9 @@ mod tests {
         let priority = IRQ_DEFAULT_PRIORITY;
 
         let lr_value = (GicV3VirtualInterface::LR_STATE_PENDING << LR_STATE_SHIFT)
-                      | LR_GROUP1_BIT
-                      | ((priority as u64) << LR_PRIORITY_SHIFT)
-                      | (intid as u64);
+            | LR_GROUP1_BIT
+            | ((priority as u64) << LR_PRIORITY_SHIFT)
+            | (intid as u64);
 
         // Extract fields
         let state = (lr_value >> LR_STATE_SHIFT) & LR_STATE_MASK;

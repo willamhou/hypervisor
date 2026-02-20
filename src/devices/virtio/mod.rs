@@ -3,10 +3,10 @@
 //! Implements the virtio-mmio transport layer and provides the `VirtioDevice`
 //! trait for concrete device backends (e.g., virtio-blk).
 
-pub mod queue;
-pub mod mmio;
 pub mod blk;
+pub mod mmio;
 pub mod net;
+pub mod queue;
 
 use queue::Virtqueue;
 
@@ -39,5 +39,7 @@ pub trait VirtioDevice {
     fn num_queues(&self) -> u16;
 
     /// Maximum queue size (number of descriptors).
-    fn max_queue_size(&self) -> u16 { 256 }
+    fn max_queue_size(&self) -> u16 {
+        256
+    }
 }

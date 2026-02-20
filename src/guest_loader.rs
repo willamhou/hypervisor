@@ -3,11 +3,11 @@
 //! This module provides configuration and boot logic for loading
 //! real ELF binaries as guests.
 
-use crate::vm::Vm;
-use crate::uart_puts;
-use crate::uart_put_hex;
-use crate::platform;
 use crate::arch::aarch64::defs::*;
+use crate::platform;
+use crate::uart_put_hex;
+use crate::uart_puts;
+use crate::vm::Vm;
 
 /// Guest type for different kernel formats
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -49,7 +49,11 @@ impl GuestConfig {
             for i in 0..8 {
                 let byte = *elf_header.add(i);
                 let hex_chars = b"0123456789abcdef";
-                uart_puts(&[hex_chars[(byte >> 4) as usize], hex_chars[(byte & 0xf) as usize], b' ']);
+                uart_puts(&[
+                    hex_chars[(byte >> 4) as usize],
+                    hex_chars[(byte & 0xf) as usize],
+                    b' ',
+                ]);
             }
             uart_puts(b"\n");
 
@@ -118,14 +122,19 @@ impl GuestConfig {
                 for col in 0..16 {
                     let byte = *header.add(row * 16 + col);
                     let hex_chars = b"0123456789abcdef";
-                    uart_puts(&[hex_chars[(byte >> 4) as usize], hex_chars[(byte & 0xf) as usize], b' ']);
+                    uart_puts(&[
+                        hex_chars[(byte >> 4) as usize],
+                        hex_chars[(byte & 0xf) as usize],
+                        b' ',
+                    ]);
                 }
                 uart_puts(b"\n");
             }
 
             // Check for ARM64 magic at offset 0x38
             let magic = core::ptr::read_volatile((kernel_addr + 0x38) as *const u32);
-            if magic == 0x644d5241 { // "ARMd" little-endian
+            if magic == 0x644d5241 {
+                // "ARMd" little-endian
                 uart_puts(b"[LINUX] ARM64 Image format detected\n");
 
                 let text_offset = core::ptr::read_volatile((kernel_addr + 0x08) as *const u64);
@@ -276,8 +285,8 @@ pub fn run_guest(config: &GuestConfig) -> Result<(), &'static str> {
         if let Some(vcpu) = vm.vcpu_mut(0) {
             let arch = vcpu.arch_state_mut();
             arch.sctlr_el1 = 0x30D0_0800; // RES1, MMU off, caches off
-            arch.cpacr_el1 = 3 << 20;      // FP/SIMD access enabled
-            // All other EL1 regs default to 0 (from VcpuArchState::new)
+            arch.cpacr_el1 = 3 << 20; // FP/SIMD access enabled
+                                      // All other EL1 regs default to 0 (from VcpuArchState::new)
         }
 
         // Configure EL2 registers (not per-vCPU)
@@ -340,10 +349,8 @@ pub fn run_guest(config: &GuestConfig) -> Result<(), &'static str> {
 
     // Attach virtio-blk device (backed by in-memory disk image loaded by QEMU)
     if config.guest_type == GuestType::Linux {
-        crate::global::DEVICES[0].attach_virtio_blk(
-            platform::VIRTIO_DISK_ADDR,
-            platform::VIRTIO_DISK_SIZE,
-        );
+        crate::global::DEVICES[0]
+            .attach_virtio_blk(platform::VIRTIO_DISK_ADDR, platform::VIRTIO_DISK_SIZE);
     }
 
     // Attach virtio-net device
@@ -448,8 +455,8 @@ fn enable_physical_uart_irq() {
 /// `secondary_entry` in boot.S (EL2, MMU off).
 #[cfg(feature = "multi_pcpu")]
 fn wake_secondary_pcpus() {
-    use crate::uart_puts;
     use crate::uart_put_hex;
+    use crate::uart_puts;
     // PSCI CPU_ON (64-bit): function_id=0xC4000003
     const PSCI_CPU_ON_64: u64 = 0xC400_0003;
     const PSCI_SUCCESS: u64 = 0;
@@ -517,8 +524,8 @@ fn wake_secondary_pcpus() {
 /// Both share the same physical CPU via round-robin scheduling.
 #[cfg(feature = "multi_vm")]
 pub fn run_multi_vm_guests() -> Result<(), &'static str> {
-    use crate::vm::{Vm, run_multi_vm};
     use crate::arch::aarch64::defs::*;
+    use crate::vm::{run_multi_vm, Vm};
 
     uart_puts(b"\n========================================\n");
     uart_puts(b"  Multi-VM Boot (2 Linux VMs)\n");
@@ -551,10 +558,8 @@ pub fn run_multi_vm_guests() -> Result<(), &'static str> {
     }
 
     // Attach virtio-blk to VM 0
-    crate::global::DEVICES[0].attach_virtio_blk(
-        platform::VIRTIO_DISK_ADDR,
-        platform::VIRTIO_DISK_SIZE,
-    );
+    crate::global::DEVICES[0]
+        .attach_virtio_blk(platform::VIRTIO_DISK_ADDR, platform::VIRTIO_DISK_SIZE);
     crate::global::DEVICES[0].attach_virtio_net(0);
 
     // --- VM 1 setup ---
@@ -587,10 +592,8 @@ pub fn run_multi_vm_guests() -> Result<(), &'static str> {
     }
 
     // Attach virtio-blk to VM 1 (different disk image address)
-    crate::global::DEVICES[1].attach_virtio_blk(
-        platform::VM1_VIRTIO_DISK_ADDR,
-        platform::VIRTIO_DISK_SIZE,
-    );
+    crate::global::DEVICES[1]
+        .attach_virtio_blk(platform::VM1_VIRTIO_DISK_ADDR, platform::VIRTIO_DISK_SIZE);
     crate::global::DEVICES[1].attach_virtio_net(1);
 
     // Restore VM 0's Stage-2 as active (run_multi_vm will switch as needed)

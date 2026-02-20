@@ -4,8 +4,8 @@
 //! 1. Prints a character via UART
 //! 2. Exits via HVC
 
-use hypervisor::vm::Vm;
 use hypervisor::uart_puts;
+use hypervisor::vm::Vm;
 
 /// Simple guest code that writes to UART then exits
 #[repr(C, align(4096))]
@@ -18,18 +18,16 @@ static SIMPLE_GUEST: SimpleGuest = SimpleGuest {
     code: [
         // Write 'Z' to UART (0x09000000)
         // MOVZ x0, #0x0900, LSL #16 -> x0 = 0x09000000
-        0xd2a12000,  // movz x0, #0x900, lsl #16
-        0xd2800b41,  // movz x1, #0x5A ('Z' = 90)
-        0xb9000001,  // str w1, [x0]
-
+        0xd2a12000, // movz x0, #0x900, lsl #16
+        0xd2800b41, // movz x1, #0x5A ('Z' = 90)
+        0xb9000001, // str w1, [x0]
         // Exit via HVC
-        0xd2800020,  // mov x0, #1 (exit hypercall)
-        0xd4000002,  // hvc #0
-
+        0xd2800020, // mov x0, #1 (exit hypercall)
+        0xd4000002, // hvc #0
         // Should not reach (padding to 8 instructions)
-        0xd503207f,  // wfe
-        0x14000000,  // b .
-        0x00000000,  // nop (padding)
+        0xd503207f, // wfe
+        0x14000000, // b .
+        0x00000000, // nop (padding)
     ],
 };
 

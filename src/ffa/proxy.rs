@@ -50,9 +50,7 @@ pub fn handle_ffa_call(context: &mut VcpuContext) -> bool {
         FFA_MEM_SHARE_32 | FFA_MEM_SHARE_64 => handle_mem_share(context),
         FFA_MEM_LEND_32 | FFA_MEM_LEND_64 => handle_mem_lend(context),
         FFA_MEM_RECLAIM => handle_mem_reclaim(context),
-        FFA_MEM_RETRIEVE_REQ_32 | FFA_MEM_RETRIEVE_REQ_64 => {
-            handle_mem_retrieve_req(context)
-        }
+        FFA_MEM_RETRIEVE_REQ_32 | FFA_MEM_RETRIEVE_REQ_64 => handle_mem_retrieve_req(context),
         FFA_MEM_RELINQUISH => handle_mem_relinquish(context),
 
         // Blocked: FFA_MEM_DONATE (pKVM policy)
@@ -120,16 +118,25 @@ fn handle_id_get(context: &mut VcpuContext) -> bool {
 /// Output: x0 = FFA_SUCCESS_32 if supported, FFA_ERROR + NOT_SUPPORTED if not
 fn handle_features(context: &mut VcpuContext) -> bool {
     let queried_fid = context.gp_regs.x1;
-    let supported = matches!(queried_fid,
-        FFA_VERSION | FFA_ID_GET | FFA_FEATURES |
-        FFA_RXTX_MAP | FFA_RXTX_UNMAP | FFA_RX_RELEASE |
-        FFA_PARTITION_INFO_GET |
-        FFA_MSG_SEND_DIRECT_REQ_32 | FFA_MSG_SEND_DIRECT_REQ_64 |
-        FFA_MEM_SHARE_32 | FFA_MEM_SHARE_64 |
-        FFA_MEM_LEND_32 | FFA_MEM_LEND_64 |
-        FFA_MEM_RECLAIM |
-        FFA_MEM_RETRIEVE_REQ_32 | FFA_MEM_RETRIEVE_REQ_64 |
-        FFA_MEM_RELINQUISH
+    let supported = matches!(
+        queried_fid,
+        FFA_VERSION
+            | FFA_ID_GET
+            | FFA_FEATURES
+            | FFA_RXTX_MAP
+            | FFA_RXTX_UNMAP
+            | FFA_RX_RELEASE
+            | FFA_PARTITION_INFO_GET
+            | FFA_MSG_SEND_DIRECT_REQ_32
+            | FFA_MSG_SEND_DIRECT_REQ_64
+            | FFA_MEM_SHARE_32
+            | FFA_MEM_SHARE_64
+            | FFA_MEM_LEND_32
+            | FFA_MEM_LEND_64
+            | FFA_MEM_RECLAIM
+            | FFA_MEM_RETRIEVE_REQ_32
+            | FFA_MEM_RETRIEVE_REQ_64
+            | FFA_MEM_RELINQUISH
     );
 
     if supported {
@@ -342,29 +349,28 @@ fn handle_mem_share_or_lend(context: &mut VcpuContext, is_lend: bool) -> bool {
     let mbox = mailbox::get_mailbox(vm_id);
 
     // Choose interface: descriptor-based (mailbox mapped) or register-based (fallback)
-    let (sender_id_from_desc, receiver_id, ranges, range_count, total_page_count) =
-        if mbox.mapped {
-            // FF-A v1.1 descriptor path: parse TX buffer
-            match parse_share_descriptor(context, mbox) {
-                Ok(info) => info,
-                Err(code) => {
-                    ffa_error(context, code);
-                    return true;
-                }
-            }
-        } else {
-            // Register-based fallback (for unit tests and simple use)
-            let base_ipa = context.gp_regs.x3;
-            let page_count = context.gp_regs.x4 as u32;
-            let receiver_id = context.gp_regs.x5 as u16;
-            if page_count == 0 {
-                ffa_error(context, FFA_INVALID_PARAMETERS);
+    let (sender_id_from_desc, receiver_id, ranges, range_count, total_page_count) = if mbox.mapped {
+        // FF-A v1.1 descriptor path: parse TX buffer
+        match parse_share_descriptor(context, mbox) {
+            Ok(info) => info,
+            Err(code) => {
+                ffa_error(context, code);
                 return true;
             }
-            let mut ranges = [(0u64, 0u32); descriptors::MAX_ADDR_RANGES];
-            ranges[0] = (base_ipa, page_count);
-            (0u16, receiver_id, ranges, 1usize, page_count)
-        };
+        }
+    } else {
+        // Register-based fallback (for unit tests and simple use)
+        let base_ipa = context.gp_regs.x3;
+        let page_count = context.gp_regs.x4 as u32;
+        let receiver_id = context.gp_regs.x5 as u16;
+        if page_count == 0 {
+            ffa_error(context, FFA_INVALID_PARAMETERS);
+            return true;
+        }
+        let mut ranges = [(0u64, 0u32); descriptors::MAX_ADDR_RANGES];
+        ranges[0] = (base_ipa, page_count);
+        (0u16, receiver_id, ranges, 1usize, page_count)
+    };
 
     // Validate receiver is a known partition (VM or SP)
     if !is_valid_receiver(receiver_id) {
@@ -455,7 +461,16 @@ fn handle_mem_share_or_lend(context: &mut VcpuContext, is_lend: bool) -> bool {
 fn parse_share_descriptor(
     context: &VcpuContext,
     mbox: &mailbox::FfaMailbox,
-) -> Result<(u16, u16, [(u64, u32); descriptors::MAX_ADDR_RANGES], usize, u32), i32> {
+) -> Result<
+    (
+        u16,
+        u16,
+        [(u64, u32); descriptors::MAX_ADDR_RANGES],
+        usize,
+        u32,
+    ),
+    i32,
+> {
     let total_length = context.gp_regs.x1 as u32;
     let fragment_length = context.gp_regs.x2 as u32;
 
@@ -485,8 +500,7 @@ fn parse_share_descriptor(
 ///
 /// Restores page ownership to Owned and S2AP to RW.
 fn handle_mem_reclaim(context: &mut VcpuContext) -> bool {
-    let handle = (context.gp_regs.x1 & 0xFFFF_FFFF)
-        | ((context.gp_regs.x2 & 0xFFFF_FFFF) << 32);
+    let handle = (context.gp_regs.x1 & 0xFFFF_FFFF) | ((context.gp_regs.x2 & 0xFFFF_FFFF) << 32);
 
     // Look up share record (need IPA info for restoration + retrieved status)
     let info = match stub_spmc::lookup_share_full(handle) {
@@ -536,8 +550,7 @@ fn handle_mem_reclaim(context: &mut VcpuContext) -> bool {
 /// For VM receivers: maps shared pages into receiver's Stage-2 via map_page().
 /// For SP receivers: returns NOT_SUPPORTED (stub SPMC has no Stage-2).
 fn handle_mem_retrieve_req(context: &mut VcpuContext) -> bool {
-    let handle = (context.gp_regs.x1 & 0xFFFF_FFFF)
-        | ((context.gp_regs.x2 & 0xFFFF_FFFF) << 32);
+    let handle = (context.gp_regs.x1 & 0xFFFF_FFFF) | ((context.gp_regs.x2 & 0xFFFF_FFFF) << 32);
 
     // Look up the share record
     let info = match stub_spmc::lookup_share_full(handle) {
@@ -567,8 +580,8 @@ fn handle_mem_retrieve_req(context: &mut VcpuContext) -> bool {
         #[cfg(feature = "linux_guest")]
         {
             let recv_vm_id = partition_id_to_vm_id(info.receiver_id).unwrap();
-            let l0_pa = crate::global::PER_VM_VTTBR[recv_vm_id]
-                .load(core::sync::atomic::Ordering::Acquire);
+            let l0_pa =
+                crate::global::PER_VM_VTTBR[recv_vm_id].load(core::sync::atomic::Ordering::Acquire);
             if l0_pa != 0 {
                 let walker = stage2_walker::Stage2Walker::new(l0_pa);
                 let s2ap = (S2AP_RW >> S2AP_SHIFT) as u8;
@@ -615,8 +628,7 @@ fn handle_mem_retrieve_req(context: &mut VcpuContext) -> bool {
 ///
 /// For VM receivers: unmaps shared pages from receiver's Stage-2 via unmap_page().
 fn handle_mem_relinquish(context: &mut VcpuContext) -> bool {
-    let handle = (context.gp_regs.x1 & 0xFFFF_FFFF)
-        | ((context.gp_regs.x2 & 0xFFFF_FFFF) << 32);
+    let handle = (context.gp_regs.x1 & 0xFFFF_FFFF) | ((context.gp_regs.x2 & 0xFFFF_FFFF) << 32);
 
     // Look up the share record
     let info = match stub_spmc::lookup_share_full(handle) {
@@ -646,8 +658,8 @@ fn handle_mem_relinquish(context: &mut VcpuContext) -> bool {
         #[cfg(feature = "linux_guest")]
         {
             let recv_vm_id = partition_id_to_vm_id(info.receiver_id).unwrap();
-            let l0_pa = crate::global::PER_VM_VTTBR[recv_vm_id]
-                .load(core::sync::atomic::Ordering::Acquire);
+            let l0_pa =
+                crate::global::PER_VM_VTTBR[recv_vm_id].load(core::sync::atomic::Ordering::Acquire);
             if l0_pa != 0 {
                 let walker = stage2_walker::Stage2Walker::new(l0_pa);
                 for i in 0..info.range_count {

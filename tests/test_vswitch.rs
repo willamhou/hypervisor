@@ -1,7 +1,7 @@
 //! VSwitch L2 forwarding tests
 
-use hypervisor::vswitch::{PORT_RX, MAX_FRAME_SIZE};
 use hypervisor::uart_puts;
+use hypervisor::vswitch::{MAX_FRAME_SIZE, PORT_RX};
 
 pub fn run_vswitch_test() {
     uart_puts(b"\n========================================\n");
@@ -46,7 +46,10 @@ pub fn run_vswitch_test() {
     frame1[6..12].copy_from_slice(&[0xAA, 0xBB, 0xCC, 0xDD, 0xEE, 0x01]);
     hypervisor::vswitch::vswitch_forward(1, &frame1);
     let len = PORT_RX[0].take(&mut buf);
-    assert_ok(len.is_some(), "port 0 should receive precisely forwarded frame");
+    assert_ok(
+        len.is_some(),
+        "port 0 should receive precisely forwarded frame",
+    );
     uart_puts(b"[VSWITCH] Test 2 PASSED\n\n");
 
     // Test 3: Broadcast floods all ports except src
@@ -58,7 +61,10 @@ pub fn run_vswitch_test() {
     let len = PORT_RX[1].take(&mut buf);
     assert_ok(len.is_some(), "port 1 should receive broadcast");
     let len = PORT_RX[0].take(&mut buf);
-    assert_ok(len.is_none(), "port 0 (src) should NOT receive own broadcast");
+    assert_ok(
+        len.is_none(),
+        "port 0 (src) should NOT receive own broadcast",
+    );
     uart_puts(b"[VSWITCH] Test 3 PASSED\n\n");
 
     // Test 4: No self-delivery on unicast

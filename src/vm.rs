@@ -3,15 +3,15 @@
 //! This module provides the [`Vm`] type which represents a complete virtual machine
 //! containing one or more vCPUs, Stage-2 memory mapping, and emulated devices.
 
-use crate::vcpu::Vcpu;
-#[cfg(not(feature = "linux_guest"))]
-use crate::arch::aarch64::{MemoryAttributes, init_stage2};
 use crate::arch::aarch64::defs::*;
 use crate::arch::aarch64::peripherals::gicv3::GicV3VirtualInterface;
+#[cfg(not(feature = "linux_guest"))]
+use crate::arch::aarch64::{init_stage2, MemoryAttributes};
 #[cfg(not(feature = "multi_pcpu"))]
 use crate::devices::MmioDevice;
-use crate::scheduler::Scheduler;
 use crate::platform;
+use crate::scheduler::Scheduler;
+use crate::vcpu::Vcpu;
 use core::sync::atomic::Ordering;
 
 /// Maximum number of vCPUs per VM
@@ -138,8 +138,8 @@ impl Vm {
 
     /// Initialize memory for the VM
     pub fn init_memory(&mut self, guest_mem_start: u64, guest_mem_size: u64) {
-        use crate::uart_puts;
         use crate::uart_put_hex;
+        use crate::uart_puts;
 
         if self.memory_initialized {
             uart_puts(b"[VM] Memory already initialized\n");
@@ -150,7 +150,8 @@ impl Vm {
 
         // Round to 2MB boundaries
         let start_aligned = guest_mem_start & !BLOCK_MASK_2MB;
-        let size_aligned = ((guest_mem_size + BLOCK_SIZE_2MB - 1) / BLOCK_SIZE_2MB) * BLOCK_SIZE_2MB;
+        let size_aligned =
+            ((guest_mem_size + BLOCK_SIZE_2MB - 1) / BLOCK_SIZE_2MB) * BLOCK_SIZE_2MB;
 
         uart_puts(b"[VM] Mapping region: 0x");
         uart_put_hex(start_aligned);
@@ -184,7 +185,11 @@ impl Vm {
             let m = &mut *MAPPER.0.get();
             m.reset();
             m.map_region(start_aligned, size_aligned, MemoryAttributes::NORMAL);
-            m.map_region(platform::GIC_REGION_BASE, platform::GIC_REGION_SIZE, MemoryAttributes::DEVICE);
+            m.map_region(
+                platform::GIC_REGION_BASE,
+                platform::GIC_REGION_SIZE,
+                MemoryAttributes::DEVICE,
+            );
             init_stage2(&*MAPPER.0.get());
         }
     }
@@ -192,8 +197,10 @@ impl Vm {
     /// Dynamic mapper path for Linux guest (supports 4KB unmap for GICR trap)
     #[cfg(feature = "linux_guest")]
     fn init_memory_dynamic(&mut self, start_aligned: u64, size_aligned: u64) {
+        use crate::arch::aarch64::mm::mmu::{
+            init_stage2_from_config, DynamicIdentityMapper, MemoryAttribute,
+        };
         use crate::uart_puts;
-        use crate::arch::aarch64::mm::mmu::{DynamicIdentityMapper, MemoryAttribute, init_stage2_from_config};
 
         let mut mapper = DynamicIdentityMapper::new();
 
@@ -209,8 +216,16 @@ impl Vm {
         let end_aligned = start_aligned + size_aligned;
 
         // Compute the overlap between [start_aligned, end_aligned) and [heap_start, heap_end)
-        let overlap_start = if heap_start > start_aligned { heap_start } else { start_aligned };
-        let overlap_end = if heap_end < end_aligned { heap_end } else { end_aligned };
+        let overlap_start = if heap_start > start_aligned {
+            heap_start
+        } else {
+            start_aligned
+        };
+        let overlap_end = if heap_end < end_aligned {
+            heap_end
+        } else {
+            end_aligned
+        };
         let has_overlap = overlap_start < overlap_end;
 
         if has_overlap {
@@ -222,7 +237,8 @@ impl Vm {
                 uart_puts(b" - 0x");
                 crate::uart_put_hex(overlap_start);
                 uart_puts(b"\n");
-                mapper.map_region(start_aligned, before_size, MemoryAttribute::Normal)
+                mapper
+                    .map_region(start_aligned, before_size, MemoryAttribute::Normal)
                     .expect("Failed to map guest memory before heap");
             }
             uart_puts(b"[VM] Heap gap (unmapped): 0x");
@@ -238,19 +254,26 @@ impl Vm {
                 uart_puts(b" - 0x");
                 crate::uart_put_hex(end_aligned);
                 uart_puts(b"\n");
-                mapper.map_region(overlap_end, after_size, MemoryAttribute::Normal)
+                mapper
+                    .map_region(overlap_end, after_size, MemoryAttribute::Normal)
                     .expect("Failed to map guest memory after heap");
             }
         } else {
             // Heap is outside guest range — single contiguous mapping
-            mapper.map_region(start_aligned, size_aligned, MemoryAttribute::Normal)
+            mapper
+                .map_region(start_aligned, size_aligned, MemoryAttribute::Normal)
                 .expect("Failed to map guest memory");
         }
 
         // Map entire GIC region as DEVICE (passthrough), then selectively
         // unmap GICD and all GICR frames so guest accesses trap to EL2
         // for emulation via VirtualGicd / VirtualGicr.
-        mapper.map_region(platform::GIC_REGION_BASE, platform::GIC_REGION_SIZE, MemoryAttribute::Device)
+        mapper
+            .map_region(
+                platform::GIC_REGION_BASE,
+                platform::GIC_REGION_SIZE,
+                MemoryAttribute::Device,
+            )
             .expect("Failed to map GIC region");
 
         // Unmap GICD (64KB = 16 × 4KB pages) for full trap-and-emulate.
@@ -258,7 +281,8 @@ impl Vm {
         // The hypervisor still accesses physical GICD at EL2 (bypasses Stage-2).
         for page in 0..16u64 {
             let addr = crate::dtb::platform_info().gicd_base + page * PAGE_SIZE_4KB;
-            mapper.unmap_4kb_page(addr)
+            mapper
+                .unmap_4kb_page(addr)
                 .expect("Failed to unmap GICD page");
         }
         uart_puts(b"[VM] GICD unmapped (trap to EL2 via VirtualGicd)\n");
@@ -268,7 +292,8 @@ impl Vm {
             let base = crate::dtb::gicr_rd_base(cpu);
             for page in 0..32u64 {
                 let addr = base + page * PAGE_SIZE_4KB;
-                mapper.unmap_4kb_page(addr)
+                mapper
+                    .unmap_4kb_page(addr)
                     .expect("Failed to unmap GICR page");
             }
         }
@@ -332,8 +357,11 @@ impl Vm {
     }
 
     /// Add a vCPU to this VM
-    pub fn add_vcpu(&mut self, entry_point: u64, stack_pointer: u64)
-        -> Result<usize, &'static str> {
+    pub fn add_vcpu(
+        &mut self,
+        entry_point: u64,
+        stack_pointer: u64,
+    ) -> Result<usize, &'static str> {
         if self.vcpu_count >= MAX_VCPUS {
             return Err("Maximum vCPU count reached");
         }
@@ -415,7 +443,8 @@ impl Vm {
         self.state = VmState::Running;
         let vs = crate::global::vm_state(self.id);
         vs.current_vcpu_id.store(vcpu_id, Ordering::Release);
-        vs.vcpu_online_mask.fetch_or(1 << vcpu_id, Ordering::Release);
+        vs.vcpu_online_mask
+            .fetch_or(1 << vcpu_id, Ordering::Release);
 
         uart_puts(b"[VM] pCPU 0 entering run_vcpu loop for vCPU 0\n");
 
@@ -550,7 +579,8 @@ impl Vm {
                     self.scheduler.remove_vcpu(vcpu_id);
                 } else if vs.pending_cpu_on.requested.load(Ordering::Relaxed) {
                     self.scheduler.yield_current();
-                } else if vs.preemption_exit
+                } else if vs
+                    .preemption_exit
                     .compare_exchange(true, false, Ordering::Acquire, Ordering::Relaxed)
                     .is_ok()
                 {
@@ -584,7 +614,9 @@ impl Vm {
         self.state = VmState::Running;
         crate::global::CURRENT_VM_ID.store(self.id, Ordering::Release);
         // Mark vCPU 0 as online (main branch had VCPU_ONLINE_MASK init'd to 1)
-        crate::global::vm_state(self.id).vcpu_online_mask.fetch_or(1, Ordering::Release);
+        crate::global::vm_state(self.id)
+            .vcpu_online_mask
+            .fetch_or(1, Ordering::Release);
 
         loop {
             if self.run_one_iteration() {
@@ -617,7 +649,9 @@ impl Vm {
         self.vcpus[id] = Some(vcpu);
         self.vcpu_count += 1;
         self.scheduler.add_vcpu(id);
-        crate::global::vm_state(self.id).vcpu_online_mask.fetch_or(1 << id, Ordering::Release);
+        crate::global::vm_state(self.id)
+            .vcpu_online_mask
+            .fetch_or(1 << id, Ordering::Release);
         // Reset exception counters so the new vCPU gets a clean slate
         crate::arch::aarch64::hypervisor::exception::reset_exception_counters();
     }
@@ -709,7 +743,9 @@ pub fn run_multi_vm(vms: &mut [Vm]) {
             continue;
         }
         vm.state = VmState::Running;
-        crate::global::vm_state(vm.id).vcpu_online_mask.fetch_or(1, Ordering::Release);
+        crate::global::vm_state(vm.id)
+            .vcpu_online_mask
+            .fetch_or(1, Ordering::Release);
     }
 
     let mut done = [false; crate::global::MAX_VMS];
@@ -783,9 +819,8 @@ pub fn ensure_vtimer_enabled(cpu_id: usize) {
     let sgi_base = crate::dtb::gicr_sgi_base(cpu_id);
     unsafe {
         // IGROUPR0: ensure Group 1 for SGIs + PPI 27
-        let igroupr0 = core::ptr::read_volatile(
-            (sgi_base + platform::GICR_IGROUPR0_OFF) as *const u32,
-        );
+        let igroupr0 =
+            core::ptr::read_volatile((sgi_base + platform::GICR_IGROUPR0_OFF) as *const u32);
         if igroupr0 & ENABLE_MASK != ENABLE_MASK {
             core::ptr::write_volatile(
                 (sgi_base + platform::GICR_IGROUPR0_OFF) as *mut u32,
@@ -808,9 +843,8 @@ fn ensure_cnthp_enabled() {
     unsafe {
         let sgi_base = crate::dtb::gicr_sgi_base(0);
         // IGROUPR0: ensure Group 1 (read-modify-write)
-        let igroupr0 = core::ptr::read_volatile(
-            (sgi_base + platform::GICR_IGROUPR0_OFF) as *const u32,
-        );
+        let igroupr0 =
+            core::ptr::read_volatile((sgi_base + platform::GICR_IGROUPR0_OFF) as *const u32);
         if igroupr0 & (1 << 26) == 0 {
             core::ptr::write_volatile(
                 (sgi_base + platform::GICR_IGROUPR0_OFF) as *mut u32,
@@ -925,7 +959,7 @@ pub fn inject_pending_spis(vcpu: &mut Vcpu) {
 /// Precondition: CURRENT_VM_ID must be set (inject_net_rx -> inject_spi
 /// reads it to route the SPI to the correct VM).
 fn drain_net_rx(vm_id: usize) {
-    use crate::vswitch::{PORT_RX, MAX_FRAME_SIZE};
+    use crate::vswitch::{MAX_FRAME_SIZE, PORT_RX};
     if PORT_RX[vm_id].is_empty() {
         return; // fast path
     }

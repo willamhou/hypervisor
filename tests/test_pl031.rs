@@ -43,9 +43,7 @@ pub fn run_pl031_test() {
         let id2 = rtc.read(0xFE8, 4).unwrap();
         let pcell0 = rtc.read(0xFF0, 4).unwrap();
         let pcell1 = rtc.read(0xFF4, 4).unwrap();
-        if id0 == 0x31 && id1 == 0x10 && id2 == 0x04
-            && pcell0 == 0x0D && pcell1 == 0xF0
-        {
+        if id0 == 0x31 && id1 == 0x10 && id2 == 0x04 && pcell0 == 0x0D && pcell1 == 0xF0 {
             hypervisor::uart_puts(b"  [PASS] PeriphID/PrimeCellID correct\n");
             pass += 1;
         } else {

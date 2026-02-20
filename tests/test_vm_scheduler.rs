@@ -1,7 +1,7 @@
 //! VM with Scheduler integration tests
 
-use hypervisor::vm::Vm;
 use hypervisor::uart_puts;
+use hypervisor::vm::Vm;
 
 pub fn run_vm_scheduler_test() {
     uart_puts(b"\n========================================\n");

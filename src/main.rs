@@ -56,7 +56,7 @@ pub extern "C" fn rust_main(dtb_addr: usize) -> ! {
     uart_puts_local(b"[INIT] Setting up exception vector table...\n");
     exception::init();
     uart_puts_local(b"[INIT] Exception handling initialized\n");
-    
+
     // Initialize GIC - try GICv3 first, fall back to GICv2
     hypervisor::arch::aarch64::peripherals::gicv3::init();
 
@@ -68,7 +68,7 @@ pub extern "C" fn rust_main(dtb_addr: usize) -> ! {
     uart_puts_local(b"[INIT] Configuring timer...\n");
     hypervisor::arch::aarch64::peripherals::timer::init_hypervisor_timer();
     hypervisor::arch::aarch64::peripherals::timer::print_timer_info();
-    
+
     // Check current exception level
     let current_el: u64;
     unsafe {
@@ -85,7 +85,9 @@ pub extern "C" fn rust_main(dtb_addr: usize) -> ! {
 
     // Initialize heap
     uart_puts_local(b"[INIT] Initializing heap...\n");
-    unsafe { hypervisor::mm::heap::init(); }
+    unsafe {
+        hypervisor::mm::heap::init();
+    }
     uart_puts_local(b"[INIT] Heap initialized (16MB at 0x41000000)\n\n");
 
     // Run the DTB parsing test (validates DTB init above)
@@ -117,7 +119,7 @@ pub extern "C" fn rust_main(dtb_addr: usize) -> ! {
 
     // Run the complete interrupt injection test (with guest exception vector)
     tests::run_complete_interrupt_test();
-    
+
     // Run the original guest test (hypercall)
     tests::run_guest_test();
 
@@ -177,7 +179,7 @@ pub extern "C" fn rust_main(dtb_addr: usize) -> ! {
     // Check if we should boot a Zephyr guest
     #[cfg(feature = "guest")]
     {
-        use hypervisor::guest_loader::{GuestConfig, run_guest};
+        use hypervisor::guest_loader::{run_guest, GuestConfig};
 
         uart_puts_local(b"\n[INIT] Booting Zephyr guest VM...\n");
 
@@ -219,7 +221,7 @@ pub extern "C" fn rust_main(dtb_addr: usize) -> ! {
     // Check if we should boot a Linux guest (single VM)
     #[cfg(all(feature = "linux_guest", not(feature = "multi_vm")))]
     {
-        use hypervisor::guest_loader::{GuestConfig, run_guest};
+        use hypervisor::guest_loader::{run_guest, GuestConfig};
 
         uart_puts_local(b"\n[INIT] Booting Linux guest VM...\n");
 
@@ -239,7 +241,7 @@ pub extern "C" fn rust_main(dtb_addr: usize) -> ! {
     uart_puts_local(b"\n========================================\n");
     uart_puts_local(b"All Sprints Complete (2.1-2.4)\n");
     uart_puts_local(b"========================================\n");
-    
+
     // Halt - we'll implement proper VM execution later
     loop {
         unsafe {
@@ -255,10 +257,10 @@ pub extern "C" fn rust_main(dtb_addr: usize) -> ! {
 #[cfg(feature = "multi_pcpu")]
 #[no_mangle]
 pub extern "C" fn rust_main_secondary(cpu_id: usize) -> ! {
+    use core::sync::atomic::Ordering;
+    use hypervisor::arch::aarch64::defs::*;
     use hypervisor::arch::aarch64::hypervisor::exception;
     use hypervisor::arch::aarch64::peripherals::gicv3;
-    use hypervisor::arch::aarch64::defs::*;
-    use core::sync::atomic::Ordering;
 
     // Early debug: write 'S' directly to UART via assembly
     // This verifies the CPU actually entered rust_main_secondary
@@ -298,8 +300,8 @@ pub extern "C" fn rust_main_secondary(cpu_id: usize) -> ! {
     unsafe {
         let mut hcr: u64;
         core::arch::asm!("mrs {}, hcr_el2", out(reg) hcr);
-        hcr |= HCR_VM;     // Enable Stage-2
-        hcr &= !HCR_TWI;   // Don't trap WFI (multi-pCPU: WFI passthrough)
+        hcr |= HCR_VM; // Enable Stage-2
+        hcr &= !HCR_TWI; // Don't trap WFI (multi-pCPU: WFI passthrough)
         core::arch::asm!("msr hcr_el2, {}", "isb", in(reg) hcr);
     }
 
@@ -327,7 +329,9 @@ pub extern "C" fn rust_main_secondary(cpu_id: usize) -> ! {
     gicv3::init();
 
     // 6. Set PerCpuContext
-    unsafe { (*hypervisor::percpu::this_cpu()).vcpu_id = cpu_id; }
+    unsafe {
+        (*hypervisor::percpu::this_cpu()).vcpu_id = cpu_id;
+    }
 
     uart_puts_local(b"[SMP] pCPU ");
     print_digit(cpu_id as u8);
@@ -336,9 +340,7 @@ pub extern "C" fn rust_main_secondary(cpu_id: usize) -> ! {
     // 7. Idle loop: WFE until PSCI CPU_ON sets our request
     loop {
         unsafe { core::arch::asm!("wfe") };
-        if let Some((entry, ctx)) =
-            hypervisor::global::PENDING_CPU_ON_PER_VCPU[cpu_id].take()
-        {
+        if let Some((entry, ctx)) = hypervisor::global::PENDING_CPU_ON_PER_VCPU[cpu_id].take() {
             uart_puts_local(b"[SMP] pCPU ");
             print_digit(cpu_id as u8);
             uart_puts_local(b" got CPU_ON, entering guest\n");
@@ -352,10 +354,10 @@ pub extern "C" fn rust_main_secondary(cpu_id: usize) -> ! {
 /// allowing the pCPU to return to the idle loop for potential reuse.
 #[cfg(feature = "multi_pcpu")]
 fn secondary_enter_guest(cpu_id: usize, entry: u64, ctx_id: u64) {
-    use hypervisor::vcpu::Vcpu;
+    use core::sync::atomic::Ordering;
     use hypervisor::arch::aarch64::defs::*;
     use hypervisor::platform;
-    use core::sync::atomic::Ordering;
+    use hypervisor::vcpu::Vcpu;
 
     // Wake this CPU's GICR
     if cpu_id < platform::num_cpus() {
@@ -367,7 +369,9 @@ fn secondary_enter_guest(cpu_id: usize, entry: u64, ctx_id: u64) {
             core::ptr::write_volatile(waker_addr, waker);
             loop {
                 let w = core::ptr::read_volatile(waker_addr);
-                if w & (1 << 2) == 0 { break; }
+                if w & (1 << 2) == 0 {
+                    break;
+                }
             }
         }
     }
@@ -381,7 +385,9 @@ fn secondary_enter_guest(cpu_id: usize, entry: u64, ctx_id: u64) {
     vcpu.arch_state_mut().init_for_vcpu(cpu_id);
 
     // Mark vCPU online (current_vcpu_id() uses MPIDR in multi_pcpu mode)
-    hypervisor::global::vm_state(0).vcpu_online_mask.fetch_or(1 << cpu_id, Ordering::Release);
+    hypervisor::global::vm_state(0)
+        .vcpu_online_mask
+        .fetch_or(1 << cpu_id, Ordering::Release);
 
     // Reset exception counters for this pCPU
     hypervisor::arch::aarch64::hypervisor::exception::reset_exception_counters();
@@ -413,7 +419,9 @@ fn secondary_enter_guest(cpu_id: usize, entry: u64, ctx_id: u64) {
                     uart_puts_local(b"[SMP] vCPU ");
                     print_digit(cpu_id as u8);
                     uart_puts_local(b" terminal exit\n");
-                    hypervisor::global::vm_state(0).vcpu_online_mask.fetch_and(!(1 << cpu_id), Ordering::Release);
+                    hypervisor::global::vm_state(0)
+                        .vcpu_online_mask
+                        .fetch_and(!(1 << cpu_id), Ordering::Release);
                     // Return to idle loop — pCPU can be reused for future CPU_ON
                     break;
                 }

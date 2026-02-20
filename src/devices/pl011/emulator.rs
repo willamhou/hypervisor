@@ -4,7 +4,6 @@
 /// - TX: writes directly to physical UART via inline asm
 /// - RX: ring buffer filled by hypervisor when physical UART IRQ fires
 /// - Linux-compatible peripheral ID registers for amba-pl011.c probe
-
 use crate::devices::MmioDevice;
 
 const UART_SIZE: u64 = 0x1000;
@@ -17,19 +16,19 @@ fn uart_base() -> u64 {
 // ── Register offsets ────────────────────────────────────────────────
 
 const UARTDR: u64 = 0x000;
-const UARTRSR: u64 = 0x004;      // Receive Status / Error Clear
+const UARTRSR: u64 = 0x004; // Receive Status / Error Clear
 const UARTFR: u64 = 0x018;
-const UARTILPR: u64 = 0x020;     // IrDA Low-Power Counter
+const UARTILPR: u64 = 0x020; // IrDA Low-Power Counter
 const UARTIBRD: u64 = 0x024;
 const UARTFBRD: u64 = 0x028;
 const UARTLCR_H: u64 = 0x02C;
 const UARTCR: u64 = 0x030;
-const UARTIFLS: u64 = 0x034;     // Interrupt FIFO Level Select
+const UARTIFLS: u64 = 0x034; // Interrupt FIFO Level Select
 const UARTIMSC: u64 = 0x038;
 const UARTRIS: u64 = 0x03C;
 const UARTMIS: u64 = 0x040;
 const UARTICR: u64 = 0x044;
-const UARTDMACR: u64 = 0x048;    // DMA Control
+const UARTDMACR: u64 = 0x048; // DMA Control
 
 // PL011 Peripheral ID registers (read by Linux amba bus during probe)
 const UART_PERIPHID0: u64 = 0xFE0;
@@ -43,18 +42,18 @@ const UART_PCELLID3: u64 = 0xFFC;
 
 // ── Flag Register bits ──────────────────────────────────────────────
 
-const FR_TXFE: u32 = 1 << 7;     // Transmit FIFO empty
-const FR_RXFF: u32 = 1 << 6;     // Receive FIFO full
+const FR_TXFE: u32 = 1 << 7; // Transmit FIFO empty
+const FR_RXFF: u32 = 1 << 6; // Receive FIFO full
 #[allow(dead_code)]
-const FR_TXFF: u32 = 1 << 5;     // Transmit FIFO full (reserved for TX flow control)
-const FR_RXFE: u32 = 1 << 4;     // Receive FIFO empty
+const FR_TXFF: u32 = 1 << 5; // Transmit FIFO full (reserved for TX flow control)
+const FR_RXFE: u32 = 1 << 4; // Receive FIFO empty
 
 // ── Interrupt bits ──────────────────────────────────────────────────
 
-const INT_RX: u32 = 1 << 4;      // Receive interrupt
-const INT_TX: u32 = 1 << 5;      // Transmit interrupt
+const INT_RX: u32 = 1 << 4; // Receive interrupt
+const INT_TX: u32 = 1 << 5; // Transmit interrupt
 #[allow(dead_code)]
-const INT_RT: u32 = 1 << 6;      // Receive timeout interrupt (reserved for timeout emulation)
+const INT_RT: u32 = 1 << 6; // Receive timeout interrupt (reserved for timeout emulation)
 
 /// UART SPI: SPI 1 = INTID 33
 const UART_SPI_INTID: u32 = 33;
@@ -76,18 +75,18 @@ pub struct VirtualUart {
     dmacr: u32,
     // RX ring buffer
     rx_buf: [u8; RX_BUF_SIZE],
-    rx_head: usize,  // next read position
-    rx_tail: usize,  // next write position
+    rx_head: usize, // next read position
+    rx_tail: usize, // next write position
 }
 
 impl VirtualUart {
     pub fn new() -> Self {
         Self {
-            cr: 0x0301,       // UART enabled, TX/RX enabled
-            lcr_h: 0x60,      // 8 data bits, no parity, 1 stop bit
+            cr: 0x0301,  // UART enabled, TX/RX enabled
+            lcr_h: 0x60, // 8 data bits, no parity, 1 stop bit
             ibrd: 1,
             fbrd: 0,
-            ifls: 0x12,       // RX 1/2, TX 1/2 (default)
+            ifls: 0x12, // RX 1/2, TX 1/2 (default)
             imsc: 0,
             ris: 0,
             dmacr: 0,
@@ -163,13 +162,11 @@ impl MmioDevice for VirtualUart {
         }
 
         let value = match offset {
-            UARTDR => {
-                match self.pop_rx() {
-                    Some(ch) => ch as u64,
-                    None => 0,
-                }
-            }
-            UARTRSR => 0,  // No errors
+            UARTDR => match self.pop_rx() {
+                Some(ch) => ch as u64,
+                None => 0,
+            },
+            UARTRSR => 0, // No errors
             UARTFR => self.get_flags() as u64,
             UARTILPR => 0,
             UARTIBRD => self.ibrd as u64,
@@ -183,11 +180,11 @@ impl MmioDevice for VirtualUart {
             UARTDMACR => self.dmacr as u64,
 
             // PL011 Peripheral ID (required for Linux amba-pl011.c probe)
-            UART_PERIPHID0 => 0x11,  // Part number low
-            UART_PERIPHID1 => 0x10,  // Part number high + designer
-            UART_PERIPHID2 => 0x14,  // Revision + designer (r1p4)
+            UART_PERIPHID0 => 0x11, // Part number low
+            UART_PERIPHID1 => 0x10, // Part number high + designer
+            UART_PERIPHID2 => 0x14, // Revision + designer (r1p4)
             UART_PERIPHID3 => 0x00,
-            UART_PCELLID0 => 0x0D,   // PrimeCell ID
+            UART_PCELLID0 => 0x0D, // PrimeCell ID
             UART_PCELLID1 => 0xF0,
             UART_PCELLID2 => 0x05,
             UART_PCELLID3 => 0xB1,
@@ -211,26 +208,51 @@ impl MmioDevice for VirtualUart {
                 self.ris |= INT_TX;
                 true
             }
-            UARTRSR => true, // Error clear — no-op
+            UARTRSR => true,  // Error clear — no-op
             UARTILPR => true, // IrDA — ignore
-            UARTIBRD => { self.ibrd = (value & 0xFFFF) as u32; true }
-            UARTFBRD => { self.fbrd = (value & 0x3F) as u32; true }
-            UARTLCR_H => { self.lcr_h = (value & 0xFF) as u32; true }
-            UARTCR => { self.cr = (value & 0xFFFF) as u32; true }
-            UARTIFLS => { self.ifls = (value & 0x3F) as u32; true }
-            UARTIMSC => { self.imsc = (value & 0x7FF) as u32; true }
+            UARTIBRD => {
+                self.ibrd = (value & 0xFFFF) as u32;
+                true
+            }
+            UARTFBRD => {
+                self.fbrd = (value & 0x3F) as u32;
+                true
+            }
+            UARTLCR_H => {
+                self.lcr_h = (value & 0xFF) as u32;
+                true
+            }
+            UARTCR => {
+                self.cr = (value & 0xFFFF) as u32;
+                true
+            }
+            UARTIFLS => {
+                self.ifls = (value & 0x3F) as u32;
+                true
+            }
+            UARTIMSC => {
+                self.imsc = (value & 0x7FF) as u32;
+                true
+            }
             UARTICR => {
                 self.ris &= !(value as u32);
                 true
             }
-            UARTDMACR => { self.dmacr = (value & 0x07) as u32; true }
+            UARTDMACR => {
+                self.dmacr = (value & 0x07) as u32;
+                true
+            }
             UARTFR => true, // Read-only, ignore writes
-            _ => true,       // Unknown — accept silently
+            _ => true,      // Unknown — accept silently
         }
     }
 
-    fn base_address(&self) -> u64 { uart_base() }
-    fn size(&self) -> u64 { UART_SIZE }
+    fn base_address(&self) -> u64 {
+        uart_base()
+    }
+    fn size(&self) -> u64 {
+        UART_SIZE
+    }
 
     fn pending_irq(&self) -> Option<u32> {
         if (self.ris & self.imsc) != 0 {

@@ -8,7 +8,6 @@
 /// Write-through is required because the physical GIC must stay in sync with
 /// the guest's configuration (EnableGrp1NS, ISENABLER, IROUTER, etc.) for
 /// physical interrupt forwarding to work correctly.
-
 use crate::devices::MmioDevice;
 
 const GICD_SIZE: u64 = 0x10000;
@@ -19,7 +18,7 @@ fn gicd_base() -> u64 {
 }
 
 /// GICD_CTLR bit definitions
-const GICD_CTLR_ARE_NS: u32 = 1 << 4;  // Affinity Routing Enable, Non-Secure
+const GICD_CTLR_ARE_NS: u32 = 1 << 4; // Affinity Routing Enable, Non-Secure
 
 /// GICD register offsets
 const GICD_CTLR: u64 = 0x000;
@@ -191,47 +190,83 @@ impl MmioDevice for VirtualGicd {
 
             GICD_IGROUPR_BASE..=GICD_IGROUPR_END => {
                 let reg = ((offset - GICD_IGROUPR_BASE) / 4) as usize;
-                if reg < 32 { Some(self.igroupr[reg] as u64) } else { Some(0) }
+                if reg < 32 {
+                    Some(self.igroupr[reg] as u64)
+                } else {
+                    Some(0)
+                }
             }
 
             GICD_ISENABLER_BASE..=GICD_ISENABLER_END => {
                 let reg = ((offset - GICD_ISENABLER_BASE) / 4) as usize;
-                if reg < 32 { Some(self.enabled[reg] as u64) } else { Some(0) }
+                if reg < 32 {
+                    Some(self.enabled[reg] as u64)
+                } else {
+                    Some(0)
+                }
             }
 
             GICD_ICENABLER_BASE..=GICD_ICENABLER_END => {
                 let reg = ((offset - GICD_ICENABLER_BASE) / 4) as usize;
-                if reg < 32 { Some(self.enabled[reg] as u64) } else { Some(0) }
+                if reg < 32 {
+                    Some(self.enabled[reg] as u64)
+                } else {
+                    Some(0)
+                }
             }
 
             GICD_ISPENDR_BASE..=GICD_ISPENDR_END => {
                 let reg = ((offset - GICD_ISPENDR_BASE) / 4) as usize;
-                if reg < 32 { Some(self.ispendr[reg] as u64) } else { Some(0) }
+                if reg < 32 {
+                    Some(self.ispendr[reg] as u64)
+                } else {
+                    Some(0)
+                }
             }
 
             GICD_ICPENDR_BASE..=GICD_ICPENDR_END => {
                 let reg = ((offset - GICD_ICPENDR_BASE) / 4) as usize;
-                if reg < 32 { Some(self.ispendr[reg] as u64) } else { Some(0) }
+                if reg < 32 {
+                    Some(self.ispendr[reg] as u64)
+                } else {
+                    Some(0)
+                }
             }
 
             GICD_ISACTIVER_BASE..=GICD_ISACTIVER_END => {
                 let reg = ((offset - GICD_ISACTIVER_BASE) / 4) as usize;
-                if reg < 32 { Some(self.isactiver[reg] as u64) } else { Some(0) }
+                if reg < 32 {
+                    Some(self.isactiver[reg] as u64)
+                } else {
+                    Some(0)
+                }
             }
 
             GICD_ICACTIVER_BASE..=GICD_ICACTIVER_END => {
                 let reg = ((offset - GICD_ICACTIVER_BASE) / 4) as usize;
-                if reg < 32 { Some(self.isactiver[reg] as u64) } else { Some(0) }
+                if reg < 32 {
+                    Some(self.isactiver[reg] as u64)
+                } else {
+                    Some(0)
+                }
             }
 
             GICD_IPRIORITYR_BASE..=GICD_IPRIORITYR_END => {
                 let reg = ((offset - GICD_IPRIORITYR_BASE) / 4) as usize;
-                if reg < 256 { Some(self.ipriorityr[reg] as u64) } else { Some(0) }
+                if reg < 256 {
+                    Some(self.ipriorityr[reg] as u64)
+                } else {
+                    Some(0)
+                }
             }
 
             GICD_ICFGR_BASE..=GICD_ICFGR_END => {
                 let reg = ((offset - GICD_ICFGR_BASE) / 4) as usize;
-                if reg < 64 { Some(self.icfgr[reg] as u64) } else { Some(0) }
+                if reg < 64 {
+                    Some(self.icfgr[reg] as u64)
+                } else {
+                    Some(0)
+                }
             }
 
             GICD_PIDR2 => {
@@ -302,55 +337,73 @@ impl MmioDevice for VirtualGicd {
 
             GICD_IGROUPR_BASE..=GICD_IGROUPR_END => {
                 let reg = ((offset - GICD_IGROUPR_BASE) / 4) as usize;
-                if reg < 32 { self.igroupr[reg] = val; }
+                if reg < 32 {
+                    self.igroupr[reg] = val;
+                }
                 true
             }
 
             GICD_ISENABLER_BASE..=GICD_ISENABLER_END => {
                 let reg = ((offset - GICD_ISENABLER_BASE) / 4) as usize;
-                if reg < 32 { self.enabled[reg] |= val; }
+                if reg < 32 {
+                    self.enabled[reg] |= val;
+                }
                 true
             }
 
             GICD_ICENABLER_BASE..=GICD_ICENABLER_END => {
                 let reg = ((offset - GICD_ICENABLER_BASE) / 4) as usize;
-                if reg < 32 { self.enabled[reg] &= !val; }
+                if reg < 32 {
+                    self.enabled[reg] &= !val;
+                }
                 true
             }
 
             GICD_ISPENDR_BASE..=GICD_ISPENDR_END => {
                 let reg = ((offset - GICD_ISPENDR_BASE) / 4) as usize;
-                if reg < 32 { self.ispendr[reg] |= val; }
+                if reg < 32 {
+                    self.ispendr[reg] |= val;
+                }
                 true
             }
 
             GICD_ICPENDR_BASE..=GICD_ICPENDR_END => {
                 let reg = ((offset - GICD_ICPENDR_BASE) / 4) as usize;
-                if reg < 32 { self.ispendr[reg] &= !val; }
+                if reg < 32 {
+                    self.ispendr[reg] &= !val;
+                }
                 true
             }
 
             GICD_ISACTIVER_BASE..=GICD_ISACTIVER_END => {
                 let reg = ((offset - GICD_ISACTIVER_BASE) / 4) as usize;
-                if reg < 32 { self.isactiver[reg] |= val; }
+                if reg < 32 {
+                    self.isactiver[reg] |= val;
+                }
                 true
             }
 
             GICD_ICACTIVER_BASE..=GICD_ICACTIVER_END => {
                 let reg = ((offset - GICD_ICACTIVER_BASE) / 4) as usize;
-                if reg < 32 { self.isactiver[reg] &= !val; }
+                if reg < 32 {
+                    self.isactiver[reg] &= !val;
+                }
                 true
             }
 
             GICD_IPRIORITYR_BASE..=GICD_IPRIORITYR_END => {
                 let reg = ((offset - GICD_IPRIORITYR_BASE) / 4) as usize;
-                if reg < 256 { self.ipriorityr[reg] = val; }
+                if reg < 256 {
+                    self.ipriorityr[reg] = val;
+                }
                 true
             }
 
             GICD_ICFGR_BASE..=GICD_ICFGR_END => {
                 let reg = ((offset - GICD_ICFGR_BASE) / 4) as usize;
-                if reg < 64 { self.icfgr[reg] = val; }
+                if reg < 64 {
+                    self.icfgr[reg] = val;
+                }
                 true
             }
 

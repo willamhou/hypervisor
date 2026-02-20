@@ -98,7 +98,7 @@ pub fn run_ffa_test() {
         ctx.gp_regs.x0 = ffa::FFA_RXTX_MAP;
         ctx.gp_regs.x1 = 0x5000_0000; // TX buffer IPA (page-aligned)
         ctx.gp_regs.x2 = 0x5000_1000; // RX buffer IPA
-        ctx.gp_regs.x3 = 1;           // 1 page
+        ctx.gp_regs.x3 = 1; // 1 page
         let cont = ffa::proxy::handle_ffa_call(&mut ctx);
         if cont && ctx.gp_regs.x0 == ffa::FFA_SUCCESS_32 {
             hypervisor::uart_puts(b"  [PASS] FFA_RXTX_MAP success\n");
@@ -185,8 +185,8 @@ pub fn run_ffa_test() {
         let mut ctx = VcpuContext::default();
         ctx.gp_regs.x0 = ffa::FFA_MEM_SHARE_32;
         ctx.gp_regs.x3 = 0x5000_0000; // IPA
-        ctx.gp_regs.x4 = 1;           // 1 page
-        ctx.gp_regs.x5 = 0x8001;      // SP1
+        ctx.gp_regs.x4 = 1; // 1 page
+        ctx.gp_regs.x5 = 0x8001; // SP1
         let cont = ffa::proxy::handle_ffa_call(&mut ctx);
         let handle = ctx.gp_regs.x2;
         if cont && ctx.gp_regs.x0 == ffa::FFA_SUCCESS_32 && handle > 0 {
@@ -197,7 +197,7 @@ pub fn run_ffa_test() {
             let mut ctx2 = VcpuContext::default();
             ctx2.gp_regs.x0 = ffa::FFA_MEM_RECLAIM;
             ctx2.gp_regs.x1 = handle; // handle low
-            ctx2.gp_regs.x2 = 0;      // handle high
+            ctx2.gp_regs.x2 = 0; // handle high
             let cont2 = ffa::proxy::handle_ffa_call(&mut ctx2);
             if cont2 && ctx2.gp_regs.x0 == ffa::FFA_SUCCESS_32 {
                 hypervisor::uart_puts(b"  [PASS] FFA_MEM_RECLAIM success\n");
@@ -235,13 +235,9 @@ pub fn run_ffa_test() {
         let mut buf = [0u8; 128];
         let ranges = [(0x5000_0000u64, 2u32)];
         let total_len = unsafe {
-            ffa::descriptors::build_test_descriptor(
-                buf.as_mut_ptr(), 1, 0x8001, &ranges,
-            )
+            ffa::descriptors::build_test_descriptor(buf.as_mut_ptr(), 1, 0x8001, &ranges)
         };
-        let parsed = unsafe {
-            ffa::descriptors::parse_mem_region(buf.as_ptr(), total_len)
-        };
+        let parsed = unsafe { ffa::descriptors::parse_mem_region(buf.as_ptr(), total_len) };
         if let Ok(p) = parsed {
             if p.sender_id == 1
                 && p.receiver_id == 0x8001
@@ -266,13 +262,9 @@ pub fn run_ffa_test() {
         let mut buf = [0u8; 160];
         let ranges = [(0x5000_0000u64, 1u32), (0x6000_0000u64, 3u32)];
         let total_len = unsafe {
-            ffa::descriptors::build_test_descriptor(
-                buf.as_mut_ptr(), 2, 0x8002, &ranges,
-            )
+            ffa::descriptors::build_test_descriptor(buf.as_mut_ptr(), 2, 0x8002, &ranges)
         };
-        let parsed = unsafe {
-            ffa::descriptors::parse_mem_region(buf.as_ptr(), total_len)
-        };
+        let parsed = unsafe { ffa::descriptors::parse_mem_region(buf.as_ptr(), total_len) };
         if let Ok(p) = parsed {
             if p.range_count == 2
                 && p.ranges[0] == (0x5000_0000, 1)
@@ -294,9 +286,7 @@ pub fn run_ffa_test() {
     // Test 16: Parse undersized descriptor → INVALID_PARAMETERS
     {
         let buf = [0u8; 16]; // Too small for FfaMemRegion (48 bytes)
-        let parsed = unsafe {
-            ffa::descriptors::parse_mem_region(buf.as_ptr(), 16)
-        };
+        let parsed = unsafe { ffa::descriptors::parse_mem_region(buf.as_ptr(), 16) };
         if let Err(code) = parsed {
             if code == ffa::FFA_INVALID_PARAMETERS {
                 hypervisor::uart_puts(b"  [PASS] Parse undersized -> INVALID_PARAMS\n");
@@ -355,10 +345,10 @@ pub fn run_ffa_test() {
 
     // Test 19: is_valid_receiver accepts VMs and SPs
     {
-        let ok_vm = ffa::is_valid_receiver(1);      // VM 0 partition ID
-        let ok_vm2 = ffa::is_valid_receiver(2);     // VM 1 partition ID
-        let ok_sp = ffa::is_valid_receiver(0x8001);  // SP1
-        let bad = ffa::is_valid_receiver(0x9999);    // Invalid
+        let ok_vm = ffa::is_valid_receiver(1); // VM 0 partition ID
+        let ok_vm2 = ffa::is_valid_receiver(2); // VM 1 partition ID
+        let ok_sp = ffa::is_valid_receiver(0x8001); // SP1
+        let bad = ffa::is_valid_receiver(0x9999); // Invalid
         if ok_vm && ok_vm2 && ok_sp && !bad {
             hypervisor::uart_puts(b"  [PASS] is_valid_receiver accepts VMs and SPs\n");
             pass += 1;
@@ -373,8 +363,8 @@ pub fn run_ffa_test() {
         let mut ctx = VcpuContext::default();
         ctx.gp_regs.x0 = ffa::FFA_MEM_SHARE_32;
         ctx.gp_regs.x3 = 0x5800_0000; // IPA
-        ctx.gp_regs.x4 = 1;           // 1 page
-        ctx.gp_regs.x5 = 2;           // receiver = VM1 (partition ID 2)
+        ctx.gp_regs.x4 = 1; // 1 page
+        ctx.gp_regs.x5 = 2; // receiver = VM1 (partition ID 2)
         let cont = ffa::proxy::handle_ffa_call(&mut ctx);
         let handle = ctx.gp_regs.x2 | (ctx.gp_regs.x3 << 32);
         if cont && ctx.gp_regs.x0 == ffa::FFA_SUCCESS_32 && handle > 0 {
@@ -392,8 +382,8 @@ pub fn run_ffa_test() {
         let mut ctx = VcpuContext::default();
         ctx.gp_regs.x0 = ffa::FFA_MEM_SHARE_32;
         ctx.gp_regs.x3 = 0x5900_0000; // IPA (different from test 20)
-        ctx.gp_regs.x4 = 1;           // 1 page
-        ctx.gp_regs.x5 = 2;           // receiver = VM1
+        ctx.gp_regs.x4 = 1; // 1 page
+        ctx.gp_regs.x5 = 2; // receiver = VM1
         ffa::proxy::handle_ffa_call(&mut ctx);
         let handle = ctx.gp_regs.x2 | (ctx.gp_regs.x3 << 32);
 
@@ -604,13 +594,17 @@ pub fn run_ffa_test() {
         ctx1.gp_regs.x0 = ffa::FFA_FEATURES;
         ctx1.gp_regs.x1 = ffa::FFA_MEM_RETRIEVE_REQ_32;
         ffa::proxy::handle_ffa_call(&mut ctx1);
-        if ctx1.gp_regs.x0 != ffa::FFA_SUCCESS_32 { ok = false; }
+        if ctx1.gp_regs.x0 != ffa::FFA_SUCCESS_32 {
+            ok = false;
+        }
 
         let mut ctx2 = VcpuContext::default();
         ctx2.gp_regs.x0 = ffa::FFA_FEATURES;
         ctx2.gp_regs.x1 = ffa::FFA_MEM_RELINQUISH;
         ffa::proxy::handle_ffa_call(&mut ctx2);
-        if ctx2.gp_regs.x0 != ffa::FFA_SUCCESS_32 { ok = false; }
+        if ctx2.gp_regs.x0 != ffa::FFA_SUCCESS_32 {
+            ok = false;
+        }
 
         if ok {
             hypervisor::uart_puts(b"  [PASS] FEATURES: RETRIEVE/RELINQUISH supported\n");

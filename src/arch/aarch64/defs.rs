@@ -15,10 +15,10 @@ pub const HCR_BSU_INNER: u64 = 1 << 10;
 pub const HCR_TWI: u64 = 1 << 13;
 pub const HCR_TWE: u64 = 1 << 14;
 pub const HCR_RW: u64 = 1 << 31;
-pub const HCR_TEA: u64 = 1 << 37;  // Trap External Aborts to EL2
+pub const HCR_TEA: u64 = 1 << 37; // Trap External Aborts to EL2
 pub const HCR_APK: u64 = 1 << 40;
 pub const HCR_API: u64 = 1 << 41;
-pub const HCR_TSC: u64 = 1 << 19;  // Trap SMC to EL2
+pub const HCR_TSC: u64 = 1 << 19; // Trap SMC to EL2
 
 // ── ESR_EL2 (Exception Syndrome Register) ────────────────────────────
 pub const ESR_EC_SHIFT: u32 = 26;
@@ -101,14 +101,14 @@ pub const PAGE_MASK_4KB: u64 = PAGE_SIZE_4KB - 1;
 
 // ── Stage-2 PTE Software bits (for page ownership tracking) ────────
 pub const PTE_SW_SHIFT: u32 = 55;
-pub const PTE_SW_MASK: u64  = 0x3 << PTE_SW_SHIFT; // bits [56:55]
+pub const PTE_SW_MASK: u64 = 0x3 << PTE_SW_SHIFT; // bits [56:55]
 
 // ── Stage-2 Access Permissions (S2AP, PTE bits [7:6]) ────────────
 pub const S2AP_SHIFT: u32 = 6;
-pub const S2AP_MASK: u64  = 0x3 << S2AP_SHIFT;
-pub const S2AP_NONE: u64  = 0b00 << S2AP_SHIFT; // No access
-pub const S2AP_RO: u64    = 0b01 << S2AP_SHIFT;  // Read-only
-pub const S2AP_RW: u64    = 0b11 << S2AP_SHIFT;  // Read-write
+pub const S2AP_MASK: u64 = 0x3 << S2AP_SHIFT;
+pub const S2AP_NONE: u64 = 0b00 << S2AP_SHIFT; // No access
+pub const S2AP_RO: u64 = 0b01 << S2AP_SHIFT; // Read-only
+pub const S2AP_RW: u64 = 0b11 << S2AP_SHIFT; // Read-write
 
 // ── Preemptive scheduling ────────────────────────────────────────────
 // Preemption is now handled by CNTHP timer (INTID 26) armed before each

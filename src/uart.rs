@@ -1,16 +1,16 @@
 //! PL011 UART Driver for QEMU virt machine
-//! 
+//!
 //! Base address: 0x0900_0000 (QEMU virt)
 
 use core::fmt;
 
 /// PL011 UART registers
 const UART_BASE: usize = 0x0900_0000;
-const UART_DR: usize = UART_BASE + 0x00;    // Data Register
-const UART_FR: usize = UART_BASE + 0x18;    // Flag Register
+const UART_DR: usize = UART_BASE + 0x00; // Data Register
+const UART_FR: usize = UART_BASE + 0x18; // Flag Register
 
 /// Flag Register bits
-const UART_FR_TXFF: u32 = 1 << 5;  // Transmit FIFO full
+const UART_FR_TXFF: u32 = 1 << 5; // Transmit FIFO full
 
 /// UART device structure
 pub struct Uart {
@@ -28,7 +28,7 @@ impl Uart {
     pub fn putc(&self, c: u8) {
         // Wait until TX FIFO is not full
         while self.read_reg(UART_FR) & UART_FR_TXFF != 0 {}
-        
+
         // Write character
         self.write_reg(UART_DR, c as u32);
     }

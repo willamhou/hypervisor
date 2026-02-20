@@ -97,11 +97,17 @@ impl Virtqueue {
     }
 
     /// Get low 32 bits of descriptor address (for split high/low writes)
-    pub fn desc_addr_low(&self) -> u32 { self.desc_addr as u32 }
+    pub fn desc_addr_low(&self) -> u32 {
+        self.desc_addr as u32
+    }
     /// Get low 32 bits of available ring address
-    pub fn avail_addr_low(&self) -> u32 { self.avail_addr as u32 }
+    pub fn avail_addr_low(&self) -> u32 {
+        self.avail_addr as u32
+    }
     /// Get low 32 bits of used ring address
-    pub fn used_addr_low(&self) -> u32 { self.used_addr as u32 }
+    pub fn used_addr_low(&self) -> u32 {
+        self.used_addr as u32
+    }
 
     /// Reset the queue to initial state
     pub fn reset(&mut self) {
@@ -149,7 +155,12 @@ impl Virtqueue {
         let desc_base = self.desc_addr as *const VirtqDesc;
         let mut chain = DescChain {
             head,
-            descs: [VirtqDesc { addr: 0, len: 0, flags: 0, next: 0 }; 4],
+            descs: [VirtqDesc {
+                addr: 0,
+                len: 0,
+                flags: 0,
+                next: 0,
+            }; 4],
             count: 0,
         };
 

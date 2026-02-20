@@ -2,9 +2,9 @@
 //!
 //! Tests device registration, MMIO address routing, and accessor methods.
 
-use hypervisor::devices::{DeviceManager, Device};
 use hypervisor::devices::gic::VirtualGicd;
 use hypervisor::devices::pl011::VirtualUart;
+use hypervisor::devices::{Device, DeviceManager};
 use hypervisor::uart_puts;
 
 pub fn run_device_routing_test() {
@@ -49,7 +49,8 @@ pub fn run_device_routing_test() {
     let gicd = VirtualGicd::new();
     dm.register_device(Device::Gicd(gicd));
     let target = dm.route_spi(48);
-    if target != 0 { // Default IROUTER is 0 -> vCPU 0
+    if target != 0 {
+        // Default IROUTER is 0 -> vCPU 0
         uart_puts(b"[DEVMGR] FAILED: route_spi should be 0\n");
         return;
     }

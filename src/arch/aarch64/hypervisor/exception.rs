@@ -3,10 +3,10 @@
 //! This module provides the interface to the exception vector table
 //! and exception handlers for EL2.
 
-use crate::arch::aarch64::regs::VcpuContext;
 use crate::arch::aarch64::defs::*;
-use crate::uart_puts;
+use crate::arch::aarch64::regs::VcpuContext;
 use crate::uart_put_hex;
+use crate::uart_puts;
 use core::sync::atomic::{AtomicU32, AtomicU64, Ordering};
 
 // External assembly functions defined in exception.S
@@ -65,7 +65,7 @@ pub fn init() {
                       // woken by SEV not SGI — trapping would cause deadlock)
                       | HCR_TEA        // Trap External Aborts to EL2
                       | HCR_APK        // Don't trap PAC key register accesses
-                      | HCR_API;       // Don't trap PAC instructions
+                      | HCR_API; // Don't trap PAC instructions
 
         core::arch::asm!(
             "msr hcr_el2, {hcr}",
@@ -87,7 +87,9 @@ const MAX_CONSECUTIVE_EXCEPTIONS: u32 = 100;
 #[inline]
 fn inc_exception_count() -> u32 {
     #[cfg(not(feature = "multi_pcpu"))]
-    { EXCEPTION_COUNT.fetch_add(1, Ordering::Relaxed) + 1 }
+    {
+        EXCEPTION_COUNT.fetch_add(1, Ordering::Relaxed) + 1
+    }
     #[cfg(feature = "multi_pcpu")]
     unsafe {
         let percpu = crate::percpu::this_cpu();
@@ -100,9 +102,13 @@ fn inc_exception_count() -> u32 {
 #[inline]
 fn reset_exception_count() {
     #[cfg(not(feature = "multi_pcpu"))]
-    { EXCEPTION_COUNT.store(0, Ordering::Relaxed); }
+    {
+        EXCEPTION_COUNT.store(0, Ordering::Relaxed);
+    }
     #[cfg(feature = "multi_pcpu")]
-    unsafe { (*crate::percpu::this_cpu()).exception_count = 0; }
+    unsafe {
+        (*crate::percpu::this_cpu()).exception_count = 0;
+    }
 }
 
 /// Reset all exception counters (call before entering a new guest)
@@ -154,7 +160,9 @@ pub extern "C" fn handle_exception(context: &mut VcpuContext) -> bool {
         uart_puts(b"\n");
         // Halt the system completely to prevent further execution
         loop {
-            unsafe { core::arch::asm!("wfe"); }
+            unsafe {
+                core::arch::asm!("wfe");
+            }
         }
     }
 
@@ -171,7 +179,9 @@ pub extern "C" fn handle_exception(context: &mut VcpuContext) -> bool {
             // In SMP mode (multiple vCPUs online), always exit on WFI
             // so the scheduler can switch to another vCPU.
             // Still inject timer if pending, but always advance PC and exit.
-            let online = crate::global::current_vm_state().vcpu_online_mask.load(Ordering::Relaxed);
+            let online = crate::global::current_vm_state()
+                .vcpu_online_mask
+                .load(Ordering::Relaxed);
             let multi_vcpu = online != 0 && (online & (online - 1)) != 0; // >1 bit set
 
             if multi_vcpu {
@@ -263,7 +273,11 @@ pub extern "C" fn handle_exception(context: &mut VcpuContext) -> bool {
             uart_puts(b"  SCTLR_EL1= 0x");
             uart_put_hex(sctlr_el1);
             uart_puts(b" (M=");
-            if sctlr_el1 & 1 != 0 { uart_puts(b"1"); } else { uart_puts(b"0"); }
+            if sctlr_el1 & 1 != 0 {
+                uart_puts(b"1");
+            } else {
+                uart_puts(b"0");
+            }
             uart_puts(b")\n");
             uart_puts(b"  SP_EL1   = 0x");
             uart_put_hex(sp_el1);
@@ -319,7 +333,11 @@ pub extern "C" fn handle_exception(context: &mut VcpuContext) -> bool {
             uart_puts(b"  HCR_EL2  = 0x");
             uart_put_hex(hcr_el2);
             uart_puts(b" (VM=");
-            if hcr_el2 & HCR_VM != 0 { uart_puts(b"1)\n"); } else { uart_puts(b"0)\n"); }
+            if hcr_el2 & HCR_VM != 0 {
+                uart_puts(b"1)\n");
+            } else {
+                uart_puts(b"0)\n");
+            }
             uart_puts(b"  ID_AA64MMFR0_EL1 = 0x");
             uart_put_hex(id_mmfr0);
             uart_puts(b"\n");
@@ -497,7 +515,9 @@ pub extern "C" fn handle_exception(context: &mut VcpuContext) -> bool {
 
 #[no_mangle]
 pub extern "C" fn handle_irq_exception(_context: &mut VcpuContext) -> bool {
-    use crate::arch::aarch64::peripherals::gicv3::{GicV3SystemRegs, GicV3VirtualInterface, VTIMER_IRQ};
+    use crate::arch::aarch64::peripherals::gicv3::{
+        GicV3SystemRegs, GicV3VirtualInterface, VTIMER_IRQ,
+    };
     use crate::arch::aarch64::peripherals::timer;
 
     // Reset sync exception counter (guest is making progress)
@@ -532,7 +552,8 @@ pub extern "C" fn handle_irq_exception(_context: &mut VcpuContext) -> bool {
                 if current_vcpu == 0 {
                     let _ = GicV3VirtualInterface::inject_interrupt(intid, IRQ_DEFAULT_PRIORITY);
                 } else {
-                    crate::global::current_vm_state().pending_sgis[0].fetch_or(1 << intid, Ordering::Relaxed);
+                    crate::global::current_vm_state().pending_sgis[0]
+                        .fetch_or(1 << intid, Ordering::Relaxed);
                 }
                 return true; // continue guest
             }
@@ -543,10 +564,14 @@ pub extern "C" fn handle_irq_exception(_context: &mut VcpuContext) -> bool {
             // preemption works even when the guest timer is masked (e.g.,
             // during multi_cpu_stop with IRQs disabled).
             timer::disarm_preemption_timer();
-            let online = crate::global::current_vm_state().vcpu_online_mask.load(Ordering::Relaxed);
+            let online = crate::global::current_vm_state()
+                .vcpu_online_mask
+                .load(Ordering::Relaxed);
             let multi_vcpu = online != 0 && (online & (online - 1)) != 0;
             if multi_vcpu {
-                crate::global::current_vm_state().preemption_exit.store(true, Ordering::Release);
+                crate::global::current_vm_state()
+                    .preemption_exit
+                    .store(true, Ordering::Release);
                 GicV3SystemRegs::write_eoir1(intid);
                 GicV3SystemRegs::write_dir(intid); // No HW linkage
                 return false; // exit to host for scheduling
@@ -568,7 +593,9 @@ pub extern "C" fn handle_irq_exception(_context: &mut VcpuContext) -> bool {
                         options(nostack, readonly),
                     );
                 }
-                if fr & (1 << 4) != 0 { break; } // RXFE — FIFO empty
+                if fr & (1 << 4) != 0 {
+                    break;
+                } // RXFE — FIFO empty
                 let data: u32;
                 unsafe {
                     core::arch::asm!(
@@ -593,7 +620,9 @@ pub extern "C" fn handle_irq_exception(_context: &mut VcpuContext) -> bool {
             // HW=1 links virtual and physical interrupt: guest's virtual EOI
             // automatically deactivates the physical interrupt (pINTID=27).
             let _inject_result = GicV3VirtualInterface::inject_hw_interrupt(
-                VTIMER_IRQ, VTIMER_IRQ, IRQ_DEFAULT_PRIORITY,
+                VTIMER_IRQ,
+                VTIMER_IRQ,
+                IRQ_DEFAULT_PRIORITY,
             );
 
             // DO NOT modify SPSR_EL2 (guest's saved PSTATE).
@@ -603,14 +632,18 @@ pub extern "C" fn handle_irq_exception(_context: &mut VcpuContext) -> bool {
             // since each vCPU runs on its own pCPU.
             #[cfg(not(feature = "multi_pcpu"))]
             {
-                let online = crate::global::current_vm_state().vcpu_online_mask.load(Ordering::Relaxed);
+                let online = crate::global::current_vm_state()
+                    .vcpu_online_mask
+                    .load(Ordering::Relaxed);
                 let multi_vcpu = online != 0 && (online & (online - 1)) != 0;
                 if multi_vcpu {
                     let current = crate::global::current_vcpu_id();
                     let mut needs_switch = false;
                     for id in 0..crate::global::MAX_VCPUS {
                         if id != current
-                            && crate::global::current_vm_state().pending_sgis[id].load(Ordering::Relaxed) != 0
+                            && crate::global::current_vm_state().pending_sgis[id]
+                                .load(Ordering::Relaxed)
+                                != 0
                         {
                             needs_switch = true;
                             break;
@@ -618,7 +651,9 @@ pub extern "C" fn handle_irq_exception(_context: &mut VcpuContext) -> bool {
                     }
 
                     if needs_switch {
-                        crate::global::current_vm_state().preemption_exit.store(true, Ordering::Release);
+                        crate::global::current_vm_state()
+                            .preemption_exit
+                            .store(true, Ordering::Release);
                         GicV3SystemRegs::write_eoir1(intid);
                         return false; // exit to host
                     }
@@ -661,7 +696,7 @@ fn handle_msr_mrs_trap(context: &mut VcpuContext, esr: u64) {
     let op2 = (iss >> 17) & 0x7;
     let op1 = (iss >> 14) & 0x7;
     let crn = (iss >> 10) & 0xF;
-    let rt  = ((iss >> 5) & 0x1F) as u8;
+    let rt = ((iss >> 5) & 0x1F) as u8;
     let crm = (iss >> 1) & 0xF;
     let is_read = (iss & 1) == 1;
 
@@ -763,22 +798,23 @@ fn handle_sgi_trap(value: u64) {
     // ICC_SGI1R_EL1 encoding (from ARM GICv3 spec):
     //   [55:48] Aff3, [47:44] RS, [40] IRM, [39:32] Aff2,
     //   [27:24] INTID, [23:16] Aff1, [15:0] TargetList
-    let target_list = (value & 0xFFFF) as u32;          // bits [15:0]
-    let intid = ((value >> 24) & 0xF) as u32;           // bits [27:24]
-    let irm = (value >> 40) & 1;                        // bit [40]
+    let target_list = (value & 0xFFFF) as u32; // bits [15:0]
+    let intid = ((value >> 24) & 0xF) as u32; // bits [27:24]
+    let irm = (value >> 40) & 1; // bit [40]
     let current_vcpu = crate::global::current_vcpu_id();
-
-
 
     #[allow(unused_mut)]
     let mut _remote_queued = false;
 
     if irm == 1 {
         // IRM=1: target all PEs except self
-        let online = crate::global::current_vm_state().vcpu_online_mask.load(Ordering::Relaxed);
+        let online = crate::global::current_vm_state()
+            .vcpu_online_mask
+            .load(Ordering::Relaxed);
         for id in 0..crate::global::MAX_VCPUS {
             if id != current_vcpu && online & (1 << id) != 0 {
-                crate::global::current_vm_state().pending_sgis[id].fetch_or(1 << intid, Ordering::Release);
+                crate::global::current_vm_state().pending_sgis[id]
+                    .fetch_or(1 << intid, Ordering::Release);
                 _remote_queued = true;
             }
         }
@@ -811,7 +847,9 @@ fn handle_sgi_trap(value: u64) {
         // Build target bitmap: all target vCPUs that are remote
         let mut target_bitmap: u64 = 0;
         if irm == 1 {
-            let online = crate::global::current_vm_state().vcpu_online_mask.load(Ordering::Relaxed);
+            let online = crate::global::current_vm_state()
+                .vcpu_online_mask
+                .load(Ordering::Relaxed);
             for id in 0..crate::global::MAX_VCPUS {
                 if id != current_vcpu && online & (1 << id) != 0 {
                     target_bitmap |= 1 << id;
@@ -1019,11 +1057,19 @@ fn handle_smc(context: &mut VcpuContext) -> bool {
 
 /// Check if function_id is a PSCI call
 fn is_psci_function(fid: u64) -> bool {
-    matches!(fid,
-        PSCI_VERSION | PSCI_CPU_SUSPEND_32 | PSCI_CPU_OFF |
-        PSCI_CPU_ON_32 | PSCI_CPU_ON_64 | PSCI_AFFINITY_INFO_32 |
-        PSCI_AFFINITY_INFO_64 | PSCI_MIGRATE_INFO_TYPE |
-        PSCI_SYSTEM_OFF | PSCI_SYSTEM_RESET | PSCI_FEATURES
+    matches!(
+        fid,
+        PSCI_VERSION
+            | PSCI_CPU_SUSPEND_32
+            | PSCI_CPU_OFF
+            | PSCI_CPU_ON_32
+            | PSCI_CPU_ON_64
+            | PSCI_AFFINITY_INFO_32
+            | PSCI_AFFINITY_INFO_64
+            | PSCI_MIGRATE_INFO_TYPE
+            | PSCI_SYSTEM_OFF
+            | PSCI_SYSTEM_RESET
+            | PSCI_FEATURES
     )
 }
 
@@ -1050,8 +1096,8 @@ fn handle_psci(context: &mut VcpuContext, function_id: u64) -> bool {
             // Query if a PSCI function is supported
             let feature_id = context.gp_regs.x1;
             let result = match feature_id {
-                PSCI_VERSION | PSCI_CPU_OFF | PSCI_SYSTEM_OFF |
-                PSCI_SYSTEM_RESET | PSCI_FEATURES => PSCI_SUCCESS,
+                PSCI_VERSION | PSCI_CPU_OFF | PSCI_SYSTEM_OFF | PSCI_SYSTEM_RESET
+                | PSCI_FEATURES => PSCI_SUCCESS,
                 PSCI_CPU_ON_32 | PSCI_CPU_ON_64 => PSCI_SUCCESS,
                 PSCI_AFFINITY_INFO_32 | PSCI_AFFINITY_INFO_64 => PSCI_SUCCESS,
                 _ => PSCI_NOT_SUPPORTED,
@@ -1082,13 +1128,18 @@ fn handle_psci(context: &mut VcpuContext, function_id: u64) -> bool {
 
             #[cfg(not(feature = "multi_pcpu"))]
             {
-                crate::global::current_vm_state().pending_cpu_on.request(target_cpu, entry_point, context_id);
+                crate::global::current_vm_state().pending_cpu_on.request(
+                    target_cpu,
+                    entry_point,
+                    context_id,
+                );
             }
             #[cfg(feature = "multi_pcpu")]
             {
                 let target_id = (target_cpu & 0xFF) as usize;
                 if target_id < crate::platform::num_cpus() {
-                    crate::global::PENDING_CPU_ON_PER_VCPU[target_id].request(entry_point, context_id);
+                    crate::global::PENDING_CPU_ON_PER_VCPU[target_id]
+                        .request(entry_point, context_id);
                     // Wake the target pCPU from WFE
                     unsafe { core::arch::asm!("sev") };
                 }
@@ -1102,7 +1153,9 @@ fn handle_psci(context: &mut VcpuContext, function_id: u64) -> bool {
             // Return affinity state: 0 = ON, 1 = OFF, 2 = ON_PENDING
             let target_affinity = context.gp_regs.x1;
             let vcpu_id = target_affinity & 0xFF;
-            let online_mask = crate::global::current_vm_state().vcpu_online_mask.load(Ordering::Acquire);
+            let online_mask = crate::global::current_vm_state()
+                .vcpu_online_mask
+                .load(Ordering::Acquire);
             if online_mask & (1 << vcpu_id) != 0 {
                 context.gp_regs.x0 = 0; // ON
             } else {
@@ -1227,8 +1280,8 @@ const MAX_CONSECUTIVE_WFI: u32 = 500_000;
 /// * `true` - Guest should continue (interrupt injected)
 /// * `false` - Guest should exit (stuck in WFI loop)
 fn handle_wfi_with_timer_injection(context: &mut VcpuContext) -> bool {
-    use crate::arch::aarch64::peripherals::timer;
     use crate::arch::aarch64::peripherals::gicv3::{GicV3VirtualInterface, VTIMER_IRQ};
+    use crate::arch::aarch64::peripherals::timer;
 
     let pc = context.pc;
     let last_pc = LAST_WFI_PC.load(Ordering::Relaxed);
@@ -1291,7 +1344,8 @@ fn flush_pending_spis_to_hardware() {
         return;
     }
 
-    let pending = crate::global::current_vm_state().pending_spis[vcpu_id].swap(0, Ordering::Acquire);
+    let pending =
+        crate::global::current_vm_state().pending_spis[vcpu_id].swap(0, Ordering::Acquire);
     if pending == 0 {
         return;
     }
@@ -1303,7 +1357,8 @@ fn flush_pending_spis_to_hardware() {
         let intid = bit + 32; // SPI INTIDs start at 32
         if GicV3VirtualInterface::inject_interrupt(intid, IRQ_DEFAULT_PRIORITY).is_err() {
             // No free LR — re-queue for later
-            crate::global::current_vm_state().pending_spis[vcpu_id].fetch_or(1 << bit, Ordering::Relaxed);
+            crate::global::current_vm_state().pending_spis[vcpu_id]
+                .fetch_or(1 << bit, Ordering::Relaxed);
         }
     }
 }
