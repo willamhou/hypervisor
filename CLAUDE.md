@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Overview
 
-ARM64 Type-1 bare-metal hypervisor written in Rust (no_std) with ARM64 assembly. Runs at EL2 (hypervisor exception level) and manages guest VMs at EL1. Targets QEMU virt machine. Boots Linux 6.12.12 to BusyBox shell with 4 vCPUs, virtio-blk storage, and virtio-net inter-VM networking. Supports multi-VM with per-VM Stage-2, VMID-tagged TLBs, two-level scheduling, and L2 virtual switch. Includes FF-A v1.1 proxy with stub SPMC, page ownership validation via Stage-2 PTE SW bits, FF-A v1.1 descriptor parsing, and SMC forwarding to EL3. Android boot with PL031 RTC emulation, Binder IPC, binderfs, minimal init, 1GB guest RAM.
+ARM64 Type-1 bare-metal hypervisor written in Rust (no_std) with ARM64 assembly. Runs at EL2 (hypervisor exception level) and manages guest VMs at EL1. Targets QEMU virt machine. Boots Linux 6.12.12 to BusyBox shell with 4 vCPUs, virtio-blk storage, and virtio-net inter-VM networking. Supports multi-VM with per-VM Stage-2, VMID-tagged TLBs, two-level scheduling, and L2 virtual switch. Includes FF-A v1.1 proxy with stub SPMC, page ownership validation via Stage-2 PTE SW bits, FF-A v1.1 descriptor parsing, SMC forwarding to EL3, and VM-to-VM memory sharing (MEM_RETRIEVE/RELINQUISH with dynamic Stage-2 page mapping). Android boot with PL031 RTC emulation, Binder IPC, binderfs, minimal init, 1GB guest RAM.
 
 ## Build Commands
 
@@ -53,7 +53,7 @@ make fmt          # Format code
 | `Scheduler` | `src/scheduler.rs` | Round-robin vCPU scheduler with block/unblock |
 | `ExitReason` | `src/arch/aarch64/regs.rs` | VM exit causes: WfiWfe, HvcCall, SmcCall, DataAbort, etc. |
 | `FfaProxy` | `src/ffa/proxy.rs` | FF-A v1.1 proxy: intercepts guest SMC, handles VERSION/ID_GET/FEATURES/RXTX/messaging/memory |
-| `Stage2Walker` | `src/ffa/stage2_walker.rs` | Lightweight Stage-2 page table walker from VTTBR_EL2 for PTE SW bits |
+| `Stage2Walker` | `src/ffa/stage2_walker.rs` | Stage-2 page table walker from VTTBR_EL2: PTE SW bits, S2AP, map_page/unmap_page for cross-VM sharing |
 | `FfaDescriptors` | `src/ffa/descriptors.rs` | FF-A v1.1 composite memory region descriptor parsing |
 | `SmcForward` | `src/ffa/smc_forward.rs` | SMC forwarding to EL3 + SPMC probe |
 | `PlatformInfo` | `src/dtb.rs` | Runtime DTB parsing: UART, GIC, RAM, CPU count discovery |
@@ -174,15 +174,15 @@ VirtioMmioTransport<VirtioNet>  @ 0x0a000200 (SPI 17 = INTID 49)
 
 Implements the FF-A (Firmware Framework for Arm) v1.1 hypervisor proxy role (pKVM-compatible). Guest SMC calls trapped via `HCR_EL2.TSC=1` (bit 19) are routed through `handle_smc()` → `ffa::proxy::handle_ffa_call()`.
 
-**Supported calls**: FFA_VERSION, FFA_ID_GET, FFA_FEATURES, FFA_RXTX_MAP/UNMAP, FFA_RX_RELEASE, FFA_PARTITION_INFO_GET, FFA_MSG_SEND_DIRECT_REQ, FFA_MEM_SHARE/LEND/RECLAIM. FFA_MEM_DONATE is blocked (returns NOT_SUPPORTED).
+**Supported calls**: FFA_VERSION, FFA_ID_GET, FFA_FEATURES, FFA_RXTX_MAP/UNMAP, FFA_RX_RELEASE, FFA_PARTITION_INFO_GET, FFA_MSG_SEND_DIRECT_REQ, FFA_MEM_SHARE/LEND/RETRIEVE_REQ/RELINQUISH/RECLAIM. FFA_MEM_DONATE is blocked (returns NOT_SUPPORTED). VM-to-VM memory sharing: sender shares pages via MEM_SHARE, receiver maps them via MEM_RETRIEVE_REQ (dynamic Stage-2 page mapping), receiver unmaps via MEM_RELINQUISH, sender reclaims via MEM_RECLAIM.
 
-**Stub SPMC** (`src/ffa/stub_spmc.rs`): Simulates 2 Secure Partitions (SP1=0x8001, SP2=0x8002) for testing without a real Secure World. Direct messaging echoes x4-x7 back. Memory sharing tracks multi-range records with `MemShareRecord` (up to 4 ranges per share, `ShareInfo` for reclaim).
+**Stub SPMC** (`src/ffa/stub_spmc.rs`): Simulates 2 Secure Partitions (SP1=0x8001, SP2=0x8002) for testing without a real Secure World. Direct messaging echoes x4-x7 back. Memory sharing tracks multi-range records with `MemShareRecord` (up to 4 ranges per share, `ShareInfo`/`ShareInfoFull` for reclaim/retrieve). `mark_retrieved()`/`mark_relinquished()` track retrieve state; `MEM_RECLAIM` blocked while retrieved.
 
 **RXTX Mailbox** (`src/ffa/mailbox.rs`): Per-VM TX/RX buffer IPAs registered via FFA_RXTX_MAP. Used by PARTITION_INFO_GET to return SP descriptors. TX buffer used for FF-A v1.1 composite memory region descriptors.
 
 **Page Ownership** (`src/ffa/memory.rs`): Stage-2 PTE software bits [56:55] track page state: Owned(0b00), SharedOwned(0b01), SharedBorrowed(0b10), Donated(0b11). Validated during MEM_SHARE/LEND (Owned required), transitioned to SharedOwned, restored on MEM_RECLAIM. S2AP bits [7:6] restrict access: SHARE→RO, LEND→NONE. Matches pKVM page ownership model.
 
-**Stage-2 Walker** (`src/ffa/stage2_walker.rs`): Lightweight page table walker reconstructed from `VTTBR_EL2` at SMC handling time. Reads/writes PTE SW bits and S2AP without owning page table memory. Used by MEM_SHARE/LEND/RECLAIM for ownership validation. Gated by `#[cfg(feature = "linux_guest")]` — unit tests skip Stage-2 validation (stale VTTBR from earlier page table tests).
+**Stage-2 Walker** (`src/ffa/stage2_walker.rs`): Lightweight page table walker reconstructed from `VTTBR_EL2` at SMC handling time. Reads/writes PTE SW bits and S2AP without owning page table memory. Used by MEM_SHARE/LEND/RECLAIM for ownership validation. `map_page()` creates 4KB page entries in a target VM's Stage-2 (allocates L2/L3 tables from heap), used by MEM_RETRIEVE_REQ for cross-VM sharing. `unmap_page()` zeroes L3 PTEs, used by MEM_RELINQUISH. `PER_VM_VTTBR` global stores each VM's L0 table PA for constructing walkers for non-active VMs. Gated by `#[cfg(feature = "linux_guest")]` — unit tests skip Stage-2 validation (stale VTTBR from earlier page table tests).
 
 **Descriptor Parsing** (`src/ffa/descriptors.rs`): Parses FF-A v1.1 composite memory region descriptors (DEN0077A Table 5.19-5.25): `FfaMemRegion`(48B) → `FfaMemAccessDesc`(16B) → `FfaCompositeMemRegion`(16B) → `FfaMemRegionAddrRange`(16B). Uses `core::ptr::read_unaligned` for packed struct safety. Falls back to register-based protocol (x3=IPA, x4=count, x5=receiver) when no mailbox is mapped.
 
@@ -244,6 +244,7 @@ Falls back to QEMU virt defaults if DTB parse fails (e.g., QEMU passes addr=0 wi
 | `CURRENT_VM_ID` | `AtomicUsize` | Which VM is currently active |
 | `PENDING_CPU_ON_PER_VCPU` | `[PerVcpuCpuOnRequest; 8]` | Per-vCPU PSCI CPU_ON (multi-pCPU mode only) |
 | `SHARED_VTTBR` / `SHARED_VTCR` | `AtomicU64` | Stage-2 config shared from primary to secondaries (multi-pCPU) |
+| `PER_VM_VTTBR` | `[AtomicU64; MAX_VMS]` | Per-VM L0 table PA for cross-VM Stage-2 access (FF-A RETRIEVE) |
 | `UART_RX` | `UartRxRing` | Lock-free ring buffer, IRQ handler → run loop |
 | `PORT_RX` | `[NetRxRing; MAX_PORTS]` | Per-VM SPSC ring for virtio-net RX frames |
 | `VSWITCH` | `UnsafeCell<VSwitch>` | L2 virtual switch with MAC learning table |
@@ -273,7 +274,7 @@ Array-based routing: `devices: [Option<Device>; 8]`, scan for `dev.contains(addr
 
 ## Tests
 
-~162 assertions across 30 test suites run automatically on `make run` (no feature flags). Orchestrated sequentially in `src/main.rs`. Located in `tests/`:
+~171 assertions across 30 test suites run automatically on `make run` (no feature flags). Orchestrated sequentially in `src/main.rs`. Located in `tests/`:
 
 | Test | Coverage | Assertions |
 |------|----------|------------|
@@ -305,7 +306,7 @@ Array-based routing: `devices: [Option<Device>; 8]`, scan for `dev.contains(addr
 | `test_virtio_net` | VirtioNet: device_id/features/queues/config/mac_for_vm | 8 |
 | `test_page_ownership` | Stage-2 PTE SW bits: read/write OWNED/SHARED_OWNED, unmapped IPA | 4 |
 | `test_pl031` | PL031 RTC: RTCDR readable, RTCLR write+readback, PeriphID/PrimeCellID, unknown offset | 4 |
-| `test_ffa` | FF-A proxy: VERSION/ID_GET/FEATURES/RXTX/messaging/MEM_SHARE/RECLAIM/descriptors/SMC forward | 18 |
+| `test_ffa` | FF-A proxy: VERSION/ID_GET/FEATURES/RXTX/messaging/MEM_SHARE/RECLAIM/descriptors/SMC forward/VM-to-VM RETRIEVE/RELINQUISH | 27 |
 | `test_guest_interrupt` | Guest interrupt injection + exception vector (blocks) | 1 |
 
 Not wired into `main.rs` (exported but not called):

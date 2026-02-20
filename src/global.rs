@@ -1,3 +1,4 @@
+use crate::devices::DeviceManager;
 /// Global state for hypervisor
 ///
 /// This module contains global state that needs to be accessed
@@ -5,10 +6,8 @@
 ///
 /// Per-VM state is stored in `VM_STATE[vm_id]`. The exception handler
 /// reads `CURRENT_VM_ID` to index into the correct VM's state.
-
 use core::cell::UnsafeCell;
 use core::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, AtomicUsize, Ordering};
-use crate::devices::DeviceManager;
 
 /// Maximum number of VMs (compile-time constant)
 pub const MAX_VMS: usize = 2;
@@ -40,16 +39,22 @@ impl GlobalDeviceManager {
     }
 
     pub fn reset(&self) {
-        unsafe { (*self.devices.get()).reset(); }
+        unsafe {
+            (*self.devices.get()).reset();
+        }
     }
 
     pub fn register_device(&self, dev: crate::devices::Device) {
-        unsafe { (*self.devices.get()).register_device(dev); }
+        unsafe {
+            (*self.devices.get()).register_device(dev);
+        }
         self.initialized.store(true, Ordering::Relaxed);
     }
 
     pub fn attach_virtio_blk(&self, disk_base: u64, disk_size: u64) {
-        unsafe { (*self.devices.get()).attach_virtio_blk(disk_base, disk_size); }
+        unsafe {
+            (*self.devices.get()).attach_virtio_blk(disk_base, disk_size);
+        }
     }
 
     pub fn handle_mmio(&self, addr: u64, value: u64, size: u8, is_write: bool) -> Option<u64> {
@@ -60,12 +65,15 @@ impl GlobalDeviceManager {
         unsafe { (*self.devices.get()).route_spi(intid) }
     }
 
+    #[allow(clippy::mut_from_ref)]
     pub fn uart_mut(&self) -> Option<&mut crate::devices::pl011::VirtualUart> {
         unsafe { (*self.devices.get()).uart_mut() }
     }
 
     pub fn attach_virtio_net(&self, vm_id: usize) {
-        unsafe { (*self.devices.get()).attach_virtio_net(vm_id); }
+        unsafe {
+            (*self.devices.get()).attach_virtio_net(vm_id);
+        }
     }
 
     pub fn inject_net_rx(&self, frame: &[u8]) -> bool {
@@ -170,10 +178,8 @@ impl GlobalDeviceManager {
 
 /// Per-VM device managers.
 /// Exception handler indexes by CURRENT_VM_ID.
-pub static DEVICES: [GlobalDeviceManager; MAX_VMS] = [
-    GlobalDeviceManager::new(),
-    GlobalDeviceManager::new(),
-];
+pub static DEVICES: [GlobalDeviceManager; MAX_VMS] =
+    [GlobalDeviceManager::new(), GlobalDeviceManager::new()];
 
 /// Get the current VM's device manager.
 #[inline]
@@ -208,22 +214,34 @@ impl VmGlobalState {
     pub const fn new() -> Self {
         Self {
             pending_sgis: [
-                AtomicU32::new(0), AtomicU32::new(0),
-                AtomicU32::new(0), AtomicU32::new(0),
-                AtomicU32::new(0), AtomicU32::new(0),
-                AtomicU32::new(0), AtomicU32::new(0),
+                AtomicU32::new(0),
+                AtomicU32::new(0),
+                AtomicU32::new(0),
+                AtomicU32::new(0),
+                AtomicU32::new(0),
+                AtomicU32::new(0),
+                AtomicU32::new(0),
+                AtomicU32::new(0),
             ],
             pending_spis: [
-                AtomicU32::new(0), AtomicU32::new(0),
-                AtomicU32::new(0), AtomicU32::new(0),
-                AtomicU32::new(0), AtomicU32::new(0),
-                AtomicU32::new(0), AtomicU32::new(0),
+                AtomicU32::new(0),
+                AtomicU32::new(0),
+                AtomicU32::new(0),
+                AtomicU32::new(0),
+                AtomicU32::new(0),
+                AtomicU32::new(0),
+                AtomicU32::new(0),
+                AtomicU32::new(0),
             ],
             terminal_exit: [
-                AtomicBool::new(false), AtomicBool::new(false),
-                AtomicBool::new(false), AtomicBool::new(false),
-                AtomicBool::new(false), AtomicBool::new(false),
-                AtomicBool::new(false), AtomicBool::new(false),
+                AtomicBool::new(false),
+                AtomicBool::new(false),
+                AtomicBool::new(false),
+                AtomicBool::new(false),
+                AtomicBool::new(false),
+                AtomicBool::new(false),
+                AtomicBool::new(false),
+                AtomicBool::new(false),
             ],
             vcpu_online_mask: AtomicU64::new(0),
             current_vcpu_id: AtomicUsize::new(0),
@@ -235,10 +253,7 @@ impl VmGlobalState {
 
 /// Global array of per-VM state.
 /// VM 0 is the default — all existing single-VM code paths use VM_STATE[0].
-pub static VM_STATE: [VmGlobalState; MAX_VMS] = [
-    VmGlobalState::new(),
-    VmGlobalState::new(),
-];
+pub static VM_STATE: [VmGlobalState; MAX_VMS] = [VmGlobalState::new(), VmGlobalState::new()];
 
 /// Get the current VM's global state.
 #[inline]
@@ -258,10 +273,14 @@ pub fn vm_state(vm_id: usize) -> &'static VmGlobalState {
 #[inline]
 pub fn current_vcpu_id() -> usize {
     #[cfg(not(feature = "multi_pcpu"))]
-    { current_vm_state().current_vcpu_id.load(Ordering::Relaxed) }
+    {
+        current_vm_state().current_vcpu_id.load(Ordering::Relaxed)
+    }
 
     #[cfg(feature = "multi_pcpu")]
-    { crate::percpu::current_cpu_id() }
+    {
+        crate::percpu::current_cpu_id()
+    }
 }
 
 /// Get the current VM ID (0 for single-VM modes).
@@ -302,9 +321,11 @@ impl PendingCpuOn {
     /// Take a pending CPU_ON request (called from run loop)
     pub fn take(&self) -> Option<(u64, u64, u64)> {
         // Acquire fence: if we see requested=true, target/entry/ctx are visible
-        if self.requested.compare_exchange(
-            true, false, Ordering::Acquire, Ordering::Relaxed,
-        ).is_ok() {
+        if self
+            .requested
+            .compare_exchange(true, false, Ordering::Acquire, Ordering::Relaxed)
+            .is_ok()
+        {
             let target = self.target_cpu.load(Ordering::Relaxed);
             let entry = self.entry_point.load(Ordering::Relaxed);
             let ctx = self.context_id.load(Ordering::Relaxed);
@@ -343,9 +364,11 @@ impl PerVcpuCpuOnRequest {
 
     /// Take a pending CPU_ON request
     pub fn take(&self) -> Option<(u64, u64)> {
-        if self.requested.compare_exchange(
-            true, false, Ordering::Acquire, Ordering::Relaxed,
-        ).is_ok() {
+        if self
+            .requested
+            .compare_exchange(true, false, Ordering::Acquire, Ordering::Relaxed)
+            .is_ok()
+        {
             let entry = self.entry_point.load(Ordering::Relaxed);
             let ctx = self.context_id.load(Ordering::Relaxed);
             Some((entry, ctx))
@@ -357,10 +380,14 @@ impl PerVcpuCpuOnRequest {
 
 #[cfg(feature = "multi_pcpu")]
 pub static PENDING_CPU_ON_PER_VCPU: [PerVcpuCpuOnRequest; MAX_VCPUS] = [
-    PerVcpuCpuOnRequest::new(), PerVcpuCpuOnRequest::new(),
-    PerVcpuCpuOnRequest::new(), PerVcpuCpuOnRequest::new(),
-    PerVcpuCpuOnRequest::new(), PerVcpuCpuOnRequest::new(),
-    PerVcpuCpuOnRequest::new(), PerVcpuCpuOnRequest::new(),
+    PerVcpuCpuOnRequest::new(),
+    PerVcpuCpuOnRequest::new(),
+    PerVcpuCpuOnRequest::new(),
+    PerVcpuCpuOnRequest::new(),
+    PerVcpuCpuOnRequest::new(),
+    PerVcpuCpuOnRequest::new(),
+    PerVcpuCpuOnRequest::new(),
+    PerVcpuCpuOnRequest::new(),
 ];
 
 /// Shared Stage-2 translation configuration (set by primary, read by secondaries).
@@ -373,10 +400,7 @@ pub static SHARED_VTCR: AtomicU64 = AtomicU64::new(0);
 /// Per-VM VTTBR L0 table physical address (for cross-VM Stage-2 access).
 /// Stored at boot by setup_linux_memory(). Used by FF-A proxy to construct
 /// Stage2Walker for any VM's page tables.
-pub static PER_VM_VTTBR: [AtomicU64; MAX_VMS] = [
-    AtomicU64::new(0),
-    AtomicU64::new(0),
-];
+pub static PER_VM_VTTBR: [AtomicU64; MAX_VMS] = [AtomicU64::new(0), AtomicU64::new(0)];
 
 /// Inject an SPI to the correct vCPU based on GICD_IROUTER.
 ///
@@ -435,8 +459,8 @@ const UART_RX_RING_SIZE: usize = 64;
 
 pub struct UartRxRing {
     buf: UnsafeCell<[u8; UART_RX_RING_SIZE]>,
-    head: AtomicUsize,  // read index
-    tail: AtomicUsize,  // write index
+    head: AtomicUsize, // read index
+    tail: AtomicUsize, // write index
 }
 
 unsafe impl Sync for UartRxRing {}
@@ -457,7 +481,9 @@ impl UartRxRing {
         if next == self.head.load(Ordering::Acquire) {
             return; // full, drop
         }
-        unsafe { (*self.buf.get())[tail] = ch; }
+        unsafe {
+            (*self.buf.get())[tail] = ch;
+        }
         self.tail.store(next, Ordering::Release);
     }
 
@@ -468,7 +494,8 @@ impl UartRxRing {
             return None; // empty
         }
         let ch = unsafe { (*self.buf.get())[head] };
-        self.head.store((head + 1) % UART_RX_RING_SIZE, Ordering::Release);
+        self.head
+            .store((head + 1) % UART_RX_RING_SIZE, Ordering::Release);
         Some(ch)
     }
 }
