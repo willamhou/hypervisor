@@ -51,8 +51,12 @@ impl Stage2Walker {
 
     /// Write SW bits [56:55] on the leaf PTE for a given IPA.
     ///
+    /// If the IPA is mapped as a 2MB block, the block is split into 512 x 4KB
+    /// page entries first so that only the target page is modified.
+    ///
     /// No TLB invalidation needed — SW bits don't affect hardware translation.
     pub fn write_sw_bits(&self, ipa: u64, bits: u8) -> Result<(), &'static str> {
+        self.split_block_if_needed(ipa)?;
         let leaf_ptr = self.walk_to_leaf_ptr(ipa).ok_or("IPA not mapped")?;
         unsafe {
             let mut pte = core::ptr::read_volatile(leaf_ptr);
@@ -70,13 +74,13 @@ impl Stage2Walker {
 
     /// Write S2AP bits [7:6] on the leaf PTE + TLB invalidation.
     ///
+    /// If the IPA is mapped as a 2MB block, the block is split into 512 x 4KB
+    /// page entries first so that only the target page is modified.
+    ///
     /// Unlike SW bits, S2AP affects hardware translation and requires a
     /// TLB invalidation after modification.
-    ///
-    /// NOTE: If the leaf PTE is a 2MB block, this changes permissions for
-    /// all 512 pages within it. Callers should ensure the IPA falls on an
-    /// already-split 4KB page or a 2MB-aligned region.
     pub fn set_s2ap(&self, ipa: u64, s2ap: u8) -> Result<(), &'static str> {
+        self.split_block_if_needed(ipa)?;
         let leaf_ptr = self.walk_to_leaf_ptr(ipa).ok_or("IPA not mapped")?;
         unsafe {
             let mut pte = core::ptr::read_volatile(leaf_ptr);
@@ -307,6 +311,100 @@ impl Stage2Walker {
         }
 
         Some(l3_ptr)
+    }
+
+    /// If the IPA is mapped as a 2MB block at L2, split the block into
+    /// 512 x 4KB page entries so that individual pages can be modified.
+    ///
+    /// No-op if the IPA is already mapped as a 4KB page or via an L3 table.
+    fn split_block_if_needed(&self, ipa: u64) -> Result<(), &'static str> {
+        // Walk L0 → L1 → L2 to check the L2 entry
+        let l0_idx = ((ipa >> 39) & PT_INDEX_MASK) as usize;
+        let l0_entry =
+            unsafe { core::ptr::read_volatile((self.l0_table as *const u64).add(l0_idx)) };
+        if l0_entry & (PTE_VALID | PTE_TABLE) != (PTE_VALID | PTE_TABLE) {
+            return Ok(()); // Not mapped — walk_to_leaf_ptr will handle the error
+        }
+
+        let l1_table = l0_entry & PTE_ADDR_MASK;
+        let l1_idx = ((ipa >> 30) & PT_INDEX_MASK) as usize;
+        let l1_entry =
+            unsafe { core::ptr::read_volatile((l1_table as *const u64).add(l1_idx)) };
+        if l1_entry & PTE_VALID == 0 || l1_entry & PTE_TABLE == 0 {
+            return Ok(()); // Invalid or 1GB block — not our concern here
+        }
+
+        let l2_table = l1_entry & PTE_ADDR_MASK;
+        let l2_idx = ((ipa >> 21) & PT_INDEX_MASK) as usize;
+        let l2_ptr = unsafe { (l2_table as *mut u64).add(l2_idx) };
+        let l2_entry = unsafe { core::ptr::read_volatile(l2_ptr) };
+
+        // Only split if L2 is a valid block (bit[0]=1, bit[1]=0)
+        if l2_entry & PTE_VALID != 0 && l2_entry & PTE_TABLE == 0 {
+            Self::split_2mb_block_at_l2(l2_ptr, l2_entry)?;
+        }
+
+        Ok(())
+    }
+
+    /// Split a 2MB block entry at L2 into 512 x 4KB page entries.
+    ///
+    /// Uses break-before-make protocol (required by ARM architecture):
+    /// invalidate L2 → TLB flush → write new table descriptor → TLB flush.
+    ///
+    /// Based on `DynamicIdentityMapper::split_2mb_block()` (mmu.rs).
+    fn split_2mb_block_at_l2(l2_ptr: *mut u64, block_entry: u64) -> Result<(), &'static str> {
+        let block_pa = block_entry & !BLOCK_MASK_2MB;
+        // Extract attribute bits from the block entry, stripping valid+type bits [1:0]
+        let block_attr_bits = block_entry & BLOCK_MASK_2MB & !0x3;
+        // Preserve SW bits [56:55] from the block entry
+        let block_sw_bits = block_entry & PTE_SW_MASK;
+
+        // Allocate L3 table (4KB, holds 512 page entries)
+        let l3 =
+            crate::mm::heap::alloc_page().ok_or("Failed to allocate L3 table for block split")?;
+        unsafe {
+            core::ptr::write_bytes(l3 as *mut u8, 0, PAGE_SIZE_4KB as usize);
+        }
+
+        // Fill L3 with 512 page entries preserving original block attributes
+        // L3 page descriptor: [PA | SW bits | attrs | bit1=1(page) | bit0=1(valid)]
+        unsafe {
+            let l3_ptr = l3 as *mut u64;
+            for i in 0..512u64 {
+                let pa = block_pa + i * PAGE_SIZE_4KB;
+                let page = pa | block_sw_bits | block_attr_bits | PTE_TABLE | PTE_VALID;
+                *l3_ptr.add(i as usize) = page;
+            }
+        }
+
+        // Break-before-make: invalidate old L2 block entry
+        unsafe {
+            core::ptr::write_volatile(l2_ptr, 0u64);
+        }
+        Self::tlbi_all();
+
+        // Write new L2 table descriptor pointing to L3
+        let l2_desc = l3 | PTE_VALID | PTE_TABLE;
+        unsafe {
+            core::ptr::write_volatile(l2_ptr, l2_desc);
+        }
+        Self::tlbi_all();
+
+        Ok(())
+    }
+
+    /// Invalidate all Stage-2 TLB entries (all VMIDs, all IPAs).
+    fn tlbi_all() {
+        unsafe {
+            core::arch::asm!(
+                "dsb ishst",
+                "tlbi vmalls12e1is",
+                "dsb ish",
+                "isb",
+                options(nostack),
+            );
+        }
     }
 
     /// Invalidate a single IPA from Stage-2 TLB.

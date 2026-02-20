@@ -274,7 +274,7 @@ Array-based routing: `devices: [Option<Device>; 8]`, scan for `dev.contains(addr
 
 ## Tests
 
-~171 assertions across 30 test suites run automatically on `make run` (no feature flags). Orchestrated sequentially in `src/main.rs`. Located in `tests/`:
+~176 assertions across 30 test suites run automatically on `make run` (no feature flags). Orchestrated sequentially in `src/main.rs`. Located in `tests/`:
 
 | Test | Coverage | Assertions |
 |------|----------|------------|
@@ -304,7 +304,7 @@ Array-based routing: `devices: [Option<Device>; 8]`, scan for `dev.contains(addr
 | `test_net_rx_ring` | NetRxRing SPSC: empty/store/take/fill/overflow/wraparound | 8 |
 | `test_vswitch` | VSwitch: flood/MAC learning/broadcast/no-self/capacity | 6 |
 | `test_virtio_net` | VirtioNet: device_id/features/queues/config/mac_for_vm | 8 |
-| `test_page_ownership` | Stage-2 PTE SW bits: read/write OWNED/SHARED_OWNED, unmapped IPA | 4 |
+| `test_page_ownership` | Stage-2 PTE SW bits: read/write OWNED/SHARED_OWNED, unmapped IPA, 2MB block→4KB split | 9 |
 | `test_pl031` | PL031 RTC: RTCDR readable, RTCLR write+readback, PeriphID/PrimeCellID, unknown offset | 4 |
 | `test_ffa` | FF-A proxy: VERSION/ID_GET/FEATURES/RXTX/messaging/MEM_SHARE/RECLAIM/descriptors/SMC forward/VM-to-VM RETRIEVE/RELINQUISH | 27 |
 | `test_guest_interrupt` | Guest interrupt injection + exception vector (blocks) | 1 |
@@ -348,3 +348,21 @@ Guest GICR writes only update `VirtualGicr` shadow state. `ensure_vtimer_enabled
 
 ### Platform Constants
 Guest-specific addresses (heap, kernel load, virtio disk) are in `src/platform.rs`. Host hardware addresses (UART, GIC, RAM, CPU count) are discovered at runtime from DTB via `src/dtb.rs` — use `platform::num_cpus()` and `dtb::platform_info()` instead of hardcoded constants. `MAX_SMP_CPUS = 8` is the compile-time array capacity; `SMP_CPUS = 4` is the fallback default.
+
+## Roadmap: NS-EL2 → S-EL2 SPMC → pKVM Integration
+
+**Target architecture** (end state):
+```
+EL3:    TF-A BL31 + SPMD (SMC relay, world switch)
+S-EL2:  Our hypervisor (SPMC role, BL32) → manages Secure Partitions
+S-EL1:  Secure Partitions (bare-metal SPs)
+NS-EL2: pKVM (Linux KVM protected mode) → manages Normal World VMs
+NS-EL1: Linux/Android guest
+```
+
+**Phase 3** (current): Complete NS-EL2 — 2MB block split, FF-A notifications, indirect messaging
+**Phase 4**: QEMU `secure=on` + TF-A boot chain → adapt hypervisor as S-EL2 SPMC (BL32)
+**Phase 4.5**: pKVM at NS-EL2 + our SPMC at S-EL2 → end-to-end FF-A path
+**Phase 5**: RME & CCA (Realm Manager)
+
+See `DEVELOPMENT_PLAN.md` for full details.

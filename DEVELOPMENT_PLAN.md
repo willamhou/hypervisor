@@ -9,14 +9,15 @@
 
 ## 📊 当前进度概览
 
-**整体完成度**: 🟢 **65%** (Milestone 0-2 + Options A-G + M3 Sprint 3.1 已完成)
+**整体完成度**: 🟢 **65%** (Milestone 0-2 + Options A-G + M3 Sprint 3.1/3.1b/3.1c 已完成)
 
 ```
 M0: 项目启动          ████████████████████ 100% ✅
 M1: MVP基础虚拟化     ████████████████████ 100% ✅
 M2: 增强功能          ████████████████████ 100% ✅
-M3: FF-A              ████████████░░░░░░░░  60% 🔧
-M4: Secure EL2        ░░░░░░░░░░░░░░░░░░░░   0% ⏸️
+M3: FF-A              ██████████████░░░░░░  70% 🔧 (Sprint 3.2 进行中)
+M4: S-EL2 SPMC        ░░░░░░░░░░░░░░░░░░░░   0% ⏸️ (QEMU secure=on + TF-A)
+M4.5: pKVM 集成       ░░░░░░░░░░░░░░░░░░░░   0% ⏸️ (NS-EL2=pKVM, S-EL2=us)
 M5: RME & CCA         ░░░░░░░░░░░░░░░░░░░░   0% ⏸️
 Android Boot          ██████████░░░░░░░░░░  50% ✅ (Phase 2 完成)
 ```
@@ -552,48 +553,49 @@ Android Boot          ██████████░░░░░░░░░�
 
 ---
 
-#### Sprint 3.2: 真实 SPMC 集成（Week 22-24）⏸️ **未开始**
-**目标**: 将 stub SPMC 替换为对真实 Secure World 的 SMC 转发
+#### Sprint 3.2: NS-EL2 完善（Week 22-25）🔧 **进行中**
+**目标**: 完善 NS-EL2 hypervisor 的 FF-A 实现和 Stage-2 安全性，为后续 S-EL2 适配做准备
 
 **实现任务**:
-1. **真实 SPMC 通信**:
-   - [ ] 通过 SMC forwarding 与 Hafnium/OP-TEE SPMC 交互
-   - [ ] RXTX buffer IPA→PA 转换 (Stage-2 walk)
+1. **2MB Block → 4KB 拆分** (安全修复):
+   - [ ] Stage2Walker `set_s2ap()` 检测 2MB block PTE 并拆分为 L3 table
+   - [ ] FF-A MEM_SHARE 按 4KB 粒度修改权限（当前影响整个 2MB 区域）
+   - [ ] `write_sw_bits()` 同样需要 block 拆分
+   - [ ] 测试: 验证拆分后 PTE 权限正确
 
-2. **多 VM 隔离增强**:
-   - [ ] Per-VM partition ID 命名空间
-   - [ ] 多端点共享 (VM1 → SP1, SP2)
+2. **FF-A Indirect Messaging**:
+   - [ ] FFA_MSG_SEND2 + FFA_MSG_WAIT (异步消息)
+   - [ ] 基于 RXTX mailbox 的异步消息传递
+   - [ ] pKVM 依赖这个做异步通知
+
+3. **FF-A Notifications** (v1.1):
+   - [ ] FFA_NOTIFICATION_BIND (0x8400007F)
+   - [ ] FFA_NOTIFICATION_SET (0x84000081)
+   - [ ] FFA_NOTIFICATION_GET (0x84000082)
+   - [ ] FFA_NOTIFICATION_INFO_GET (0x84000083)
+   - [ ] pKVM ↔ SPMC 交互依赖 notifications 做中断注入信号
+
+4. **补充 FF-A 调用**:
+   - [ ] FFA_SPM_ID_GET (0x84000085) — 返回 SPMC ID (0x8000)
+   - [ ] FFA_RUN (0x8400006D) — 恢复 SP 执行上下文
+
+5. **测试补全**:
+   - [ ] test_timer 接入 main.rs (当前导出但未调用)
+   - [ ] sparse tests 补充 assertions
+   - [ ] 性能基准测试 (VM exit latency)
 
 **验收**:
-- [ ] VM 通过 FF-A 与真实 SP 通信
-- [ ] 权限控制正确
+- [ ] FF-A MEM_SHARE 仅修改目标 4KB 页权限，不影响 2MB 区域内其他页
+- [ ] Indirect messaging 和 notifications 基础框架可用
+- [ ] 测试覆盖率提升
 
-**预估**: 3周
+**预估**: 2-4 周
 
 ---
 
-#### Sprint 3.3: FF-A 完善和测试（Week 25-28）⏸️ **未开始**
-
-**实现任务**:
-1. **Indirect Messaging** (可选):
-   - [ ] FFA_MSG_SEND2 + FFA_MSG_WAIT
-   - [ ] 基于 RXTX mailbox 的异步消息
-
-2. **权限控制**:
-   - [ ] RO/RW/RWX 权限 (Stage-2 AP bits)
-   - [ ] 多方共享（VM1 -> SP1, SP2）
-   - [ ] W^X 保护
-
-3. **Conformance 测试**:
-   - [ ] 扩展 test_ffa 覆盖所有错误路径
-   - [ ] QEMU integration test with real SPMC (如果可用)
-
-**验收**:
-- [ ] VM 和 SP 通过共享内存高效传输数据
-- [ ] 权限控制正确
-- [ ] 内存生命周期管理正确（无泄漏）
-
-**预估**: 4周
+#### Sprint 3.3: 真实 SPMC 集成 (与 M4 合并) ⏸️ **推迟**
+**注**: 原 Sprint 3.2/3.3 中的"真实 SPMC 集成"已合并到 Milestone 4（QEMU secure=on + S-EL2 适配）。
+我们的 hypervisor 将**自身作为 SPMC** 运行在 S-EL2，而不是集成 Hafnium。
 
 ---
 
@@ -602,116 +604,222 @@ Android Boot          ██████████░░░░░░░░░�
 - [x] VM-to-VM 内存共享完整生命周期 (SHARE → RETRIEVE → RELINQUISH → RECLAIM) ✅
 - [x] Page ownership validation + S2AP permission control ✅
 - [x] FF-A v1.1 descriptor parsing + SMC forwarding ✅
-- [ ] VM 通过 FF-A 与真实 SP 通信
-- [ ] 通过 FF-A conformance 测试（如果有）
+- [x] Integration test: 11 assertions with real Stage-2 page tables (make run-multi-vm) ✅
+- [ ] 2MB block → 4KB 拆分（Stage2Walker 安全修复）
+- [ ] FF-A indirect messaging + notifications
+- [ ] FFA_SPM_ID_GET + FFA_RUN
 
 **预估总时间**: 10周（Week 19-28）
-**状态**: 🔧 进行中 (Sprint 3.1/3.1b/3.1c 已完成, ~60%)
+**状态**: 🔧 进行中 (Sprint 3.1/3.1b/3.1c ✅, Sprint 3.2 进行中, ~70%)
 
 ---
 
-### Milestone 4: 安全扩展 - Secure EL2（Week 29-36）⏸️ **未开始**
-**目标**: 实现Secure Hypervisor，运行在S-EL2
+### Milestone 4: QEMU secure=on + S-EL2 SPMC（Week 29-36）⏸️ **未开始**
+**目标**: 将我们的 hypervisor 适配为 S-EL2 SPMC（替代 Hafnium），通过 TF-A boot chain 启动
 
-#### Sprint 4.1: 世界切换框架（Week 29-31）⏸️ **未开始**
-**设计文档**:
-- Normal/Secure世界状态机
-- SCR_EL3.NS位切换
-- 上下文保存/恢复（EL2 vs S-EL2）
+**架构目标**:
+```
+EL3:    TF-A BL31 + SPMD (SMC relay, world switch)
+S-EL2:  我们的 hypervisor (SPMC 角色, BL32)
+S-EL1:  Secure Partitions (bare-metal SP)
+NS-EL2: 暂时空闲（后续 pKVM 占据）
+NS-EL1: Linux guest (当前 hypervisor 功能降级为 SPMC)
+```
+
+**关键依赖**: QEMU `secure=on` 不支持 KVM 加速（必须 TCG 全模拟），速度慢 10-50x
+
+#### Sprint 4.1: 构建 TF-A + QEMU secure=on（Week 29-30）⏸️ **未开始**
 
 **实现任务**:
-1. **世界切换基础设施**:
-   - EL3 Monitor代码（如果自定义）或ARM TF-A集成
-   - SMC调用陷入EL3
-   - 切换NS位和VTTBR/VSTTBR
+1. **交叉编译 ARM Trusted Firmware (TF-A)**:
+   - [ ] `PLAT=qemu, SPD=spmd, SPMD_SPM_AT_SEL2=1`
+   - [ ] `CTX_INCLUDE_EL2_REGS=1` (保存/恢复 EL2 寄存器用于 S-EL2)
+   - [ ] 生成 `flash.bin` (BL1 + FIP: BL2/BL31/BL33)
+   - [ ] Docker 构建脚本
 
-2. **双实例架构**:
-   - Normal World Hypervisor状态
-   - Secure World Hypervisor状态
-   - 共享代码路径，独立数据
-
-3. **安全上下文**:
-   - 保存/恢复Secure寄存器（VSTTBR_EL2, etc.）
-   - S-EL2异常向量表
-
-**TDD测试**:
-- 测试：从Normal World通过SMC切换到Secure World
-- 测试：上下文正确保存
-- 测试：返回Normal World，状态不变
+2. **QEMU secure=on 启动验证**:
+   - [ ] `-machine virt,secure=on,virtualization=on`
+   - [ ] `-bios flash.bin` 替代 `-kernel`
+   - [ ] 验证 EL3 → NS-EL2 boot chain 正常
+   - [ ] BL33 = 简单的 bare-metal binary（Hello from NS-EL2）
 
 **验收**:
-- [ ] 成功在Normal和Secure之间切换
-- [ ] 两个世界的Hypervisor独立运行
-- [ ] 上下文隔离正确
+- [ ] TF-A 编译成功并生成 flash.bin
+- [ ] QEMU secure=on 下 BL33 成功启动到 NS-EL2
+- [ ] 串口输出可见
 
-**预估**: 3周
+**预估**: 2 周
 
 ---
 
-#### Sprint 4.2: TEE VM管理（Week 32-34）⏸️ **未开始**
-**设计文档**:
-- Secure VM（S-VM）生命周期
-- S-EL2的Stage-2页表（VSTTBR_EL2）
+#### Sprint 4.2: BL33 = 我们的 Hypervisor（Week 30-31）⏸️ **未开始**
 
 **实现任务**:
-1. **Secure Stage-2页表**:
-   - 独立的页表结构（用于S-EL1 Guest）
-   - Secure内存区域分配
+1. **适配 TF-A boot chain**:
+   - [ ] 修改 `boot.S` 入口点适配 BL31 → BL33 跳转
+   - [ ] 处理 BL31 传递的参数 (x0=FDT, x4=core_id)
+   - [ ] 初始化顺序调整（不再假设从 QEMU 直接进 EL2）
 
-2. **S-VM创建和运行**:
-   - 创建Secure vCPU
-   - 加载TEE OS镜像（OP-TEE）
-   - 启动S-VM
-
-3. **Secure中断路由**:
-   - FIQ路由到S-EL2
-   - 注入到S-VM
+2. **SPMD 集成**:
+   - [ ] 验证我们的 `forward_smc()` 能到达 EL3 SPMD
+   - [ ] SPMD 识别 FF-A function IDs 并路由
+   - [ ] 验证 FFA_VERSION 经过 SPMD 正确返回
 
 **验收**:
-- [ ] 在S-EL2创建和运行vCPU
-- [ ] Secure内存隔离正确
-- [ ] 为OP-TEE集成做好准备
+- [ ] 我们的 hypervisor 通过 TF-A boot chain 启动（而非 `-kernel`）
+- [ ] SMC 正确到达 EL3 SPMD
+- [ ] 现有功能（Linux guest boot）仍然正常
 
-**预估**: 3周
+**预估**: 1-2 周
 
 ---
 
-#### Sprint 4.3: OP-TEE集成（Week 35-36）⏸️ **未开始**
-**设计文档**:
-- OP-TEE启动流程
-- TA加载和调用
+#### Sprint 4.3: Hypervisor 适配 S-EL2 (SPMC 角色)（Week 32-34）⏸️ **未开始**
+**核心**: 将同一份代码编译为 BL32（S-EL2），作为 SPMC 接收 SPMD 转发的 FF-A 调用
 
 **实现任务**:
-1. **OP-TEE作为S-VM**:
-   - 加载OP-TEE OS到Secure内存
-   - 配置设备树（DTB for OP-TEE）
-   - 启动OP-TEE
+1. **S-EL2 入口点和初始化**:
+   - [ ] 新的 `boot_sel2.S` 入口（SPMD 跳转到 BL32 的方式不同于 BL33）
+   - [ ] 处理 SPMD 传递的参数 (x0=TOS_FW_CONFIG, x1=HW_CONFIG, x4=core_id)
+   - [ ] 解析 SPMC manifest (DTS 格式)
+   - [ ] `#[cfg(feature = "sel2")]` feature flag 区分 NS-EL2 和 S-EL2 模式
 
-2. **Normal World Client**:
-   - 通过FF-A从Normal VM调用TA
-   - 完整的调用链：Normal VM -> Hypervisor (FF-A) -> OP-TEE -> TA
+2. **SPMD ↔ SPMC 协议**:
+   - [ ] FFA_SECONDARY_EP_REGISTER (0x84000087) — 注册辅助核入口点
+   - [ ] FFA_VERSION 响应（作为 SPMC 回复 SPMD 的版本查询）
+   - [ ] FFA_FEATURES 响应（向 SPMD 声明支持的功能）
+   - [ ] 处理 SPMD 转发的 FF-A 内存操作
+
+3. **Secure Stage-2 页表**:
+   - [ ] VSTTBR_EL2 替代 VTTBR_EL2（Secure 世界用 VSTTBR）
+   - [ ] Secure 内存区域隔离（TZASC 配置）
+   - [ ] SP 的 Stage-2 隔离
+
+4. **构建系统**:
+   - [ ] `make build-spmc` — 编译 BL32 binary（S-EL2 入口）
+   - [ ] SP manifest 模板 (DTS)
+   - [ ] `sp_layout.json` for TF-A FIP 打包
 
 **验收**:
-- [ ] OP-TEE成功启动
-- [ ] Normal World应用通过FF-A调用TA
-- [ ] TA执行并返回结果
+- [ ] 我们的 hypervisor 作为 BL32 在 S-EL2 启动
+- [ ] SPMD ↔ SPMC FF-A 握手成功 (VERSION/FEATURES)
+- [ ] FFA_SECONDARY_EP_REGISTER 注册辅助核入口
 
-**预估**: 2周
+**预估**: 2-3 周
+
+---
+
+#### Sprint 4.4: 从 S-EL2 启动最小 SP（Week 35-36）⏸️ **未开始**
+
+**实现任务**:
+1. **SP 加载和启动**:
+   - [ ] 从 FIP 中读取 SP binary 和 manifest
+   - [ ] 为 SP 创建 Secure Stage-2 映射
+   - [ ] 跳转到 S-EL1 执行 SP
+
+2. **SP 通信**:
+   - [ ] FFA_MSG_SEND_DIRECT_REQ 从 NS → S (经 SPMD → 我们的 SPMC → SP)
+   - [ ] FFA_MSG_SEND_DIRECT_RESP 返回
+   - [ ] 完整 SMC 路径: NS-EL1 → (NS-EL2 trap) → EL3 SPMD → S-EL2 SPMC → S-EL1 SP
+
+3. **Secure 中断路由**:
+   - [ ] FIQ 路由到 S-EL2
+   - [ ] 注入到 SP (S-EL1)
+
+**验收**:
+- [ ] 最小 bare-metal SP 在 S-EL1 成功启动
+- [ ] NS → SP 直接消息传递正常
+- [ ] 完整的跨世界 FF-A 路径验证
+
+**预估**: 2 周
 
 ---
 
 **Milestone 4 总验收**:
-- [ ] Secure Hypervisor运行在S-EL2
-- [ ] OP-TEE作为S-VM运行
-- [ ] Normal World和Secure World通过FF-A通信
-- [ ] TA可以被调用并执行
+- [ ] TF-A boot chain 正常 (BL1 → BL2 → BL31/SPMD → BL32/SPMC → BL33)
+- [ ] 我们的 hypervisor 同时支持 NS-EL2 和 S-EL2 (SPMC) 模式
+- [ ] SPMD ↔ SPMC 协议握手成功
+- [ ] NS → SP 的 FF-A 直接消息传递正常
+- [ ] 为 pKVM 集成做好准备（NS-EL2 空闲，可被 pKVM 占据）
 
-**预估总时间**: 8周（Week 29-36）
+**预估总时间**: 6-8 周（Week 29-36）
 **状态**: ⏸️ 未开始
 
 ---
 
-### Milestone 5: 安全扩展 - RME & CCA（Week 37-52+）⏸️ **未开始**
+### Milestone 4.5: pKVM 集成（Week 37-42）⏸️ **未开始**
+**目标**: 在 NS-EL2 运行 pKVM，我们的 hypervisor 在 S-EL2 作为 SPMC，验证完整 FF-A 端到端路径
+
+**架构目标**:
+```
+EL3:    TF-A BL31 + SPMD
+S-EL2:  我们的 hypervisor (SPMC, BL32) → 管理 Secure Partitions
+S-EL1:  Secure Partitions
+NS-EL2: pKVM (Linux KVM protected mode) → 管理 Normal World VMs
+NS-EL1: Linux/Android guest
+```
+
+#### Sprint 4.5.1: 构建 pKVM Kernel（Week 37-38）⏸️ **未开始**
+
+**实现任务**:
+1. **pKVM Kernel 配置**:
+   - [ ] Linux 6.6+ 开启 `CONFIG_KVM=y`, `CONFIG_KVM_ARM_HOST=y`
+   - [ ] `CONFIG_VIRTUALIZATION=y`, `CONFIG_HAVE_KVM=y`
+   - [ ] pKVM protected mode 相关 config
+   - [ ] Docker 构建脚本
+
+2. **Boot Chain 适配**:
+   - [ ] pKVM 作为 BL33 运行在 NS-EL2
+   - [ ] TF-A BL31 将控制权交给 pKVM
+   - [ ] pKVM 初始化 Stage-2 页表保护
+
+**验收**:
+- [ ] pKVM kernel 编译成功
+- [ ] pKVM 通过 TF-A boot chain 启动到 NS-EL2
+
+**预估**: 2 周
+
+---
+
+#### Sprint 4.5.2: FF-A 端到端集成（Week 39-42）⏸️ **未开始**
+
+**实现任务**:
+1. **pKVM FF-A Proxy ↔ 我们的 SPMC**:
+   - [ ] pKVM trap guest SMC → pKVM FF-A proxy 验证 → `smc #0` → SPMD(EL3) → 我们的 SPMC(S-EL2)
+   - [ ] FFA_MEM_SHARE 端到端: guest page ownership → pKVM S2AP → SPMD relay → SPMC SP mapping
+   - [ ] FFA_MSG_SEND_DIRECT_REQ: guest → pKVM → SPMD → SPMC → SP → 返回
+
+2. **双 Hypervisor 协调**:
+   - [ ] pKVM (NS-EL2) 和我们的 SPMC (S-EL2) 各自管理独立的 Stage-2
+   - [ ] EL3 SPMD 负责世界切换（context save/restore）
+   - [ ] Secure 中断路由 (FIQ → S-EL2，IRQ → NS-EL2)
+
+3. **端到端验证**:
+   - [ ] Android VM (pKVM protected) 通过 FF-A 与 SP 共享内存
+   - [ ] 全程经过 pKVM proxy → SPMD → 我们的 SPMC
+   - [ ] 内存隔离: pKVM protected VM 的页不可被 host 直接访问
+
+**验收**:
+- [ ] pKVM guest 的 FF-A MEM_SHARE 经过完整路径
+- [ ] NS → S 直接消息传递正常
+- [ ] 两个 hypervisor 和平共处
+
+**预估**: 4 周
+
+---
+
+**Milestone 4.5 总验收**:
+- [ ] pKVM 在 NS-EL2 运行，我们的 hypervisor 在 S-EL2 运行
+- [ ] 完整 FF-A 路径: NS-EL1 → NS-EL2(pKVM) → EL3(SPMD) → S-EL2(SPMC) → S-EL1(SP)
+- [ ] 内存共享端到端验证
+- [ ] 这是开源领域罕见的完整 ARM 安全架构实现
+
+**预估总时间**: 4-6 周（Week 37-42）
+**状态**: ⏸️ 未开始
+
+---
+
+### Milestone 5: 安全扩展 - RME & CCA（Week 43-58+）⏸️ **未开始**
 **目标**: 实现Realm Manager (RMM)，支持Realm VM启动Guest OS
 
 #### Sprint 5.1: GPT和内存隔离（Week 37-40）⏸️ **未开始**
@@ -1048,10 +1156,11 @@ GitHub Actions配置：
 | M0 | 项目启动 | 2周 | 2周 | ✅ 已完成 |
 | M1 | MVP - 基础虚拟化 | 8周 | 10周 | ✅ 已完成 |
 | M2 | 增强功能 | 8周 | 18周 | ✅ 已完成 |
-| M3 | FF-A实现 | 10周 | 28周 | 🔧 进行中 (Sprint 3.1/3.1b/3.1c ✅, ~60%) |
+| M3 | FF-A 实现 + NS-EL2 完善 | 10周 | 28周 | 🔧 进行中 (Sprint 3.1/3.1b/3.1c ✅, Sprint 3.2 🔧, ~70%) |
 | Android | Android Boot (4 phases) | 4-8周 | — | ✅ Phase 2 完成 (PL031 RTC + Init) |
-| M4 | Secure EL2 & TEE | 8周 | 36周 | ⏸️ 未开始 |
-| M5 | RME & CCA | 16-20周 | 52-56周 | ⏸️ 未开始 |
+| M4 | S-EL2 SPMC (QEMU secure=on + TF-A) | 6-8周 | 36周 | ⏸️ 未开始 |
+| M4.5 | pKVM 集成 (NS-EL2=pKVM, S-EL2=us) | 4-6周 | 42周 | ⏸️ 未开始 |
+| M5 | RME & CCA | 16-20周 | 58-62周 | ⏸️ 未开始 |
 
 **总计**: 约12-14个月（灵活调整）
 **当前进度**: 18周 / 52-56周 = **约33%** (按预估周数)
@@ -1065,11 +1174,12 @@ GitHub Actions配置：
 
 - [x] **M1 MVP**: QEMU启动busybox ✅ **已完成 2026-01-26**
 - [x] **M2 增强**: 4 vCPU Linux + virtio-blk + virtio-net + UART RX + GIC emulation ✅ **已完成 2026-02-13**
-- [ ] **M3 FF-A**: VM与SP内存共享成功 🔧 **进行中** (proxy + stub SPMC + VM-to-VM 已完成)
+- [ ] **M3 FF-A**: VM 与 SP 内存共享 + 2MB block 拆分 + notifications 🔧 **进行中** (proxy + stub SPMC + VM-to-VM ✅, 2MB split + notifications 待做)
 - [x] **Android Phase 1**: Linux 6.6.126 + Android config boots to BusyBox shell ✅ **已完成 2026-02-19**
 - [x] **Android Phase 2**: PL031 RTC + Android init + 1GB RAM + binderfs ✅ **已完成 2026-02-19**
-- [ ] **M4 TEE**: OP-TEE运行并可调用TA ⏸️ **未开始**
-- [ ] **M5 CCA**: Realm VM启动Guest OS ⏸️ **未开始**
+- [ ] **M4 S-EL2**: 我们的 hypervisor 作为 SPMC 在 S-EL2 运行 (TF-A boot chain) ⏸️ **未开始**
+- [ ] **M4.5 pKVM**: pKVM(NS-EL2) + 我们的 SPMC(S-EL2) + FF-A 端到端 ⏸️ **未开始**
+- [ ] **M5 CCA**: Realm VM 启动 Guest OS ⏸️ **未开始**
 
 ### 8.2 工程成功标准
 
@@ -1089,7 +1199,7 @@ GitHub Actions配置：
 
 ## 9. 下一步行动
 
-### 🎯 当前位置：Milestone 2 已完成 ✅
+### 🎯 当前位置：M3 Sprint 3.2 进行中 (NS-EL2 完善)
 
 **Phase 8+ 候选方向** (选择一个):
 
