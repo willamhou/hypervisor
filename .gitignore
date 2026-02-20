@@ -31,6 +31,7 @@ tools/
 # TF-A build artifacts (source + intermediates)
 tfa/tfa-src/
 tfa/flash.bin
+tfa/flash-bl33.bin
 tfa/bl32.bin
 tfa/bl33.bin
 tfa/qemu_fw.bios

@@ -6,7 +6,8 @@
  *   x1 = HW_CONFIG (hardware DTB) physical address
  *   x4 = Core linear ID
  *
- * Prints "Hello from S-EL2!" to PL011 UART at 0x09000000, then spins.
+ * Prints "Hello from S-EL2!" to PL011 UART, then issues FFA_MSG_WAIT
+ * to signal init complete to SPMD, unblocking BL33 boot.
  */
 
 .section .text.boot
@@ -28,10 +29,13 @@ _start:
     b 1b
 
 2:
-    /* Spin forever — SPMD expects SPMC to return via SMC,
-       but for this trivial test we just halt. */
-    wfe
-    b 2b
+    /* Signal SPMC init complete to SPMD via FFA_MSG_WAIT */
+    ldr x0, =0x8400006B    /* FFA_MSG_WAIT */
+    mov x1, xzr
+    mov x2, xzr
+    mov x3, xzr
+    smc #0
+    b 2b                    /* Loop if SPMD returns */
 
 .align 3
 msg:

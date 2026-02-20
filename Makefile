@@ -1,4 +1,4 @@
-.PHONY: all build run debug clean build-qemu build-bl32-bl33 build-tfa run-sel2
+.PHONY: all build run debug clean build-qemu build-bl32-bl33 build-tfa build-tfa-bl33 run-sel2 run-tfa-linux
 
 # Auto-load Cargo environment
 SHELL := /bin/bash
@@ -211,6 +211,40 @@ run-sel2:
 	    -cpu max -smp 4 -m 2G -nographic \
 	    -bios $(TFA_FLASH) -nic none
 
+# TF-A flash.bin with PRELOADED_BL33_BASE (hypervisor loaded via QEMU -device loader)
+TFA_FLASH_BL33 := $(TFA_DIR)/flash-bl33.bin
+
+# Build TF-A flash.bin that expects BL33 preloaded at 0x40200000
+# (0x40200000 avoids QEMU's auto-generated DTB at 0x40000000-0x40100000)
+build-tfa-bl33: build-bl32-bl33
+	@echo "Building TF-A with PRELOADED_BL33_BASE=0x40200000 (Docker)..."
+	docker run --rm \
+	    -v $(PWD)/tfa:/output \
+	    -v $(PWD):/src \
+	    -v tfa-bl33-build-cache:/output/tfa-src \
+	    -e TFA_PRELOADED_BL33_BASE=0x40200000 \
+	    debian:bookworm-slim bash /src/scripts/build-tfa.sh
+	mv $(TFA_DIR)/flash.bin $(TFA_FLASH_BL33)
+
+# Boot: TF-A → BL32 (stub S-EL2) → BL33 (our hypervisor at NS-EL2) → Linux
+run-tfa-linux:
+	@test -f $(TFA_FLASH_BL33) || (echo "ERROR: $(TFA_FLASH_BL33) not found. Run 'make build-tfa-bl33' first." && exit 1)
+	@echo "Building hypervisor with Linux guest support..."
+	cargo build --target aarch64-unknown-none --features linux_guest
+	@echo "Creating raw binary..."
+	aarch64-linux-gnu-objcopy -O binary $(BINARY) $(BINARY_BIN)
+	@echo "Starting TF-A → hypervisor → Linux boot chain..."
+	@echo "Press Ctrl+A then X to exit QEMU"
+	$(QEMU_SEL2) -machine virt,secure=on,virtualization=on,gic-version=3 \
+	    -cpu max -smp 4 -m 2G -nographic \
+	    -bios $(TFA_FLASH_BL33) \
+	    -device loader,file=$(BINARY_BIN),addr=0x40200000,force-raw=on \
+	    -device loader,file=$(LINUX_IMAGE),addr=0x48000000,force-raw=on \
+	    -device loader,file=$(LINUX_DTB),addr=0x47000000,force-raw=on \
+	    -device loader,file=$(LINUX_INITRAMFS),addr=0x54000000,force-raw=on \
+	    -device loader,file=$(LINUX_DISK),addr=0x58000000,force-raw=on \
+	    -nic none
+
 # Help
 help:
 	@echo "Available targets:"
@@ -223,8 +257,10 @@ help:
 	@echo "  run-multi-vm  - Build and run with 2 Linux VMs (time-sliced)"
 	@echo "  run-android   - Build and run with Android-configured kernel"
 	@echo "  run-sel2      - Boot TF-A with BL32 at S-EL2 (Phase 4)"
+	@echo "  run-tfa-linux - Boot TF-A -> hypervisor -> Linux (Phase 4)"
 	@echo "  build-qemu    - Build QEMU 9.2.3 from source (one-time)"
 	@echo "  build-tfa     - Build TF-A + flash.bin with SPD=spmd"
+	@echo "  build-tfa-bl33 - Build TF-A flash.bin with preloaded BL33"
 	@echo "  build-bl32-bl33 - Build trivial BL32/BL33 hello binaries"
 	@echo "  debug     - Build and run in QEMU with GDB server"
 	@echo "  clean     - Clean build artifacts"

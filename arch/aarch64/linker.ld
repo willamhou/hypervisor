@@ -4,8 +4,10 @@ ENTRY(_start)
 
 SECTIONS
 {
-    /* QEMU virt machine: RAM starts at 0x40000000 */
-    . = 0x40000000;
+    /* QEMU virt machine: RAM starts at 0x40000000.
+       Hypervisor loads at 0x40200000 to avoid QEMU's auto-generated DTB
+       (placed at 0x40000000-0x40100000 in -bios mode for TF-A boot). */
+    . = 0x40200000;
 
     .text : {
         KEEP(*(.text.boot))

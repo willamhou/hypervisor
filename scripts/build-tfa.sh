@@ -58,6 +58,17 @@ fi
 
 cd tfa-src
 
+# Support PRELOADED_BL33_BASE: BL2 skips loading BL33 from FIP,
+# uses the specified address as BL33 entry point instead.
+# QEMU's -device loader pre-loads the actual binary at that address.
+EXTRA_ARGS=""
+if [ -n "${TFA_PRELOADED_BL33_BASE:-}" ]; then
+    EXTRA_ARGS="PRELOADED_BL33_BASE=${TFA_PRELOADED_BL33_BASE}"
+    echo ">>> PRELOADED_BL33_BASE=${TFA_PRELOADED_BL33_BASE}"
+    # Force full rebuild when switching between FIP-loaded and preloaded BL33
+    make PLAT=qemu realclean 2>/dev/null || true
+fi
+
 # Build TF-A with SPMD at EL3 + SPMC at S-EL2
 echo ">>> Building TF-A..."
 make -j${NCPU} \
@@ -75,6 +86,7 @@ make -j${NCPU} \
     QEMU_TOS_FW_CONFIG_DTS=/src/tfa/spmc_manifest.dts \
     QEMU_TB_FW_CONFIG_DTS=/src/tfa/tb_fw_config.dts \
     DEBUG=1 \
+    ${EXTRA_ARGS} \
     all fip
 
 # Determine build output directory based on DEBUG setting
