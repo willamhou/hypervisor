@@ -650,6 +650,10 @@ pub fn run_multi_vm_guests() -> Result<(), &'static str> {
     // Reset exception counters
     crate::arch::aarch64::hypervisor::exception::reset_exception_counters();
 
+    // Run FF-A integration test with real Stage-2 page tables.
+    // Both VMs' Stage-2 are configured and PER_VM_VTTBR is populated.
+    test_ffa_vm_to_vm_integration(vm0_vttbr);
+
     uart_puts(b"[MULTI-VM] Starting round-robin scheduler...\n");
     uart_puts(b"========================================\n\n");
 
@@ -659,4 +663,262 @@ pub fn run_multi_vm_guests() -> Result<(), &'static str> {
 
     uart_puts(b"\n[MULTI-VM] All VMs finished\n");
     Ok(())
+}
+
+/// FF-A VM-to-VM integration test with real Stage-2 page tables.
+///
+/// Verifies the full MEM_SHARE → RETRIEVE → RELINQUISH → RECLAIM lifecycle
+/// with actual PTE SW bit transitions and S2AP changes. Runs after both VMs'
+/// Stage-2 tables are configured (PER_VM_VTTBR populated) but before guest boot.
+#[cfg(feature = "multi_vm")]
+fn test_ffa_vm_to_vm_integration(vm0_vttbr: u64) {
+    use crate::arch::aarch64::defs::*;
+    use crate::arch::aarch64::regs::VcpuContext;
+    use crate::ffa;
+    use crate::ffa::memory::PageOwnership;
+    use crate::ffa::stage2_walker::Stage2Walker;
+    use crate::global::{CURRENT_VM_ID, PER_VM_VTTBR};
+    use core::sync::atomic::Ordering;
+
+    uart_puts(b"\n=== Test: FF-A Integration (VM-to-VM with Stage-2) ===\n");
+    let mut pass: u64 = 0;
+    let mut fail: u64 = 0;
+
+    // Test IPA within VM 0's mapped range (0x48000000-0x58000000),
+    // past initramfs (0x54000000) and before disk image (0x58000000).
+    // This IPA is NOT in VM 1's range, so map_page() will create new entries.
+    const TEST_IPA: u64 = 0x5700_0000;
+
+    // Ensure VM 0 context is active
+    CURRENT_VM_ID.store(0, Ordering::Relaxed);
+    unsafe {
+        core::arch::asm!(
+            "msr vttbr_el2, {v}",
+            "isb",
+            v = in(reg) vm0_vttbr,
+            options(nostack, nomem),
+        );
+    }
+
+    // ── Test 1: MEM_SHARE VM0→VM1 ──────────────────────────────────
+    let mut ctx = VcpuContext::default();
+    ctx.gp_regs.x0 = ffa::FFA_MEM_SHARE_32;
+    ctx.gp_regs.x3 = TEST_IPA;
+    ctx.gp_regs.x4 = 1; // 1 page
+    ctx.gp_regs.x5 = 2; // receiver = VM1 (partition ID 2)
+    let cont = ffa::proxy::handle_ffa_call(&mut ctx);
+    let handle = ctx.gp_regs.x2 | (ctx.gp_regs.x3 << 32);
+
+    if cont && ctx.gp_regs.x0 == ffa::FFA_SUCCESS_32 && handle > 0 {
+        uart_puts(b"  [PASS] 1: MEM_SHARE VM0->VM1 handle=0x");
+        uart_put_hex(handle);
+        uart_puts(b"\n");
+        pass += 1;
+    } else {
+        uart_puts(b"  [FAIL] 1: MEM_SHARE VM0->VM1\n");
+        fail += 1;
+        // Cannot continue without a valid handle
+        uart_puts(b"  Results: ");
+        crate::uart_put_u64(pass);
+        uart_puts(b" passed, ");
+        crate::uart_put_u64(fail);
+        uart_puts(b" failed\n");
+        assert!(false, "FF-A integration: MEM_SHARE failed");
+        return;
+    }
+
+    // ── Test 2: Verify sender PTE SW bits = SharedOwned ─────────────
+    {
+        let walker = Stage2Walker::from_vttbr();
+        let sw = walker.read_sw_bits(TEST_IPA);
+        if sw == Some(PageOwnership::SharedOwned as u8) {
+            uart_puts(b"  [PASS] 2: Sender PTE SW = SharedOwned\n");
+            pass += 1;
+        } else {
+            uart_puts(b"  [FAIL] 2: Sender PTE SW = 0x");
+            uart_put_hex(sw.unwrap_or(0xFF) as u64);
+            uart_puts(b"\n");
+            fail += 1;
+        }
+    }
+
+    // ── Test 3: Verify sender S2AP = RO ─────────────────────────────
+    {
+        let walker = Stage2Walker::from_vttbr();
+        let s2ap = walker.read_s2ap(TEST_IPA);
+        let expected = (S2AP_RO >> S2AP_SHIFT) as u8;
+        if s2ap == Some(expected) {
+            uart_puts(b"  [PASS] 3: Sender S2AP = RO\n");
+            pass += 1;
+        } else {
+            uart_puts(b"  [FAIL] 3: Sender S2AP = 0x");
+            uart_put_hex(s2ap.unwrap_or(0xFF) as u64);
+            uart_puts(b"\n");
+            fail += 1;
+        }
+    }
+
+    // ── Switch to VM 1 context for RETRIEVE ─────────────────────────
+    let vm1_l0_pa = PER_VM_VTTBR[1].load(Ordering::Acquire);
+    // Construct full VTTBR with VMID=1 in bits [63:48]
+    let vm1_vttbr = vm1_l0_pa | (1u64 << 48);
+    CURRENT_VM_ID.store(1, Ordering::Relaxed);
+    unsafe {
+        core::arch::asm!(
+            "msr vttbr_el2, {v}",
+            "isb",
+            v = in(reg) vm1_vttbr,
+            options(nostack, nomem),
+        );
+    }
+
+    // ── Test 4: MEM_RETRIEVE_REQ as VM1 ─────────────────────────────
+    {
+        let mut ctx = VcpuContext::default();
+        ctx.gp_regs.x0 = ffa::FFA_MEM_RETRIEVE_REQ_32;
+        ctx.gp_regs.x1 = handle & 0xFFFF_FFFF;
+        ctx.gp_regs.x2 = handle >> 32;
+        let cont = ffa::proxy::handle_ffa_call(&mut ctx);
+        if cont && ctx.gp_regs.x0 == ffa::FFA_MEM_RETRIEVE_RESP {
+            uart_puts(b"  [PASS] 4: MEM_RETRIEVE_REQ by VM1\n");
+            pass += 1;
+        } else {
+            uart_puts(b"  [FAIL] 4: MEM_RETRIEVE_REQ x0=0x");
+            uart_put_hex(ctx.gp_regs.x0);
+            uart_puts(b"\n");
+            fail += 1;
+        }
+    }
+
+    // ── Test 5: Verify receiver PTE SW bits = SharedBorrowed ────────
+    {
+        let walker = Stage2Walker::new(vm1_l0_pa);
+        let sw = walker.read_sw_bits(TEST_IPA);
+        if sw == Some(PageOwnership::SharedBorrowed as u8) {
+            uart_puts(b"  [PASS] 5: Receiver PTE SW = SharedBorrowed\n");
+            pass += 1;
+        } else {
+            uart_puts(b"  [FAIL] 5: Receiver PTE SW = 0x");
+            uart_put_hex(sw.unwrap_or(0xFF) as u64);
+            uart_puts(b"\n");
+            fail += 1;
+        }
+    }
+
+    // ── Test 6: Verify receiver S2AP = RW ───────────────────────────
+    {
+        let walker = Stage2Walker::new(vm1_l0_pa);
+        let s2ap = walker.read_s2ap(TEST_IPA);
+        let expected = (S2AP_RW >> S2AP_SHIFT) as u8;
+        if s2ap == Some(expected) {
+            uart_puts(b"  [PASS] 6: Receiver S2AP = RW\n");
+            pass += 1;
+        } else {
+            uart_puts(b"  [FAIL] 6: Receiver S2AP = 0x");
+            uart_put_hex(s2ap.unwrap_or(0xFF) as u64);
+            uart_puts(b"\n");
+            fail += 1;
+        }
+    }
+
+    // ── Test 7: MEM_RELINQUISH as VM1 ───────────────────────────────
+    {
+        let mut ctx = VcpuContext::default();
+        ctx.gp_regs.x0 = ffa::FFA_MEM_RELINQUISH;
+        ctx.gp_regs.x1 = handle & 0xFFFF_FFFF;
+        ctx.gp_regs.x2 = handle >> 32;
+        let cont = ffa::proxy::handle_ffa_call(&mut ctx);
+        if cont && ctx.gp_regs.x0 == ffa::FFA_SUCCESS_32 {
+            uart_puts(b"  [PASS] 7: MEM_RELINQUISH by VM1\n");
+            pass += 1;
+        } else {
+            uart_puts(b"  [FAIL] 7: MEM_RELINQUISH x0=0x");
+            uart_put_hex(ctx.gp_regs.x0);
+            uart_puts(b"\n");
+            fail += 1;
+        }
+    }
+
+    // ── Test 8: Verify receiver page unmapped ───────────────────────
+    {
+        let walker = Stage2Walker::new(vm1_l0_pa);
+        let sw = walker.read_sw_bits(TEST_IPA);
+        if sw.is_none() {
+            uart_puts(b"  [PASS] 8: Receiver page unmapped after RELINQUISH\n");
+            pass += 1;
+        } else {
+            uart_puts(b"  [FAIL] 8: Receiver page still mapped, SW=0x");
+            uart_put_hex(sw.unwrap() as u64);
+            uart_puts(b"\n");
+            fail += 1;
+        }
+    }
+
+    // ── Switch back to VM 0 for RECLAIM ─────────────────────────────
+    CURRENT_VM_ID.store(0, Ordering::Relaxed);
+    unsafe {
+        core::arch::asm!(
+            "msr vttbr_el2, {v}",
+            "isb",
+            v = in(reg) vm0_vttbr,
+            options(nostack, nomem),
+        );
+    }
+
+    // ── Test 9: MEM_RECLAIM as VM0 ──────────────────────────────────
+    {
+        let mut ctx = VcpuContext::default();
+        ctx.gp_regs.x0 = ffa::FFA_MEM_RECLAIM;
+        ctx.gp_regs.x1 = handle & 0xFFFF_FFFF;
+        ctx.gp_regs.x2 = handle >> 32;
+        let cont = ffa::proxy::handle_ffa_call(&mut ctx);
+        if cont && ctx.gp_regs.x0 == ffa::FFA_SUCCESS_32 {
+            uart_puts(b"  [PASS] 9: MEM_RECLAIM by VM0\n");
+            pass += 1;
+        } else {
+            uart_puts(b"  [FAIL] 9: MEM_RECLAIM x0=0x");
+            uart_put_hex(ctx.gp_regs.x0);
+            uart_puts(b"\n");
+            fail += 1;
+        }
+    }
+
+    // ── Test 10: Verify sender PTE SW bits restored to Owned ────────
+    {
+        let walker = Stage2Walker::from_vttbr();
+        let sw = walker.read_sw_bits(TEST_IPA);
+        if sw == Some(PageOwnership::Owned as u8) {
+            uart_puts(b"  [PASS] 10: Sender PTE SW restored to Owned\n");
+            pass += 1;
+        } else {
+            uart_puts(b"  [FAIL] 10: Sender PTE SW = 0x");
+            uart_put_hex(sw.unwrap_or(0xFF) as u64);
+            uart_puts(b"\n");
+            fail += 1;
+        }
+    }
+
+    // ── Test 11: Verify sender S2AP restored to RW ──────────────────
+    {
+        let walker = Stage2Walker::from_vttbr();
+        let s2ap = walker.read_s2ap(TEST_IPA);
+        let expected = (S2AP_RW >> S2AP_SHIFT) as u8;
+        if s2ap == Some(expected) {
+            uart_puts(b"  [PASS] 11: Sender S2AP restored to RW\n");
+            pass += 1;
+        } else {
+            uart_puts(b"  [FAIL] 11: Sender S2AP = 0x");
+            uart_put_hex(s2ap.unwrap_or(0xFF) as u64);
+            uart_puts(b"\n");
+            fail += 1;
+        }
+    }
+
+    // ── Results ─────────────────────────────────────────────────────
+    uart_puts(b"  Results: ");
+    crate::uart_put_u64(pass);
+    uart_puts(b" passed, ");
+    crate::uart_put_u64(fail);
+    uart_puts(b" failed\n");
+    assert!(fail == 0, "FF-A integration tests failed");
 }
