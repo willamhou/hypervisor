@@ -1,6 +1,6 @@
 # ARM64 Hypervisor
 
-A bare-metal Type-1 hypervisor for ARM64 (AArch64) written in Rust. Runs at EL2 and manages guest VMs at EL1, targeting QEMU virt machine. Boots Linux 6.12.12 to BusyBox shell with 4 vCPUs, virtio-blk storage, and multi-VM support.
+A bare-metal Type-1 hypervisor for ARM64 (AArch64) written in Rust. Runs at EL2 and manages guest VMs at EL1, targeting QEMU virt machine. Boots Linux 6.12.12 to BusyBox shell with 4 vCPUs, virtio-blk storage, virtio-net networking, multi-VM support, and FF-A v1.1 proxy with VM-to-VM memory sharing.
 
 ## Project Goals
 
@@ -11,21 +11,23 @@ A bare-metal Type-1 hypervisor for ARM64 (AArch64) written in Rust. Runs at EL2 
 
 ## Features
 
+- **FF-A v1.1 Proxy**: Firmware Framework for Arm — SMC interception, stub SPMC with 2 SPs, page ownership validation, VM-to-VM memory sharing (RETRIEVE/RELINQUISH), descriptor parsing, SMC forwarding to EL3
+- **Virtio-net + VSwitch**: L2 virtual switch with MAC learning, per-VM MAC addresses, inter-VM frame forwarding, auto-IP assignment
 - **Multi-VM**: 2 Linux VMs time-sliced on 1 pCPU with per-VM Stage-2, VMID-tagged TLBs, independent device managers
 - **Multi-pCPU**: 4 vCPUs on 4 physical CPUs (1:1 affinity) with PSCI boot, TPIDR_EL2 per-CPU context
 - **SMP Scheduling**: 4 vCPUs on 1 pCPU with cooperative (WFI) + preemptive (10ms CNTHP timer) scheduling
 - **DTB Runtime Parsing**: Discovers UART, GIC, RAM, CPU count from host device tree at boot
 - **Virtio-blk**: Block device via virtio-mmio transport with in-memory disk image backend
 - **GICv3 Emulation**: Full GICD/GICR trap-and-emulate with write-through, List Register injection, SGI/IPI emulation
-- **Device Emulation**: PL011 UART (TX+RX), GIC Distributor/Redistributor, virtio-mmio
+- **Device Emulation**: PL011 UART (TX+RX), PL031 RTC, GIC Distributor/Redistributor, virtio-mmio
 - **Stage-2 Memory**: Dynamic page tables (2MB blocks + 4KB pages), VMID-tagged TLBs, heap gap protection
-- **Linux Guest Boot**: Boots Linux 6.12.12 (custom defconfig) to BusyBox shell with 4 CPUs and virtio-blk
+- **Linux Guest Boot**: Boots Linux 6.12.12 (custom defconfig) to BusyBox shell with 4 CPUs, virtio-blk, virtio-net
 
 ## Current Status
 
-**Progress**: Milestones 0-2 complete, multi-VM + multi-pCPU + DTB parsing implemented
-**Tests**: 24 test suites (~113 assertions), all passing
-**Code**: ~10,000 lines (src + tests)
+**Progress**: Milestones 0-2 complete, M3 (FF-A) in progress — proxy, memory sharing, VM-to-VM implemented
+**Tests**: 30 test suites (~171 assertions), all passing
+**Code**: ~16,000 lines (src + tests)
 
 ### Milestone Overview
 
@@ -37,18 +39,18 @@ M2: Enhanced Features      █████████████████�
     2.2 Dynamic Memory     ████████████████████ 100%
     2.3 Multi-vCPU         ████████████████████ 100%
     2.4 API Documentation  ████████████████████ 100%
-M3: FF-A                   ░░░░░░░░░░░░░░░░░░░░   0%
+M3: FF-A                   ████████████░░░░░░░░  60%
 M4: Secure EL2 / TEE      ░░░░░░░░░░░░░░░░░░░░   0%
 M5: RME & CCA             ░░░░░░░░░░░░░░░░░░░░   0%
 ```
 
 ### Latest Updates
 
+- **FF-A v1.1 Proxy**: SMC trap, stub SPMC (2 SPs), page ownership via Stage-2 PTE SW bits, VM-to-VM memory sharing
+- **VM-to-VM Memory Sharing**: MEM_RETRIEVE_REQ/RELINQUISH with dynamic Stage-2 page mapping across VMs
+- **Virtio-net + VSwitch**: L2 virtual switch, per-VM MAC (52:54:00:00:00:{id+1}), auto-IP (10.0.0.{id+1}/24)
 - **Multi-VM**: 2 Linux VMs time-sliced on 1 pCPU, both boot to BusyBox shell
 - **Multi-pCPU**: 4 vCPUs on 4 physical CPUs with PSCI boot and physical IPI delivery
-- **DTB Runtime Parsing**: Hardware discovery from host device tree (UART, GIC, RAM, CPU count)
-- **Virtio-blk**: Block storage via virtio-mmio transport with in-memory disk backend
-- **Linux Boot**: Linux 6.12.12 boots to BusyBox shell with 4 CPUs, virtio-blk, full userspace
 
 ## Quick Start
 
@@ -121,6 +123,7 @@ Exception Vector (exception.S) ── save context
 handle_exception() ── decode ESR_EL2
   ├── WFI → check pending timer, inject if ready
   ├── HVC → handle hypercall, advance PC
+  ├── SMC → PSCI or FF-A proxy or forward to EL3
   ├── Data Abort → decode instruction → MMIO emulation
   └── IRQ → acknowledge, inject via List Register
   │
@@ -142,14 +145,21 @@ Restore context → ERET back to guest
 | Timer | `src/arch/aarch64/peripherals/timer.rs` | Virtual timer, CNTHCTL config |
 | Device Manager | `src/devices/mod.rs` | MMIO device routing |
 | PL011 UART | `src/devices/pl011/` | UART emulation |
-| GIC Distributor | `src/devices/gic/` | GICD emulation |
-| Arch Constants | `src/arch/aarch64/defs.rs` | ARM64 named constants |
-| Board Constants | `src/platform.rs` | QEMU virt platform constants |
-| Arch Traits | `src/arch/traits.rs` | Portable trait definitions |
+| PL031 RTC | `src/devices/pl031.rs` | Real-time clock emulation |
+| GIC Distributor | `src/devices/gic/` | GICD/GICR emulation |
+| Virtio-blk | `src/devices/virtio/blk.rs` | Block device backend |
+| Virtio-net | `src/devices/virtio/net.rs` | Network device backend |
+| VSwitch | `src/vswitch.rs` | L2 virtual switch with MAC learning |
+| FF-A Proxy | `src/ffa/proxy.rs` | FF-A v1.1 SMC interception and dispatch |
+| FF-A Stage-2 Walker | `src/ffa/stage2_walker.rs` | PTE SW bits for page ownership |
+| FF-A Stub SPMC | `src/ffa/stub_spmc.rs` | Simulated Secure Partitions |
+| FF-A Descriptors | `src/ffa/descriptors.rs` | Memory region descriptor parsing |
+| FF-A SMC Forward | `src/ffa/smc_forward.rs` | SMC forwarding to EL3 |
 | DTB Parser | `src/dtb.rs` | Runtime hardware discovery from host DTB |
-| Virtio-blk | `src/devices/virtio/` | virtio-mmio transport + block device backend |
 | Global State | `src/global.rs` | Per-VM atomics, UART RX ring, pending SGIs/SPIs |
 | Guest Loader | `src/guest_loader.rs` | Linux/Zephyr boot configuration |
+| Arch Constants | `src/arch/aarch64/defs.rs` | ARM64 named constants |
+| Board Constants | `src/platform.rs` | QEMU virt platform constants |
 
 ### Memory Layout
 
@@ -169,33 +179,39 @@ Restore context → ERET back to guest
 
 ## Testing
 
-24 test suites (~113 assertions) run automatically on `make run`:
+30 test suites (~171 assertions) run automatically on `make run`:
 
 | Test | Description |
 |------|-------------|
+| `test_dtb` | DTB parsing, PlatformInfo defaults, GICR helpers |
 | `test_allocator` | Bump allocator page allocation |
 | `test_heap` | Heap initialization and global allocator |
-| `test_dynamic_pagetable` | Dynamic Stage-2 page table creation |
+| `test_dynamic_pagetable` | Dynamic Stage-2 page table creation + 4KB unmap |
 | `test_multi_vcpu` | Multi-vCPU creation and management |
 | `test_scheduler` | Round-robin scheduler logic |
-| `test_vm_scheduler` | VM-integrated scheduling |
-| `test_gicv3_virt` | GICv3 virtual interface and List Registers |
-| `test_guest` | Basic guest execution and hypercall |
+| `test_vm_scheduler` | VM-integrated scheduling lifecycle |
 | `test_mmio` | MMIO device emulation |
+| `test_gicv3_virt` | GICv3 virtual interface and List Registers |
 | `test_complete_interrupt` | End-to-end interrupt flow with GICv3 LRs |
-| `test_guest_irq` | SGI/SPI pending bitmask operations |
+| `test_guest` | Basic guest execution and hypercall |
 | `test_guest_loader` | Guest loader configuration |
 | `test_simple_guest` | Simple guest boot and exit |
 | `test_decode` | MMIO instruction decode (ISS + instruction paths) |
 | `test_gicd` | GICD shadow state (CTLR, ISENABLER, IROUTER) |
 | `test_gicr` | GICR per-vCPU state (TYPER, WAKER, ISENABLER0) |
 | `test_global` | PendingCpuOn atomics + UartRxRing SPSC buffer |
+| `test_guest_irq` | Per-VM PENDING_SGIS/PENDING_SPIS bitmask operations |
 | `test_device_routing` | DeviceManager registration, routing, accessors |
-| `test_vm_state_isolation` | Per-VM state isolation |
-| `test_vmid_vttbr` | VMID encoding in VTTBR |
+| `test_vm_state_isolation` | Per-VM SGI/SPI/online_mask/vcpu_id independence |
+| `test_vmid_vttbr` | VMID 0/1 encoding in VTTBR_EL2 |
 | `test_multi_vm_devices` | Per-VM device manager isolation |
 | `test_vm_activate` | VM Stage-2 activation |
-| `test_dtb` | DTB runtime parsing validation |
+| `test_pl031` | PL031 RTC time read/write |
+| `test_net_rx_ring` | NetRxRing SPSC: empty/store/take/fill/overflow/wraparound |
+| `test_vswitch` | VSwitch: flood/MAC learning/broadcast/no-self/capacity |
+| `test_virtio_net` | VirtioNet: device_id/features/queues/config/mac |
+| `test_page_ownership` | Stage-2 PTE SW bits: ownership transitions |
+| `test_ffa` | FF-A proxy: VERSION/ID_GET/FEATURES/RXTX/messaging/memory/VM-to-VM |
 | `test_guest_interrupt` | Guest interrupt injection + exception vector |
 
 ## Roadmap
@@ -209,11 +225,16 @@ Restore context → ERET back to guest
 - Multi-pCPU: 4 vCPUs on 4 physical CPUs with PSCI boot, TPIDR_EL2, physical IPI
 - Multi-VM: 2 Linux VMs time-sliced on 1 pCPU with per-VM Stage-2 and VMID TLBs
 - DTB runtime parsing: hardware discovery from host device tree
-- Code refactoring: named constants, dead code removal, architecture traits
+- Virtio-net + VSwitch: L2 virtual switch, inter-VM networking, auto-IP
+- FF-A v1.1 proxy: SMC trap, stub SPMC, page ownership, descriptor parsing, SMC forwarding
+- VM-to-VM FF-A memory sharing: MEM_RETRIEVE_REQ/RELINQUISH with dynamic Stage-2 mapping
+
+### In Progress
+
+- **M3 — FF-A**: ~60% complete — proxy, memory sharing, VM-to-VM done; remaining: real SPMC integration, multi-endpoint sharing, FFA_NOTIFICATION
 
 ### Planned
 
-- **M3 — FF-A**: Firmware Framework for Armv8-A — hypervisor endpoint, direct messaging, memory sharing
 - **M4 — Secure EL2**: TEE support, S-EL2 implementation, OP-TEE integration
 - **M5 — RME & CCA**: Realm Management Extension, Confidential Compute Architecture
 

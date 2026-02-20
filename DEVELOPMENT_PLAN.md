@@ -21,8 +21,8 @@ M5: RME & CCA         ░░░░░░░░░░░░░░░░░░░�
 Android Boot          ██████████░░░░░░░░░░  50% ✅ (Phase 2 完成)
 ```
 
-**测试覆盖**: ~162 assertions / 30 test suites (100% pass)
-**代码量**: ~13500+ 行
+**测试覆盖**: ~171 assertions / 30 test suites (100% pass)
+**代码量**: ~16000 行
 **Linux启动**: 4 vCPU, BusyBox shell, virtio-blk, virtio-net, multi-VM, FF-A proxy
 **Android启动**: 4 vCPU, PL031 RTC, Binder IPC, minimal init, 1GB RAM
 **编译警告**: 最小化
@@ -525,22 +525,47 @@ Android Boot          ██████████░░░░░░░░░�
 
 ---
 
+#### Sprint 3.1c: VM-to-VM FF-A Memory Sharing ✅ **已完成**
+**设计文档**: `docs/plans/2026-02-20-vm-to-vm-ffa-design.md`
+
+**实现任务**:
+1. **VM-to-VM Memory Sharing**:
+   - [x] FFA_MEM_RETRIEVE_REQ: receiver maps shared pages into own Stage-2 via PER_VM_VTTBR
+   - [x] FFA_MEM_RELINQUISH: receiver unmaps pages, restores sender S2AP
+   - [x] Stage2Walker::map_page() / unmap_page() for cross-VM page mapping
+   - [x] PER_VM_VTTBR global: per-VM L0 table PA for cross-VM Stage-2 access
+   - [x] ShareInfoFull: extended share records with receiver tracking + mark_retrieved/mark_relinquished
+   - [x] Receiver validation (is_valid_receiver, receiver != sender, known SP or VM)
+
+2. **Tests**:
+   - [x] test_ffa expanded: 18 → 27 assertions (+9 VM-to-VM sharing tests)
+   - [x] Full lifecycle: SHARE → RETRIEVE → RELINQUISH → RECLAIM
+   - [x] Error cases: retrieve non-existent, relinquish already-relinquished, wrong receiver
+
+**验收**:
+- [x] VM-to-VM memory sharing complete lifecycle
+- [x] Dynamic Stage-2 page mapping across VMs
+- [x] 30 test suites, ~171 assertions, 0 failures
+
+**实际完成**: 2026-02-20
+**关键文件**: `src/ffa/proxy.rs`, `src/ffa/stub_spmc.rs`, `src/ffa/stage2_walker.rs`, `src/global.rs`
+
+---
+
 #### Sprint 3.2: 真实 SPMC 集成（Week 22-24）⏸️ **未开始**
 **目标**: 将 stub SPMC 替换为对真实 Secure World 的 SMC 转发
 
 **实现任务**:
-1. **完整内存共享生命周期**:
-   - [ ] FFA_MEM_RETRIEVE_REQ/RESP 完整实现
-   - [ ] FFA_MEM_RELINQUISH 完整实现
+1. **真实 SPMC 通信**:
+   - [ ] 通过 SMC forwarding 与 Hafnium/OP-TEE SPMC 交互
    - [ ] RXTX buffer IPA→PA 转换 (Stage-2 walk)
 
-2. **多 VM 隔离**:
+2. **多 VM 隔离增强**:
    - [ ] Per-VM partition ID 命名空间
-   - [ ] 跨 VM 共享验证 (权限检查)
+   - [ ] 多端点共享 (VM1 → SP1, SP2)
 
 **验收**:
 - [ ] VM 通过 FF-A 与真实 SP 通信
-- [ ] 内存共享完整生命周期 (share → retrieve → relinquish → reclaim)
 - [ ] 权限控制正确
 
 **预估**: 3周
@@ -574,12 +599,14 @@ Android Boot          ██████████░░░░░░░░░�
 
 **Milestone 3 总验收**:
 - [x] FF-A Hypervisor proxy 基础框架 + stub SPMC ✅
-- [ ] VM 可以通过 FF-A 与真实 SP 通信
-- [ ] 内存共享完整生命周期
+- [x] VM-to-VM 内存共享完整生命周期 (SHARE → RETRIEVE → RELINQUISH → RECLAIM) ✅
+- [x] Page ownership validation + S2AP permission control ✅
+- [x] FF-A v1.1 descriptor parsing + SMC forwarding ✅
+- [ ] VM 通过 FF-A 与真实 SP 通信
 - [ ] 通过 FF-A conformance 测试（如果有）
 
 **预估总时间**: 10周（Week 19-28）
-**状态**: 🔧 进行中 (Sprint 3.1 已完成)
+**状态**: 🔧 进行中 (Sprint 3.1/3.1b/3.1c 已完成, ~60%)
 
 ---
 
@@ -1021,7 +1048,7 @@ GitHub Actions配置：
 | M0 | 项目启动 | 2周 | 2周 | ✅ 已完成 |
 | M1 | MVP - 基础虚拟化 | 8周 | 10周 | ✅ 已完成 |
 | M2 | 增强功能 | 8周 | 18周 | ✅ 已完成 |
-| M3 | FF-A实现 | 10周 | 28周 | 🔧 进行中 (Sprint 3.1 ✅) |
+| M3 | FF-A实现 | 10周 | 28周 | 🔧 进行中 (Sprint 3.1/3.1b/3.1c ✅, ~60%) |
 | Android | Android Boot (4 phases) | 4-8周 | — | ✅ Phase 2 完成 (PL031 RTC + Init) |
 | M4 | Secure EL2 & TEE | 8周 | 36周 | ⏸️ 未开始 |
 | M5 | RME & CCA | 16-20周 | 52-56周 | ⏸️ 未开始 |
@@ -1038,7 +1065,7 @@ GitHub Actions配置：
 
 - [x] **M1 MVP**: QEMU启动busybox ✅ **已完成 2026-01-26**
 - [x] **M2 增强**: 4 vCPU Linux + virtio-blk + virtio-net + UART RX + GIC emulation ✅ **已完成 2026-02-13**
-- [ ] **M3 FF-A**: VM与SP内存共享成功 🔧 **进行中** (proxy + stub SPMC 已完成)
+- [ ] **M3 FF-A**: VM与SP内存共享成功 🔧 **进行中** (proxy + stub SPMC + VM-to-VM 已完成)
 - [x] **Android Phase 1**: Linux 6.6.126 + Android config boots to BusyBox shell ✅ **已完成 2026-02-19**
 - [x] **Android Phase 2**: PL031 RTC + Android init + 1GB RAM + binderfs ✅ **已完成 2026-02-19**
 - [ ] **M4 TEE**: OP-TEE运行并可调用TA ⏸️ **未开始**
@@ -1109,9 +1136,10 @@ GitHub Actions配置：
 - [x] S2AP permission modification (RO for share, NONE for lend, RW for reclaim)
 - [x] FF-A v1.1 composite memory region descriptor parsing (from TX buffer)
 - [x] SMC forwarding to EL3 (forward_smc + probe_spmc + SMCCC pass-through)
-- [x] 2 test suites: test_ffa (18), test_page_ownership (4)
-- [ ] 真实 SPMC 集成 (FFA_MEM_RETRIEVE/RELINQUISH, multi-VM isolation)
-- **已完成 (Phase 1)**: 2026-02-18, **(Phase 2)**: 2026-02-19
+- [x] 2 test suites: test_ffa (27), test_page_ownership (4)
+- [x] VM-to-VM memory sharing (MEM_RETRIEVE_REQ/RELINQUISH, PER_VM_VTTBR, dynamic Stage-2 mapping)
+- [ ] 真实 SPMC 集成 (Hafnium/OP-TEE, multi-endpoint sharing)
+- **已完成 (Phase 1)**: 2026-02-18, **(Phase 2)**: 2026-02-19, **(Phase 3 VM-to-VM)**: 2026-02-20
 
 **选项 E**: 完善测试覆盖 ✅ **已完成**
 - [x] 接入 test_guest_interrupt (之前导出但未调用)
@@ -1201,6 +1229,7 @@ GitHub Actions配置：
 - Phase 12: Virtio-net + VSwitch (L2 switch, NetRxRing SPSC, auto-IP, 3 test suites)
 - Phase 13: FF-A v1.1 Proxy + Stub SPMC (SMC trap, VERSION/ID_GET/FEATURES, RXTX mailbox, direct messaging, memory sharing, page ownership PTE SW bits, 2 test suites)
 - Phase 14: FF-A Validation + Descriptors + SMC Forwarding (Stage2Walker page ownership validation, S2AP permission control, FF-A v1.1 descriptor parsing, SMC forwarding to EL3, SMCCC pass-through)
+- Phase 14.5: VM-to-VM FF-A Memory Sharing (MEM_RETRIEVE_REQ/RELINQUISH, PER_VM_VTTBR, Stage2Walker map/unmap, ShareInfoFull, 9 new test cases)
 - Phase 15: Android Boot Phase 1 ✅ **已完成** — Linux 6.6.126 + Android config (Binder IPC) boots to BusyBox shell, `make run-android`
 - Phase 16: Android Boot Phase 2 ✅ **已完成** — PL031 RTC emulation, Android DTB, minimal init (shell), Binder+binderfs, 1GB RAM, 30 test suites
 

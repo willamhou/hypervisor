@@ -1,6 +1,6 @@
 # Modules Codemap
 
-> Freshness: 2026-02-17 | 40 source files across 14 directories
+> Freshness: 2026-02-20 | 50+ source files across 17 directories
 
 ## Module Tree
 
@@ -12,10 +12,11 @@ src/
 ├── vcpu.rs                         vCPU state machine, enter_guest wrapper
 ├── vcpu_interrupt.rs               legacy IRQ/FIQ pending state
 ├── scheduler.rs                    round-robin scheduler with block/unblock
-├── global.rs                       all global statics: DEVICES, VM_STATE, UART_RX
+├── global.rs                       all global statics: DEVICES, VM_STATE, UART_RX, PER_VM_VTTBR
 ├── guest_loader.rs                 GuestConfig, run_guest(), run_multi_vm_guests()
 ├── platform.rs                     board constants + DTB-backed num_cpus()
 ├── dtb.rs                          host DTB parsing via fdt crate
+├── vswitch.rs                      L2 virtual switch: MAC learning, frame forwarding, NetRxRing
 ├── percpu.rs                       per-CPU context (MPIDR → PerCpuContext)
 ├── sync.rs                         ticket SpinLock<T>
 ├── uart.rs                         physical PL011 driver + fmt::Write
@@ -43,6 +44,15 @@ src/
 │           ├── gic.rs              GICD/GICC physical base statics, low-level helpers
 │           ├── gicv3.rs            GicV3SystemRegs, GicV3VirtualInterface (LR management)
 │           └── timer.rs            timer_get_count(), timer_irq_pending()
+├── ffa/
+│   ├── mod.rs                      FF-A v1.1 constants, types, function IDs
+│   ├── proxy.rs                    FF-A proxy: SMC interception, dispatch, handle_ffa_call()
+│   ├── mailbox.rs                  Per-VM RXTX mailbox (FFA_RXTX_MAP/UNMAP/RX_RELEASE)
+│   ├── stub_spmc.rs                Stub SPMC: 2 SPs, echo messaging, share records, ShareInfoFull
+│   ├── memory.rs                   PageOwnership enum, validate_page_for_share()
+│   ├── stage2_walker.rs            Lightweight Stage-2 walker from VTTBR: SW bits, S2AP, map/unmap
+│   ├── descriptors.rs              FF-A v1.1 composite memory region descriptor parsing
+│   └── smc_forward.rs              forward_smc() to EL3 via smc #0, probe_spmc()
 └── devices/
     ├── mod.rs                      Device enum, DeviceManager, MmioDevice trait
     ├── gic/
@@ -52,11 +62,13 @@ src/
     ├── pl011/
     │   ├── mod.rs                  re-exports VirtualUart
     │   └── emulator.rs             VirtualUart: TX passthrough, RX buffer, PeriphID
+    ├── pl031.rs                    PL031 RTC emulation (counter from CNTVCT, PrimeCell ID)
     └── virtio/
-        ├── mod.rs                  re-exports queue, mmio, blk
+        ├── mod.rs                  re-exports queue, mmio, blk, net
         ├── queue.rs                Virtqueue: descriptor table, avail/used rings
         ├── mmio.rs                 VirtioMmioTransport<T>: virtio-mmio register interface
-        └── blk.rs                  VirtioBlk: read/write/flush against in-memory disk
+        ├── blk.rs                  VirtioBlk: read/write/flush against in-memory disk
+        └── net.rs                  VirtioNet: TX/RX queues, MAC config, VSwitch integration
 ```
 
 ## Key Entry Points
@@ -75,9 +87,9 @@ src/
 
 | Feature | Gated Code |
 |---------|------------|
-| `linux_guest` | `DynamicIdentityMapper`, GICR trap setup, `run_smp()`, virtio-blk registration |
+| `linux_guest` | `DynamicIdentityMapper`, GICR trap setup, `run_smp()`, virtio-blk/net registration, `ffa::proxy::init()`, Stage-2 validation in FF-A |
 | `multi_pcpu` | `rust_main_secondary`, `SpinLock<DeviceManager>`, `TPIDR_EL2` context, physical SGI send, `ensure_vtimer_enabled()`, `SHARED_VTTBR/VTCR`, `PENDING_CPU_ON_PER_VCPU` |
-| `multi_vm` | `run_multi_vm_guests()`, `GuestConfig::linux_vm1()`, VM1 memory partition |
+| `multi_vm` | `run_multi_vm_guests()`, `GuestConfig::linux_vm1()`, VM1 memory partition, per-VM VSwitch ports, per-VM virtio-net |
 | `guest` | Zephyr boot path in `main.rs` |
 
 ## Cross-Module Dependencies
@@ -98,10 +110,22 @@ src/
 vcpu sched devices  sync percpu
   │         │
   ▼         ├─▶ pl011/emulator
-arch_state  ├─▶ gic/{distributor, redistributor}
-  │         └─▶ virtio/{mmio, blk, queue}
-  ▼
-gicv3       dtb ◀── platform, distributor, redistributor, pl011, guest_loader
+arch_state  ├─▶ pl031
+  │         ├─▶ gic/{distributor, redistributor}
+  ▼         └─▶ virtio/{mmio, blk, net, queue}
+gicv3
+              vswitch ◀── virtio/net, global (PORT_RX)
+
+              ffa/
+              ├─▶ proxy ◀── exception (handle_smc)
+              ├─▶ stub_spmc ◀── proxy
+              ├─▶ memory ◀── proxy
+              ├─▶ stage2_walker ◀── proxy (VTTBR_EL2, PER_VM_VTTBR)
+              ├─▶ descriptors ◀── proxy (TX buffer parsing)
+              ├─▶ mailbox ◀── proxy
+              └─▶ smc_forward ◀── proxy, exception
+
+dtb ◀── platform, distributor, redistributor, pl011, guest_loader
 ```
 
 ## Global Statics Summary
@@ -112,6 +136,9 @@ gicv3       dtb ◀── platform, distributor, redistributor, pl011, guest_loa
 | `VM_STATE` | global | `[VmGlobalState; 2]` | per-VM atomics |
 | `CURRENT_VM_ID` | global | `AtomicUsize` | active VM index |
 | `UART_RX` | global | `UartRxRing` | IRQ → run loop |
+| `PORT_RX` | global | `[NetRxRing; MAX_PORTS]` | per-VM SPSC ring for virtio-net RX |
+| `VSWITCH` | global | `UnsafeCell<VSwitch>` | L2 virtual switch with MAC table |
+| `PER_VM_VTTBR` | global | `[AtomicU64; MAX_VMS]` | per-VM L0 table PA for cross-VM Stage-2 (FF-A) |
 | `SHARED_VTTBR/VTCR` | global | `AtomicU64` | multi_pcpu only |
 | `PENDING_CPU_ON_PER_VCPU` | global | `[PerVcpuCpuOnRequest; 8]` | multi_pcpu only |
 | `PLATFORM_INFO` | dtb | `UnsafeCell<PlatformInfo>` | DTB-discovered hw addrs |
@@ -119,6 +146,8 @@ gicv3       dtb ◀── platform, distributor, redistributor, pl011, guest_loa
 | `PER_CPU` | percpu | `UnsafeCell<[PerCpuContext; 8]>` | per-CPU state |
 | `MAPPER` | vm | `UnsafeCell<IdentityMapper>` | test-only static mapper |
 | `EXCEPTION_COUNT` | exception | `AtomicU32` | single-pCPU only |
+| `SPMC_PRESENT` | ffa/proxy | `AtomicBool` | runtime SPMC detection flag |
+| `MAILBOXES` | ffa/mailbox | `[UnsafeCell<Mailbox>; MAX_VMS]` | per-VM RXTX buffers |
 
 ## Assembly Interface
 

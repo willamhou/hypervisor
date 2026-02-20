@@ -52,19 +52,45 @@ hypervisor/
 │   ├── vcpu.rs              # vCPU abstraction
 │   ├── vm.rs                # VM management
 │   ├── scheduler.rs         # vCPU scheduler
+│   ├── global.rs            # Per-VM atomics, global state
+│   ├── guest_loader.rs      # Linux/Zephyr boot configuration
+│   ├── platform.rs          # Board constants + DTB-backed helpers
+│   ├── dtb.rs               # Runtime hardware discovery from host DTB
+│   ├── vswitch.rs           # L2 virtual switch with MAC learning
+│   ├── sync.rs              # Ticket SpinLock<T>
+│   ├── uart.rs              # Physical PL011 driver
+│   ├── percpu.rs            # Per-CPU context (MPIDR → PerCpuContext)
 │   ├── arch/
+│   │   ├── traits.rs        # Portable trait definitions
 │   │   └── aarch64/
 │   │       ├── boot.S       # Boot code (assembly)
 │   │       ├── regs.rs      # Register definitions
-│   │       ├── hypervisor/  # EL2 code (exception handling)
+│   │       ├── defs.rs      # ARM64 named constants
+│   │       ├── vcpu_arch_state.rs # Per-vCPU GIC/timer/sysreg state
+│   │       ├── hypervisor/  # EL2 code (exception handling, decode)
 │   │       ├── mm/          # Memory management, Stage-2
 │   │       └── peripherals/ # GIC, Timer drivers
 │   ├── devices/             # MMIO device emulation
-│   │   ├── mod.rs           # DeviceManager
-│   │   ├── pl011.rs         # UART emulation
-│   │   └── gic.rs           # GIC emulation
+│   │   ├── mod.rs           # DeviceManager (enum dispatch)
+│   │   ├── pl011/           # UART emulation
+│   │   ├── pl031.rs         # PL031 RTC emulation
+│   │   ├── gic/             # GICD/GICR emulation
+│   │   └── virtio/          # virtio-mmio transport
+│   │       ├── blk.rs       # virtio-blk backend
+│   │       ├── net.rs       # virtio-net backend
+│   │       ├── mmio.rs      # virtio-mmio register interface
+│   │       └── queue.rs     # Virtqueue implementation
+│   ├── ffa/                 # FF-A v1.1 proxy
+│   │   ├── mod.rs           # FF-A constants and types
+│   │   ├── proxy.rs         # SMC interception and dispatch
+│   │   ├── mailbox.rs       # RXTX mailbox management
+│   │   ├── stub_spmc.rs     # Simulated Secure Partitions
+│   │   ├── memory.rs        # Page ownership tracking
+│   │   ├── stage2_walker.rs # Stage-2 PTE walker for SW bits
+│   │   ├── descriptors.rs   # Memory region descriptor parsing
+│   │   └── smc_forward.rs   # SMC forwarding to EL3
 │   └── mm/                  # Heap allocator
-└── tests/                   # Integration tests
+└── tests/                   # 30 test suites (~171 assertions)
 ```
 
 ## Code Style
