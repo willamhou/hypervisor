@@ -4,13 +4,13 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Overview
 
-ARM64 Type-1 bare-metal hypervisor written in Rust (no_std) with ARM64 assembly. Runs at EL2 (hypervisor exception level) and manages guest VMs at EL1. Targets QEMU virt machine. Boots Linux 6.12.12 to BusyBox shell with 4 vCPUs, virtio-blk storage, and virtio-net inter-VM networking. Supports multi-VM with per-VM Stage-2, VMID-tagged TLBs, two-level scheduling, and L2 virtual switch. Includes FF-A v1.1 proxy with stub SPMC, page ownership validation via Stage-2 PTE SW bits, FF-A v1.1 descriptor parsing, SMC forwarding to EL3, and VM-to-VM memory sharing (MEM_RETRIEVE/RELINQUISH with dynamic Stage-2 page mapping). Android boot with PL031 RTC emulation, Binder IPC, binderfs, minimal init, 1GB guest RAM. Dual boot modes: NS-EL2 hypervisor via `make run-tfa-linux` (BL33) and S-EL2 SPMC via `make run-spmc` (BL32). TF-A boot chain: BL1→BL2→BL31(SPMD)→BL32(SPMC)→BL33 with manifest FDT parsing.
+ARM64 Type-1 bare-metal hypervisor written in Rust (no_std) with ARM64 assembly. Runs at EL2 (hypervisor exception level) and manages guest VMs at EL1. Targets QEMU virt machine. Boots Linux 6.12.12 to BusyBox shell with 4 vCPUs, virtio-blk storage, and virtio-net inter-VM networking. Supports multi-VM with per-VM Stage-2, VMID-tagged TLBs, two-level scheduling, and L2 virtual switch. Includes FF-A v1.1 proxy with stub SPMC, page ownership validation via Stage-2 PTE SW bits, FF-A v1.1 descriptor parsing, SMC forwarding to EL3, and VM-to-VM memory sharing (MEM_RETRIEVE/RELINQUISH with dynamic Stage-2 page mapping). Android boot with PL031 RTC emulation, Binder IPC, binderfs, minimal init, 1GB guest RAM. Dual boot modes: NS-EL2 hypervisor via `make run-tfa-linux` (BL33) and S-EL2 SPMC via `make run-spmc` (BL32). TF-A boot chain: BL1→BL2→BL31(SPMD)→BL32(SPMC)→BL33 with manifest FDT parsing. SPMC boots SP Hello at S-EL1 via ERET with Secure Stage-2, dispatches NWd→SP DIRECT_REQ/RESP messaging.
 
 ## Build Commands
 
 ```bash
 make              # Build hypervisor
-make run          # Build + run in QEMU — runs 31 test suites automatically (exit: Ctrl+A then X)
+make run          # Build + run in QEMU — runs 33 test suites automatically (exit: Ctrl+A then X)
 make run-linux    # Build + boot Linux guest (--features linux_guest, 4 vCPUs on 1 pCPU, virtio-blk)
 make run-linux-smp # Build + boot Linux guest (--features multi_pcpu, 4 vCPUs on 4 pCPUs)
 make run-multi-vm # Build + boot 2 Linux VMs time-sliced (--features multi_vm)
@@ -23,7 +23,8 @@ make build-qemu   # Build QEMU 9.2.3 from source (one-time, Docker)
 make build-tfa    # Build TF-A flash.bin with SPD=spmd (Docker)
 make build-tfa-bl33 # Build TF-A flash.bin with PRELOADED_BL33_BASE=0x40200000
 make build-spmc   # Build hypervisor as S-EL2 SPMC binary (--features sel2)
-make build-tfa-spmc # Build TF-A with real SPMC as BL32
+make build-sp-hello # Build SP Hello binary (S-EL1 Secure Partition)
+make build-tfa-spmc # Build TF-A with real SPMC as BL32 + SP Hello
 make debug        # Build + run with GDB server on port 1234
 make clean        # Clean build artifacts
 make check        # Check code without building
@@ -70,7 +71,9 @@ make fmt          # Format code
 | `NetRxRing` | `src/vswitch.rs` | Per-port SPSC ring buffer for async RX frame delivery |
 | `VirtualPl031` | `src/devices/pl031.rs` | PL031 RTC emulation: counter-based time, PrimeCell ID |
 | `SpMcManifest` | `src/manifest.rs` | SPMC manifest parser: TOS_FW_CONFIG DTB (spmc_id, version) |
-| `SpmcHandler` | `src/spmc_handler.rs` | S-EL2 SPMC event loop + FF-A dispatch (VERSION, ID_GET, FEATURES, PARTITION_INFO, DIRECT_REQ echo, framework messages) |
+| `SpmcHandler` | `src/spmc_handler.rs` | S-EL2 SPMC event loop + FF-A dispatch, SP DIRECT_REQ routing via `dispatch_to_sp()` + `enter_guest()` ERET |
+| `SpContext` | `src/sp_context.rs` | Per-SP state machine (Reset→Idle→Running→Blocked), wraps VcpuContext, global SpStore |
+| `SecureStage2Config` | `src/secure_stage2.rs` | VSTTBR_EL2/VSTCR_EL2 config for SP isolation, `build_sp_stage2()` identity-maps SP code + UART |
 
 ### Exception Handling Flow
 ```
@@ -286,7 +289,7 @@ Array-based routing: `devices: [Option<Device>; 8]`, scan for `dev.contains(addr
 
 ## Tests
 
-~205 assertions across 31 test suites run automatically on `make run` (no feature flags). Orchestrated sequentially in `src/main.rs`. Located in `tests/`:
+~248 assertions across 33 test suites run automatically on `make run` (no feature flags). Orchestrated sequentially in `src/main.rs`. Located in `tests/`:
 
 | Test | Coverage | Assertions |
 |------|----------|------------|
@@ -320,6 +323,8 @@ Array-based routing: `devices: [Option<Device>; 8]`, scan for `dev.contains(addr
 | `test_pl031` | PL031 RTC: RTCDR readable, RTCLR write+readback, PeriphID/PrimeCellID, unknown offset | 4 |
 | `test_ffa` | FF-A proxy: VERSION/ID_GET/FEATURES/RXTX/messaging/MEM_SHARE/RECLAIM/descriptors/SMC forward/VM-to-VM RETRIEVE/RELINQUISH/SPM_ID_GET/RUN/notifications/MSG_SEND2/MSG_WAIT | 44 |
 | `test_spmc_handler` | SPMC dispatch: VERSION/ID_GET/SPM_ID_GET/FEATURES/PARTITION_INFO/DIRECT_REQ echo/framework msg | 24 |
+| `test_sp_context` | SpContext: state machine transitions, VcpuContext fields, set/get args (x0-x7) | 16 |
+| `test_secure_stage2` | SecureStage2Config: VSTTBR address, VSTCR T0SZ, new_from_vsttbr | 4 |
 | `test_guest_interrupt` | Guest interrupt injection + exception vector (blocks) | 1 |
 
 Not wired into `main.rs` (exported but not called):

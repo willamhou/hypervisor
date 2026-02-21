@@ -1,6 +1,6 @@
 # ARM64 Hypervisor 开发计划
 
-**项目版本**: v0.21.0 (Phase 21 Complete — SPMC Handler: FF-A Dispatch + Event Loop)
+**项目版本**: v0.22.0 (Phase 22 Complete — SP Boot at S-EL1 + DIRECT_REQ Dispatch)
 **计划制定日期**: 2026-01-26
 **最后更新**: 2026-02-21
 **计划类型**: 敏捷迭代，灵活调整
@@ -9,21 +9,21 @@
 
 ## 📊 当前进度概览
 
-**整体完成度**: 🟢 **82%** (Milestone 0-2 + Options A-G + M3 Sprint 3.1/3.1b/3.1c/3.2 + M4 Sprint 4.1/4.2/4.3/4.4A 已完成)
+**整体完成度**: 🟢 **85%** (Milestone 0-2 + Options A-G + M3 Sprint 3.1/3.1b/3.1c/3.2 + M4 Sprint 4.1/4.2/4.3/4.4A/4.4B 已完成)
 
 ```
 M0: 项目启动          ████████████████████ 100% ✅
 M1: MVP基础虚拟化     ████████████████████ 100% ✅
 M2: 增强功能          ████████████████████ 100% ✅
 M3: FF-A              ██████████████████░░  90% 🔧 (Sprint 3.2 ✅, Sprint 3.3 推迟到 M4)
-M4: S-EL2 SPMC        ████████████████░░░░  80% 🔧 (Sprint 4.1/4.2/4.3 ✅, Sprint 4.4 Phase A ✅, Phase B 未开始)
+M4: S-EL2 SPMC        ██████████████████░░  90% 🔧 (Sprint 4.1/4.2/4.3/4.4A/4.4B ✅, Phase C 未开始)
 M4.5: pKVM 集成       ░░░░░░░░░░░░░░░░░░░░   0% ⏸️ (NS-EL2=pKVM, S-EL2=us)
 M5: RME & CCA         ░░░░░░░░░░░░░░░░░░░░   0% ⏸️
 Android Boot          ██████████░░░░░░░░░░  50% ✅ (Phase 2 完成)
 ```
 
-**测试覆盖**: ~205 assertions / 31 test suites (100% pass)
-**代码量**: ~17000 行
+**测试覆盖**: ~248 assertions / 33 test suites (100% pass)
+**代码量**: ~18000 行
 **Linux启动**: 4 vCPU, BusyBox shell, virtio-blk, virtio-net, multi-VM, FF-A proxy
 **Android启动**: 4 vCPU, PL031 RTC, Binder IPC, minimal init, 1GB RAM
 **编译警告**: 最小化
@@ -782,29 +782,41 @@ NS-EL1: Linux guest (当前 hypervisor 功能降级为 SPMC)
 
 **实际完成**: 2026-02-21
 
-##### Phase B: SP Loading + Cross-World Messaging ⏸️ **未开始**
+##### Phase B: SP Boot at S-EL1 + DIRECT_REQ Dispatch ✅ **已完成**
 
 **实现任务**:
 1. **SP 加载和启动**:
-   - [ ] 从 FIP 中读取 SP binary 和 manifest
-   - [ ] 为 SP 创建 Secure Stage-2 映射
-   - [ ] 跳转到 S-EL1 执行 SP
+   - [x] S-EL2 平台常量 (SP1_LOAD_ADDR, SECURE_HEAP_START 等)
+   - [x] SpContext — SP 状态机 (Reset→Idle→Running→Blocked), 全局 SpStore
+   - [x] SecureStage2Config — VSTTBR_EL2/VSTCR_EL2 (s3_4_c2_c6_0/s3_4_c2_c6_2)
+   - [x] build_sp_stage2() — identity-map SP code region + UART
+   - [x] SP Hello binary (S-EL1) — start.S + linker.ld + sp_manifest.dts
+   - [x] TF-A SP config — sp_layout.json + tb_fw_config.dts (BL2 loads SP to 0x0e300000)
+   - [x] Secure DRAM heap (init_at 0x0e500000, ~11MB)
+   - [x] ERET to SP via enter_guest(), verify FFA_MSG_WAIT return, register_sp()
 
 2. **SP 通信**:
-   - [ ] FFA_MSG_SEND_DIRECT_REQ 从 NS → S (经 SPMD → 我们的 SPMC → SP)
-   - [ ] FFA_MSG_SEND_DIRECT_RESP 返回
-   - [ ] 完整 SMC 路径: NS-EL1 → (NS-EL2 trap) → EL3 SPMD → S-EL2 SPMC → S-EL1 SP
+   - [x] Exception handler gated with `#[cfg(feature = "sel2")]` for SP SMC/WFI passthrough
+   - [x] dispatch_request() — routes DIRECT_REQ to SP via enter_guest() ERET
+   - [x] dispatch_to_sp() — set args, transition Running, install Stage-2, enter_guest(), read response
+   - [x] PARTITION_INFO_GET returns count=1 when SP registered
+   - [x] BL33 test: PARTITION_INFO_GET expects count=1, DIRECT_REQ verifies x3/x4/x5 echo
 
-3. **Secure 中断路由**:
+3. **Secure 中断路由** (推迟到 Phase C):
    - [ ] FIQ 路由到 S-EL2
    - [ ] 注入到 SP (S-EL1)
 
-**验收**:
-- [ ] 最小 bare-metal SP 在 S-EL1 成功启动
-- [ ] NS → SP 直接消息传递正常
-- [ ] 完整的跨世界 FF-A 路径验证
+**Unit Tests**:
+   - [x] `test_sp_context` — 16 assertions (state machine, transitions, args)
+   - [x] `test_secure_stage2` — 4 assertions (VSTTBR, VSTCR, new_from_vsttbr)
 
-**预估**: 2 周
+**验收**:
+- [x] 最小 bare-metal SP (sp_hello) 在 S-EL1 成功启动
+- [x] NS → SP 直接消息传递 (DIRECT_REQ/RESP echo)
+- [x] `make build-sp-hello` 构建 SP binary
+- [x] 33 test suites, ~248 assertions 全部通过
+
+**实际完成**: 2026-02-21
 
 ---
 
@@ -812,11 +824,11 @@ NS-EL1: Linux guest (当前 hypervisor 功能降级为 SPMC)
 - [x] TF-A boot chain 正常 (BL1 → BL2 → BL31/SPMD → BL32/SPMC → BL33) ✅ Sprint 4.1/4.2
 - [x] 我们的 hypervisor 同时支持 NS-EL2 和 S-EL2 (SPMC) 模式 ✅ Sprint 4.3
 - [x] SPMD ↔ SPMC 协议握手成功 (FFA_MSG_WAIT) ✅ Sprint 4.3
-- [ ] NS → SP 的 FF-A 直接消息传递正常 (Sprint 4.4)
+- [x] NS → SP 的 FF-A 直接消息传递正常 (Sprint 4.4 Phase B) ✅
 - [ ] 为 pKVM 集成做好准备（NS-EL2 空闲，可被 pKVM 占据）
 
 **预估总时间**: 6-8 周（Week 29-36）
-**状态**: 🔧 进行中 (Sprint 4.1/4.2/4.3 ✅, Sprint 4.4 Phase A ✅, Phase B ⏸️)
+**状态**: 🔧 进行中 (Sprint 4.1/4.2/4.3 ✅, Sprint 4.4 Phase A/B ✅, Phase C 未开始)
 
 ---
 
@@ -1272,7 +1284,7 @@ GitHub Actions配置：
 
 ## 9. 下一步行动
 
-### 🎯 当前位置：M4 Sprint 4.4 Phase A ✅ → M4 Sprint 4.4 Phase B 准备 (SP Loading + Cross-World Messaging)
+### 🎯 当前位置：M4 Sprint 4.4 Phase B ✅ → M4 Sprint 4.4 Phase C 准备 (Secure 中断路由) 或 M4.5 pKVM 集成
 **可行性研究**: `docs/research/2026-02-20-phase4-feasibility.md` — FEASIBLE with moderate effort
 **Sprint 4.1/4.2/4.3/4.4A 完成**: TF-A boot chain + hypervisor as BL33 (NS-EL2) + hypervisor as SPMC (S-EL2) + SPMC event loop + FF-A dispatch
 
@@ -1422,6 +1434,7 @@ GitHub Actions配置：
 - Phase 19: Sprint 4.2 BL33 Hypervisor via TF-A ✅ **已完成** — Linker base 0x40200000, PRELOADED_BL33_BASE, `make run-tfa-linux` (full chain: BL1→BL2→BL31→BL32→BL33→Linux→BusyBox)
 - Phase 20: Sprint 4.3 S-EL2 SPMC ✅ **已完成** — `sel2` feature, `boot_sel2.S`/`linker_sel2.ld` (0x0e100000), manifest FDT parsing, FFA_MSG_WAIT handshake, CTX_INCLUDE_FPREGS=1 fix, diagnostic fault handler, `make run-spmc`
 - Phase 21: Sprint 4.4 Phase A SPMC Handler ✅ **已完成** — SmcResult8/forward_smc8, dispatch_ffa() event loop, VERSION/ID_GET/SPM_ID_GET/FEATURES/PARTITION_INFO/DIRECT_REQ echo, SPMD framework messages (FFA_FWK_MSG_BIT, x1 endpoint IDs), BL33 FF-A test client (6/6 PASS), 24 unit test assertions
+- Phase 22: Sprint 4.4 Phase B SP Boot ✅ **已完成** — SpContext (state machine), SecureStage2Config (VSTTBR_EL2/VSTCR_EL2), sp_hello SP binary (S-EL1), ERET to SP, dispatch_request/dispatch_to_sp for DIRECT_REQ→SP, exception handler sel2 gating, secure DRAM heap (init_at), PARTITION_INFO_GET count=1, 33 test suites / ~248 assertions
 
 ---
 

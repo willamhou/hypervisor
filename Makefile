@@ -1,4 +1,4 @@
-.PHONY: all build run debug clean build-qemu build-bl32-bl33 build-tfa build-tfa-bl33 build-spmc build-tfa-spmc run-sel2 run-tfa-linux run-spmc
+.PHONY: all build run debug clean build-qemu build-bl32-bl33 build-tfa build-tfa-bl33 build-spmc build-sp-hello build-tfa-spmc run-sel2 run-tfa-linux run-spmc
 
 # Auto-load Cargo environment
 SHELL := /bin/bash
@@ -257,6 +257,16 @@ build-spmc:
 	aarch64-linux-gnu-objcopy -O binary $(BINARY) $(SPMC_BIN)
 	@echo "SPMC binary: $(SPMC_BIN)"
 
+# SP Hello binary (S-EL1 Secure Partition)
+SP_HELLO_BIN := tfa/sp_hello/sp_hello.bin
+
+build-sp-hello:
+	@echo "Building SP Hello (S-EL1)..."
+	aarch64-linux-gnu-as -o tfa/sp_hello/sp_hello.o tfa/sp_hello/start.S
+	aarch64-linux-gnu-ld -T tfa/sp_hello/linker.ld -o tfa/sp_hello/sp_hello.elf tfa/sp_hello/sp_hello.o
+	aarch64-linux-gnu-objcopy -O binary tfa/sp_hello/sp_hello.elf $(SP_HELLO_BIN)
+	@echo "SP Hello binary: $(SP_HELLO_BIN)"
+
 # Build BL33 FF-A test client (sends FF-A SMCs to SPMC, prints PASS/FAIL)
 build-bl33-ffa-test:
 	@echo "Building BL33 FF-A test client..."
@@ -272,7 +282,7 @@ TFA_FLASH_SPMC := $(TFA_DIR)/flash-spmc.bin
 # 2. build-spmc: builds real SPMC binary
 # 3. build-bl33-ffa-test: builds FF-A test client binary
 # 4. Recipe: Docker overwrites bl32.bin with SPMC, bl33.bin with test client, then builds TF-A
-build-tfa-spmc: build-bl32-bl33 build-spmc build-bl33-ffa-test
+build-tfa-spmc: build-bl32-bl33 build-spmc build-sp-hello build-bl33-ffa-test
 	@echo "Replacing trivial bl32.bin with real SPMC..."
 	docker run --rm \
 	    -v $(PWD)/tfa:/output \
@@ -315,6 +325,7 @@ help:
 	@echo "  run-tfa-linux - Boot TF-A -> hypervisor -> Linux (Phase 4)"
 	@echo "  build-qemu    - Build QEMU 9.2.3 from source (one-time)"
 	@echo "  build-spmc    - Build hypervisor as S-EL2 SPMC (BL32)"
+	@echo "  build-sp-hello - Build SP Hello binary (S-EL1)"
 	@echo "  build-tfa-spmc - Build TF-A with real SPMC as BL32"
 	@echo "  run-spmc      - Boot TF-A with real SPMC at S-EL2"
 	@echo "  build-tfa     - Build TF-A + flash.bin with SPD=spmd"

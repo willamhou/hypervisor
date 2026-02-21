@@ -160,8 +160,9 @@ _start:
     ldr     x9, =FFA_SUCCESS_32
     cmp     x0, x9
     b.ne    .Lfail_5
-    /* x2 = count, should be 0 */
-    cbnz    x2, .Lfail_5
+    /* x2 = count, should be 1 (SP1 registered) */
+    cmp     x2, #1
+    b.ne    .Lfail_5
     adr     x0, str_pass
     bl      uart_print
     b       .Ltest_6
@@ -190,7 +191,10 @@ _start:
     ldr     x9, =FFA_DIRECT_RESP_32
     cmp     x0, x9
     b.ne    .Lfail_6
-    /* Check echoed payload x4 and x5 */
+    /* Check echoed payload x3, x4, x5 */
+    movz    x9, #0xAAAA
+    cmp     x3, x9
+    b.ne    .Lfail_6
     movz    x9, #0xBBBB
     cmp     x4, x9
     b.ne    .Lfail_6
