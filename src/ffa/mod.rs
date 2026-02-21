@@ -79,6 +79,13 @@ pub const FFA_HOST_ID: u16 = 0x0000;
 #[allow(dead_code)]
 pub const FFA_SPMC_ID: u16 = 0x8000;
 
+// ── SPMD Framework Message constants ──────────────────────────────
+// SPMD wraps certain FF-A calls (e.g. FFA_VERSION) as DIRECT_REQ
+// framework messages with FFA_FWK_MSG_BIT set in x2.
+pub const FFA_FWK_MSG_BIT: u64 = 1 << 31;
+pub const SPMD_FWK_MSG_FFA_VERSION_REQ: u64 = 0x8;
+pub const SPMD_FWK_MSG_FFA_VERSION_RESP: u64 = 0x9;
+
 /// Maximum number of VMs that can have FF-A partition IDs.
 /// VM 0 → partition ID 1, VM 1 → partition ID 2.
 pub const FFA_MAX_VMS: usize = 4;

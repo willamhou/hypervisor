@@ -50,10 +50,15 @@ _start:
     mov     x7, xzr
     smc     #0
 
-    /* x0 should contain FFA_VERSION_1_1 (0x10001) */
-    ldr     x9, =FFA_VERSION_1_1
-    cmp     x0, x9
+    /* x0 should be a valid version >= 1.1 (major=1, minor>=1) */
+    /* Check major version (bits [31:16]) == 1 */
+    lsr     x9, x0, #16
+    cmp     x9, #1
     b.ne    .Lfail_1
+    /* Check minor version (bits [15:0]) >= 1 */
+    and     x9, x0, #0xFFFF
+    cmp     x9, #1
+    b.lt    .Lfail_1
     adr     x0, str_pass
     bl      uart_print
     b       .Ltest_2

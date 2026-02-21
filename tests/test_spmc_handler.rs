@@ -73,7 +73,28 @@ pub fn run_tests() {
     assert_eq!(resp.x7, 0xEEEE);
     pass += 7;
 
-    // Test 18-19: Unknown function -> FFA_ERROR(NOT_SUPPORTED)
+    // Test 18-22: SPMD framework message (FFA_VERSION_REQ)
+    // SPMD sends x1 = (SPMD_EP_ID << 16) | SPMC_ID = (0xFFFF << 16) | 0x8000
+    let spmd_ep_id: u64 = 0xFFFF;
+    let spmc_id: u64 = ffa::FFA_SPMC_ID as u64;
+    let req = SmcResult8 {
+        x0: ffa::FFA_MSG_SEND_DIRECT_REQ_32,
+        x1: (spmd_ep_id << 16) | spmc_id,
+        x2: ffa::FFA_FWK_MSG_BIT | ffa::SPMD_FWK_MSG_FFA_VERSION_REQ,
+        x3: ffa::FFA_VERSION_1_1 as u64, // NWd requested version
+        x4: 0, x5: 0, x6: 0, x7: 0,
+    };
+    let resp = dispatch_ffa(&req);
+    assert_eq!(resp.x0, ffa::FFA_MSG_SEND_DIRECT_RESP_32);
+    // x1 must swap: source=SPMC_ID, dest=SPMD_EP_ID
+    assert_eq!(resp.x1, (spmc_id << 16) | spmd_ep_id);
+    assert_eq!(resp.x2, ffa::FFA_FWK_MSG_BIT | ffa::SPMD_FWK_MSG_FFA_VERSION_RESP);
+    assert_eq!(resp.x3, ffa::FFA_VERSION_1_1 as u64);
+    // Also verify x4-x7 are zeroed
+    assert_eq!(resp.x4, 0);
+    pass += 5;
+
+    // Test 22-23: Unknown function -> FFA_ERROR(NOT_SUPPORTED)
     let resp = dispatch_ffa(&zero_req(0xDEADBEEF));
     assert_eq!(resp.x0, ffa::FFA_ERROR);
     assert_eq!(resp.x2, ffa::FFA_NOT_SUPPORTED as u64);

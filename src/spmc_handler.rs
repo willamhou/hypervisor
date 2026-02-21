@@ -127,19 +127,7 @@ pub fn dispatch_ffa(req: &SmcResult8) -> SmcResult8 {
         }
 
         ffa::FFA_MSG_SEND_DIRECT_REQ_32 => {
-            // Echo x3-x7 back, swap source/dest in x1
-            let source = (req.x1 >> 16) & 0xFFFF;
-            let dest = req.x1 & 0xFFFF;
-            SmcResult8 {
-                x0: ffa::FFA_MSG_SEND_DIRECT_RESP_32,
-                x1: (dest << 16) | source,
-                x2: 0,
-                x3: req.x3,
-                x4: req.x4,
-                x5: req.x5,
-                x6: req.x6,
-                x7: req.x7,
-            }
+            handle_direct_req_32(req)
         }
 
         ffa::FFA_MSG_SEND_DIRECT_REQ_64 => {
@@ -159,6 +147,53 @@ pub fn dispatch_ffa(req: &SmcResult8) -> SmcResult8 {
         }
 
         _ => make_error(ffa::FFA_NOT_SUPPORTED as u64),
+    }
+}
+
+/// Handle DIRECT_REQ_32 — checks for SPMD framework messages first.
+///
+/// SPMD wraps certain FF-A calls (e.g. FFA_VERSION) as framework messages
+/// inside DIRECT_REQ with FFA_FWK_MSG_BIT set in x2. We must detect and
+/// respond to these before falling through to the normal echo handler.
+fn handle_direct_req_32(req: &SmcResult8) -> SmcResult8 {
+    // Check for SPMD framework message (FFA_FWK_MSG_BIT set in x2)
+    if (req.x2 & ffa::FFA_FWK_MSG_BIT) != 0 {
+        let fwk_func = req.x2 & !ffa::FFA_FWK_MSG_BIT;
+        // Swap source/dest from the request so SPMD recognizes us.
+        // SPMD sends x1 = (SPMD_EP_ID << 16) | SPMC_ID.
+        // We must respond with x1 = (SPMC_ID << 16) | SPMD_EP_ID.
+        let source = (req.x1 >> 16) & 0xFFFF;
+        let dest = req.x1 & 0xFFFF;
+        let swapped_x1 = (dest << 16) | source;
+        if fwk_func == ffa::SPMD_FWK_MSG_FFA_VERSION_REQ {
+            // SPMD forwarding NWd's FFA_VERSION. x3 = requested version.
+            return SmcResult8 {
+                x0: ffa::FFA_MSG_SEND_DIRECT_RESP_32,
+                x1: swapped_x1,
+                x2: ffa::FFA_FWK_MSG_BIT | ffa::SPMD_FWK_MSG_FFA_VERSION_RESP,
+                x3: ffa::FFA_VERSION_1_1 as u64,
+                x4: 0,
+                x5: 0,
+                x6: 0,
+                x7: 0,
+            };
+        }
+        // Unknown framework message
+        return make_error(ffa::FFA_NOT_SUPPORTED as u64);
+    }
+
+    // Normal direct request: echo x3-x7, swap source/dest in x1
+    let source = (req.x1 >> 16) & 0xFFFF;
+    let dest = req.x1 & 0xFFFF;
+    SmcResult8 {
+        x0: ffa::FFA_MSG_SEND_DIRECT_RESP_32,
+        x1: (dest << 16) | source,
+        x2: 0,
+        x3: req.x3,
+        x4: req.x4,
+        x5: req.x5,
+        x6: req.x6,
+        x7: req.x7,
     }
 }
 
