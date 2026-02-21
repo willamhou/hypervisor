@@ -250,6 +250,69 @@ pub extern "C" fn rust_main(dtb_addr: usize) -> ! {
     }
 }
 
+/// S-EL2 SPMC entry point called from boot_sel2.S.
+/// SPMD passes: x0=TOS_FW_CONFIG, x1=HW_CONFIG, x4=core_id
+#[cfg(feature = "sel2")]
+#[no_mangle]
+pub extern "C" fn rust_main_sel2(
+    manifest_addr: usize,
+    hw_config_addr: usize,
+    _core_id: usize,
+) -> ! {
+    // 1. Install exception vectors FIRST (before any memory access that could fault)
+    exception::init();
+
+    uart_puts_local(b"========================================\n");
+    uart_puts_local(b"  ARM64 SPMC - S-EL2\n");
+    uart_puts_local(b"========================================\n\n");
+
+    // 2. Check current EL (should be EL2 / S-EL2)
+    let current_el: u64;
+    unsafe {
+        core::arch::asm!("mrs {}, CurrentEL", out(reg) current_el);
+    }
+    let el = (current_el >> 2) & 0x3;
+    uart_puts_local(b"[SPMC] Running at EL");
+    print_digit(el as u8);
+    uart_puts_local(b"\n");
+
+    // 3. Parse SPMC manifest (TOS_FW_CONFIG in x0)
+    uart_puts_local(b"[SPMC] Parsing manifest at 0x");
+    hypervisor::uart_put_hex(manifest_addr as u64);
+    uart_puts_local(b"\n");
+    hypervisor::manifest::init(manifest_addr);
+    let mi = hypervisor::manifest::manifest_info();
+    uart_puts_local(b"[SPMC] spmc_id=0x");
+    hypervisor::uart_put_hex(mi.spmc_id as u64);
+    uart_puts_local(b" version=");
+    print_digit(mi.maj_ver as u8);
+    uart_puts_local(b".");
+    print_digit(mi.min_ver as u8);
+    uart_puts_local(b"\n");
+
+    // 4. Parse hardware DTB (HW_CONFIG in x1) — deferred, same secure DRAM issue
+    uart_puts_local(b"[SPMC] HW config at 0x");
+    hypervisor::uart_put_hex(hw_config_addr as u64);
+    uart_puts_local(b" (parsing deferred)\n");
+    // NOTE: dtb::init() skipped — uses QEMU virt defaults for UART/GIC/RAM
+
+    // 5. Initialize GIC
+    hypervisor::arch::aarch64::peripherals::gicv3::init();
+    uart_puts_local(b"[SPMC] GIC initialized\n");
+
+    // 6. Signal SPMD: init complete
+    uart_puts_local(b"[SPMC] Init complete, signaling SPMD via FFA_MSG_WAIT\n");
+    hypervisor::manifest::signal_spmc_ready();
+
+    // 7. SPMD returned — loop waiting for world switch
+    uart_puts_local(b"[SPMC] FFA_MSG_WAIT returned, entering idle loop\n");
+    loop {
+        unsafe {
+            core::arch::asm!("wfi");
+        }
+    }
+}
+
 /// Secondary pCPU entry point (called from boot.S after PSCI CPU_ON start).
 ///
 /// Sets up EL2 state (VBAR, HCR, Stage-2, GIC) then enters an idle loop

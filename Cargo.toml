@@ -25,6 +25,7 @@ guest = []
 linux_guest = []
 multi_pcpu = ["linux_guest"]
 multi_vm = ["linux_guest"]
+sel2 = []
 
 [profile.release]
 panic = "abort"

@@ -23,6 +23,6 @@
         exec_state = <0x0>;             /* AArch64 */
         load_address = <0x0 0x0e100000>;/* SEC_DRAM_BASE */
         entrypoint = <0x0 0x0e100000>;  /* Cold boot entry point */
-        binary_size = <0x0 0x80000>;    /* 512KB (sufficient for trivial) */
+        binary_size = <0x0 0x200000>;   /* 2MB (real hypervisor SPMC) */
     };
 };

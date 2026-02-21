@@ -6,6 +6,7 @@ pub mod dtb;
 pub mod ffa;
 pub mod global;
 pub mod guest_loader;
+pub mod manifest;
 pub mod mm;
 pub mod percpu;
 pub mod platform;

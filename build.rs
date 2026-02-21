@@ -7,9 +7,24 @@ fn main() {
     let arch = env::var("CARGO_CFG_TARGET_ARCH").unwrap();
 
     if arch == "aarch64" {
+        // Determine which boot file and linker script to use based on features
+        let sel2 = env::var("CARGO_FEATURE_SEL2").is_ok();
+
+        let boot_asm = if sel2 {
+            "arch/aarch64/boot_sel2.S"
+        } else {
+            "arch/aarch64/boot.S"
+        };
+
+        let linker_script = if sel2 {
+            "arch/aarch64/linker_sel2.ld"
+        } else {
+            "arch/aarch64/linker.ld"
+        };
+
         // List of assembly files to compile
         let asm_files = [
-            ("arch/aarch64/boot.S", "boot.o"),
+            (boot_asm, "boot.o"),
             ("arch/aarch64/exception.S", "exception.o"),
         ];
 
@@ -61,9 +76,9 @@ fn main() {
         // Output link search path
         println!("cargo:rustc-link-search=native={}", out_dir.display());
 
-        // Linker script
-        println!("cargo:rerun-if-changed=arch/aarch64/linker.ld");
-        println!("cargo:rustc-link-arg=-Tarch/aarch64/linker.ld");
+        // Linker script (feature-gated: sel2 uses linker_sel2.ld)
+        println!("cargo:rerun-if-changed={}", linker_script);
+        println!("cargo:rustc-link-arg=-T{}", linker_script);
 
         // Output link directives with whole-archive
         println!("cargo:rustc-link-arg=--whole-archive");

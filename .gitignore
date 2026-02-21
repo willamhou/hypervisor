@@ -32,6 +32,7 @@ tools/
 tfa/tfa-src/
 tfa/flash.bin
 tfa/flash-bl33.bin
+tfa/flash-spmc.bin
 tfa/bl32.bin
 tfa/bl33.bin
 tfa/qemu_fw.bios

@@ -1,4 +1,4 @@
-.PHONY: all build run debug clean build-qemu build-bl32-bl33 build-tfa build-tfa-bl33 run-sel2 run-tfa-linux
+.PHONY: all build run debug clean build-qemu build-bl32-bl33 build-tfa build-tfa-bl33 build-spmc build-tfa-spmc run-sel2 run-tfa-linux run-spmc
 
 # Auto-load Cargo environment
 SHELL := /bin/bash
@@ -245,6 +245,47 @@ run-tfa-linux:
 	    -device loader,file=$(LINUX_DISK),addr=0x58000000,force-raw=on \
 	    -nic none
 
+# === S-EL2 SPMC targets (Sprint 4.3) ===
+
+# SPMC binary (hypervisor compiled with sel2 feature)
+SPMC_BIN := $(BUILD_DIR)/$(TARGET)_spmc.bin
+
+# Build hypervisor as S-EL2 SPMC (BL32)
+build-spmc:
+	@echo "Building SPMC (sel2 feature)..."
+	cargo build --target aarch64-unknown-none --features sel2
+	aarch64-linux-gnu-objcopy -O binary $(BINARY) $(SPMC_BIN)
+	@echo "SPMC binary: $(SPMC_BIN)"
+
+# Build TF-A with real SPMC as BL32
+TFA_FLASH_SPMC := $(TFA_DIR)/flash-spmc.bin
+
+# 1. build-bl32-bl33: builds trivial bl32.bin + bl33.bin (Docker, root-owned)
+# 2. build-spmc: builds real SPMC binary
+# 3. Recipe: Docker overwrites bl32.bin with real SPMC, then builds TF-A
+build-tfa-spmc: build-bl32-bl33 build-spmc
+	@echo "Replacing trivial bl32.bin with real SPMC..."
+	docker run --rm \
+	    -v $(PWD)/tfa:/output \
+	    -v $(PWD)/$(SPMC_BIN):/spmc.bin:ro \
+	    debian:bookworm-slim cp /spmc.bin /output/bl32.bin
+	@echo "Building TF-A with real SPMC as BL32..."
+	docker run --rm \
+	    -v $(PWD)/tfa:/output \
+	    -v $(PWD):/src \
+	    -v tfa-spmc-build-cache:/output/tfa-src \
+	    debian:bookworm-slim bash /src/scripts/build-tfa.sh
+	mv $(TFA_DIR)/flash.bin $(TFA_FLASH_SPMC)
+
+# Boot TF-A with our SPMC at S-EL2 + trivial BL33 at NS-EL2
+run-spmc:
+	@test -f $(TFA_FLASH_SPMC) || (echo "ERROR: $(TFA_FLASH_SPMC) not found. Run 'make build-tfa-spmc' first." && exit 1)
+	@echo "Starting QEMU with real SPMC at S-EL2..."
+	@echo "Press Ctrl+A then X to exit QEMU"
+	$(QEMU_SEL2) -machine virt,secure=on,virtualization=on,gic-version=3 \
+	    -cpu max -smp 4 -m 2G -nographic \
+	    -bios $(TFA_FLASH_SPMC) -nic none
+
 # Help
 help:
 	@echo "Available targets:"
@@ -259,6 +300,9 @@ help:
 	@echo "  run-sel2      - Boot TF-A with BL32 at S-EL2 (Phase 4)"
 	@echo "  run-tfa-linux - Boot TF-A -> hypervisor -> Linux (Phase 4)"
 	@echo "  build-qemu    - Build QEMU 9.2.3 from source (one-time)"
+	@echo "  build-spmc    - Build hypervisor as S-EL2 SPMC (BL32)"
+	@echo "  build-tfa-spmc - Build TF-A with real SPMC as BL32"
+	@echo "  run-spmc      - Boot TF-A with real SPMC at S-EL2"
 	@echo "  build-tfa     - Build TF-A + flash.bin with SPD=spmd"
 	@echo "  build-tfa-bl33 - Build TF-A flash.bin with preloaded BL33"
 	@echo "  build-bl32-bl33 - Build trivial BL32/BL33 hello binaries"
