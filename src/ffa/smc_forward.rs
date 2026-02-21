@@ -4,12 +4,28 @@
 //! traps EL1 SMC to EL2, not EL2 SMC. This enables transparent forwarding
 //! of validated FF-A calls (and other SMCCC calls) to the Secure World.
 
-/// Result of forwarding an SMC to EL3.
+/// Result of forwarding an SMC to EL3 (x0-x3).
 pub struct SmcResult {
     pub x0: u64,
     pub x1: u64,
     pub x2: u64,
     pub x3: u64,
+}
+
+/// Result of forwarding an SMC to EL3 with all 8 return registers (x0-x7).
+///
+/// Used by the SPMC event loop where the full SMCCC return state is needed
+/// (e.g., FFA_MSG_SEND_DIRECT_REQ passes data in x4-x7).
+#[derive(Debug, Clone, Copy)]
+pub struct SmcResult8 {
+    pub x0: u64,
+    pub x1: u64,
+    pub x2: u64,
+    pub x3: u64,
+    pub x4: u64,
+    pub x5: u64,
+    pub x6: u64,
+    pub x7: u64,
 }
 
 /// Forward an SMC call to EL3 (Secure World) from EL2.
@@ -70,6 +86,72 @@ pub fn forward_smc(
         x1: r1,
         x2: r2,
         x3: r3,
+    }
+}
+
+/// Forward an SMC call to EL3 (Secure World) from EL2, capturing all 8 return registers.
+///
+/// Passes x0-x7 as arguments per SMCCC calling convention,
+/// returns x0-x7 as results. Used by the SPMC event loop where
+/// FF-A calls carry data in x4-x7 (e.g., direct messaging).
+///
+/// # Safety
+///
+/// This executes a real SMC instruction at EL2. The caller must ensure
+/// the arguments are valid for the target SMC function.
+#[inline(never)]
+pub fn forward_smc8(
+    x0: u64,
+    x1: u64,
+    x2: u64,
+    x3: u64,
+    x4: u64,
+    x5: u64,
+    x6: u64,
+    x7: u64,
+) -> SmcResult8 {
+    let r0: u64;
+    let r1: u64;
+    let r2: u64;
+    let r3: u64;
+    let r4: u64;
+    let r5: u64;
+    let r6: u64;
+    let r7: u64;
+    unsafe {
+        core::arch::asm!(
+            "smc #0",
+            inout("x0") x0 => r0,
+            inout("x1") x1 => r1,
+            inout("x2") x2 => r2,
+            inout("x3") x3 => r3,
+            inout("x4") x4 => r4,
+            inout("x5") x5 => r5,
+            inout("x6") x6 => r6,
+            inout("x7") x7 => r7,
+            // x8-x17 may be clobbered by the SMC call per SMCCC
+            lateout("x8") _,
+            lateout("x9") _,
+            lateout("x10") _,
+            lateout("x11") _,
+            lateout("x12") _,
+            lateout("x13") _,
+            lateout("x14") _,
+            lateout("x15") _,
+            lateout("x16") _,
+            lateout("x17") _,
+            options(nomem, nostack),
+        );
+    }
+    SmcResult8 {
+        x0: r0,
+        x1: r1,
+        x2: r2,
+        x3: r3,
+        x4: r4,
+        x5: r5,
+        x6: r6,
+        x7: r7,
     }
 }
 
