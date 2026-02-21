@@ -78,8 +78,9 @@ pub fn manifest_info() -> &'static SpMcManifest {
     }
 }
 
-/// Signal SPMD that SPMC init is complete via FFA_MSG_WAIT (0x8400006B).
+/// Signal SPMD that SPMC init is complete via FFA_MSG_WAIT.
+/// Returns the first FF-A request from Normal World.
 #[cfg(feature = "sel2")]
-pub fn signal_spmc_ready() {
-    smc_forward::forward_smc(0x8400_006B, 0, 0, 0, 0, 0, 0, 0);
+pub fn signal_spmc_ready() -> smc_forward::SmcResult8 {
+    smc_forward::forward_smc8(0x8400_006B, 0, 0, 0, 0, 0, 0, 0)
 }

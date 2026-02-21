@@ -306,17 +306,12 @@ pub extern "C" fn rust_main_sel2(
     hypervisor::arch::aarch64::peripherals::gicv3::init();
     uart_puts_local(b"[SPMC] GIC initialized\n");
 
-    // 6. Signal SPMD: init complete
+    // 6. Signal SPMD: init complete, receive first NWd request
     uart_puts_local(b"[SPMC] Init complete, signaling SPMD via FFA_MSG_WAIT\n");
-    hypervisor::manifest::signal_spmc_ready();
+    let first_req = hypervisor::manifest::signal_spmc_ready();
 
-    // 7. SPMD returned — loop waiting for world switch
-    uart_puts_local(b"[SPMC] FFA_MSG_WAIT returned, entering idle loop\n");
-    loop {
-        unsafe {
-            core::arch::asm!("wfi");
-        }
-    }
+    // 7. Enter SPMC event loop (does not return)
+    hypervisor::spmc_handler::run_event_loop(first_req);
 }
 
 /// Secondary pCPU entry point (called from boot.S after PSCI CPU_ON start).
