@@ -257,19 +257,33 @@ build-spmc:
 	aarch64-linux-gnu-objcopy -O binary $(BINARY) $(SPMC_BIN)
 	@echo "SPMC binary: $(SPMC_BIN)"
 
-# Build TF-A with real SPMC as BL32
+# Build BL33 FF-A test client (sends FF-A SMCs to SPMC, prints PASS/FAIL)
+build-bl33-ffa-test:
+	@echo "Building BL33 FF-A test client..."
+	aarch64-linux-gnu-as -o $(BUILD_DIR)/bl33_ffa_test.o tfa/bl33_ffa_test/start.S
+	aarch64-linux-gnu-ld -T tfa/bl33_ffa_test/linker.ld -o $(BUILD_DIR)/bl33_ffa_test.elf $(BUILD_DIR)/bl33_ffa_test.o
+	aarch64-linux-gnu-objcopy -O binary $(BUILD_DIR)/bl33_ffa_test.elf tfa/bl33_ffa_test.bin
+	@echo "BL33 test client: tfa/bl33_ffa_test.bin"
+
+# Build TF-A with real SPMC (BL32) + FF-A test client (BL33)
 TFA_FLASH_SPMC := $(TFA_DIR)/flash-spmc.bin
 
 # 1. build-bl32-bl33: builds trivial bl32.bin + bl33.bin (Docker, root-owned)
 # 2. build-spmc: builds real SPMC binary
-# 3. Recipe: Docker overwrites bl32.bin with real SPMC, then builds TF-A
-build-tfa-spmc: build-bl32-bl33 build-spmc
+# 3. build-bl33-ffa-test: builds FF-A test client binary
+# 4. Recipe: Docker overwrites bl32.bin with SPMC, bl33.bin with test client, then builds TF-A
+build-tfa-spmc: build-bl32-bl33 build-spmc build-bl33-ffa-test
 	@echo "Replacing trivial bl32.bin with real SPMC..."
 	docker run --rm \
 	    -v $(PWD)/tfa:/output \
 	    -v $(PWD)/$(SPMC_BIN):/spmc.bin:ro \
 	    debian:bookworm-slim cp /spmc.bin /output/bl32.bin
-	@echo "Building TF-A with real SPMC as BL32..."
+	@echo "Replacing trivial bl33.bin with FF-A test client..."
+	docker run --rm \
+	    -v $(PWD)/tfa:/output \
+	    -v $(PWD)/tfa/bl33_ffa_test.bin:/bl33_test.bin:ro \
+	    debian:bookworm-slim cp /bl33_test.bin /output/bl33.bin
+	@echo "Building TF-A with real SPMC as BL32 + FF-A test client as BL33..."
 	docker run --rm \
 	    -v $(PWD)/tfa:/output \
 	    -v $(PWD):/src \
@@ -277,7 +291,7 @@ build-tfa-spmc: build-bl32-bl33 build-spmc
 	    debian:bookworm-slim bash /src/scripts/build-tfa.sh
 	mv $(TFA_DIR)/flash.bin $(TFA_FLASH_SPMC)
 
-# Boot TF-A with our SPMC at S-EL2 + trivial BL33 at NS-EL2
+# Boot TF-A with SPMC (S-EL2) + FF-A test client (NS-EL2)
 run-spmc:
 	@test -f $(TFA_FLASH_SPMC) || (echo "ERROR: $(TFA_FLASH_SPMC) not found. Run 'make build-tfa-spmc' first." && exit 1)
 	@echo "Starting QEMU with real SPMC at S-EL2..."
