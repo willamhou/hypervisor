@@ -32,6 +32,7 @@ pub mod test_vm_scheduler;
 pub mod test_vm_state_isolation;
 pub mod test_vmid_vttbr;
 pub mod test_spmc_handler;
+pub mod test_sp_context;
 pub mod test_vswitch;
 
 // Re-export test functions for easy access
@@ -59,6 +60,7 @@ pub use test_page_ownership::run_page_ownership_test;
 pub use test_pl031::run_pl031_test;
 pub use test_scheduler::run_scheduler_test;
 pub use test_spmc_handler::run_tests as run_spmc_handler_test;
+pub use test_sp_context::run_tests as run_sp_context_test;
 pub use test_simple_guest::run_test as run_simple_guest_test;
 #[allow(unused_imports)]
 pub use test_timer::run_timer_test;

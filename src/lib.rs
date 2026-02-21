@@ -9,6 +9,7 @@ pub mod guest_loader;
 pub mod manifest;
 pub mod mm;
 pub mod spmc_handler;
+pub mod sp_context;
 pub mod percpu;
 pub mod platform;
 pub mod scheduler;
