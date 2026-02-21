@@ -4,8 +4,8 @@
 		compatible = "arm,sp";
 
 		sp1 {
-			uuid = <0x12345678 0x12345678 0x12345678 0x12345678>;
-			load-address = <0x0 0x0e300000>;
+			uuid = "78563412-7856-3412-7856-341278563412";
+			load-address = <0x0e300000>;
 			owner = "Plat";
 		};
 	};

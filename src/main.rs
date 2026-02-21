@@ -342,17 +342,49 @@ pub extern "C" fn rust_main_sel2(
         );
     }
 
-    // 5.7. Create SP context and boot SP1
-    uart_puts_local(b"[SPMC] Booting SP1 at 0x");
-    hypervisor::uart_put_hex(hypervisor::platform::SP1_LOAD_ADDR);
+    // 5.7. Parse SP package header and create SP context
+    // BL2 loads the raw SP package (SPKG) to SP1_LOAD_ADDR.  Layout:
+    //   offset 0x00: magic "SPKG" (4B)
+    //   offset 0x04: version      (4B LE)
+    //   offset 0x08: pm_offset    (4B LE)  — manifest DTB
+    //   offset 0x0C: pm_size      (4B LE)
+    //   offset 0x10: img_offset   (4B LE)  — SP binary
+    //   offset 0x14: img_size     (4B LE)
+    let pkg_base = hypervisor::platform::SP1_LOAD_ADDR;
+    let img_offset = unsafe {
+        let ptr = pkg_base as *const u32;
+        // Read img_offset at offset 0x10 (index 4)
+        core::ptr::read_volatile(ptr.add(4)) as u64
+    };
+    let sp1_entry = pkg_base + img_offset;
+
+    uart_puts_local(b"[SPMC] SP1 package at 0x");
+    hypervisor::uart_put_hex(pkg_base);
+    uart_puts_local(b", img_offset=0x");
+    hypervisor::uart_put_hex(img_offset);
+    uart_puts_local(b", entry=0x");
+    hypervisor::uart_put_hex(sp1_entry);
     uart_puts_local(b"\n");
 
     let mut sp1 = hypervisor::sp_context::SpContext::new(
         hypervisor::platform::SP1_PARTITION_ID,
-        hypervisor::platform::SP1_LOAD_ADDR,
+        sp1_entry,
         hypervisor::platform::SP1_STACK_TOP,
     );
     sp1.set_vsttbr(s2_config.vsttbr);
+
+    // Clear EL1 system registers left by TF-A (SCTLR_EL1.M=1 would fault
+    // because TF-A's Stage-1 page tables don't map SP load address).
+    // Also clear VBAR_EL1 so stale TF-A exception handlers don't trigger.
+    unsafe {
+        core::arch::asm!(
+            "msr sctlr_el1, xzr",
+            "msr tcr_el1, xzr",
+            "msr ttbr0_el1, xzr",
+            "msr vbar_el1, xzr",
+            "isb",
+        );
+    }
 
     // ERET to SP1 — SP runs, prints hello, calls FFA_MSG_WAIT, traps back
     {

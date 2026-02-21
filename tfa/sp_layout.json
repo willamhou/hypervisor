@@ -1,7 +1,7 @@
 {
     "SP1": {
-        "image": "tfa/sp_hello/sp_hello.bin",
-        "pm": "tfa/sp_hello/sp_manifest.dts",
+        "image": "sp_hello/sp_hello.bin",
+        "pm": "sp_hello/sp_manifest.dts",
         "owner": "Plat"
     }
 }
