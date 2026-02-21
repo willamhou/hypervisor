@@ -312,6 +312,70 @@ pub extern "C" fn rust_main_sel2(
     hypervisor::arch::aarch64::peripherals::gicv3::init();
     uart_puts_local(b"[SPMC] GIC initialized\n");
 
+    // 5.5. Initialize secure heap (for page table allocation)
+    uart_puts_local(b"[SPMC] Initializing secure heap\n");
+    unsafe {
+        hypervisor::mm::heap::init_at(
+            hypervisor::platform::SECURE_HEAP_START,
+            hypervisor::platform::SECURE_HEAP_SIZE,
+        );
+    }
+
+    // 5.6. Build Secure Stage-2 for SP1
+    uart_puts_local(b"[SPMC] Building Secure Stage-2 for SP1\n");
+    let mapper = hypervisor::secure_stage2::build_sp_stage2(
+        hypervisor::platform::SP1_LOAD_ADDR,
+        hypervisor::platform::SP1_MEM_SIZE,
+    )
+    .expect("Failed to build SP Stage-2");
+    let s2_config = hypervisor::secure_stage2::SecureStage2Config::new(mapper.l0_addr());
+    s2_config.install();
+
+    // Enable Secure Stage-2 by setting HCR_EL2.VM
+    unsafe {
+        let hcr: u64;
+        core::arch::asm!("mrs {}, hcr_el2", out(reg) hcr);
+        core::arch::asm!(
+            "msr hcr_el2, {hcr}",
+            "isb",
+            hcr = in(reg) hcr | hypervisor::arch::aarch64::defs::HCR_VM,
+        );
+    }
+
+    // 5.7. Create SP context and boot SP1
+    uart_puts_local(b"[SPMC] Booting SP1 at 0x");
+    hypervisor::uart_put_hex(hypervisor::platform::SP1_LOAD_ADDR);
+    uart_puts_local(b"\n");
+
+    let mut sp1 = hypervisor::sp_context::SpContext::new(
+        hypervisor::platform::SP1_PARTITION_ID,
+        hypervisor::platform::SP1_LOAD_ADDR,
+        hypervisor::platform::SP1_STACK_TOP,
+    );
+    sp1.set_vsttbr(s2_config.vsttbr);
+
+    // ERET to SP1 — SP runs, prints hello, calls FFA_MSG_WAIT, traps back
+    {
+        use hypervisor::arch::aarch64::enter_guest;
+        use hypervisor::arch::aarch64::regs::VcpuContext;
+        let _exit = unsafe { enter_guest(sp1.vcpu_ctx_mut() as *mut VcpuContext) };
+    }
+
+    // SP trapped back — verify it called FFA_MSG_WAIT
+    let (x0, _, _, _, _, _, _, _) = sp1.get_args();
+    if x0 == hypervisor::ffa::FFA_MSG_WAIT {
+        uart_puts_local(b"[SPMC] SP1 booted, now Idle (FFA_MSG_WAIT received)\n");
+        sp1.transition_to(hypervisor::sp_context::SpState::Idle)
+            .expect("SP1 transition failed");
+    } else {
+        uart_puts_local(b"[SPMC] WARNING: SP1 did not call FFA_MSG_WAIT, x0=0x");
+        hypervisor::uart_put_hex(x0);
+        uart_puts_local(b"\n");
+    }
+
+    // Store SP1 context globally for dispatch
+    hypervisor::sp_context::register_sp(sp1);
+
     // 6. Signal SPMD: init complete, receive first NWd request
     uart_puts_local(b"[SPMC] Init complete, signaling SPMD via FFA_MSG_WAIT\n");
     let first_req = hypervisor::manifest::signal_spmc_ready();

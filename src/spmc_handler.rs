@@ -19,7 +19,7 @@ use crate::ffa::smc_forward::SmcResult8;
 pub fn run_event_loop(first_request: SmcResult8) -> ! {
     let mut request = first_request;
     loop {
-        let response = dispatch_ffa(&request);
+        let response = dispatch_request(&request);
         // Send response to SPMD and receive the next request
         request = crate::ffa::smc_forward::forward_smc8(
             response.x0,
@@ -31,6 +31,64 @@ pub fn run_event_loop(first_request: SmcResult8) -> ! {
             response.x6,
             response.x7,
         );
+    }
+}
+
+/// Dispatch an FF-A request. Routes to SP or local SPMC handling.
+#[cfg(feature = "sel2")]
+fn dispatch_request(req: &SmcResult8) -> SmcResult8 {
+    if req.x0 == ffa::FFA_MSG_SEND_DIRECT_REQ_32
+        || req.x0 == ffa::FFA_MSG_SEND_DIRECT_REQ_64
+    {
+        let dest = (req.x1 & 0xFFFF) as u16;
+        if crate::sp_context::is_registered_sp(dest) {
+            return dispatch_to_sp(req, dest);
+        }
+    }
+    dispatch_ffa(req)
+}
+
+/// Route DIRECT_REQ to an SP: ERET, wait for response, return it.
+#[cfg(feature = "sel2")]
+fn dispatch_to_sp(req: &SmcResult8, sp_id: u16) -> SmcResult8 {
+    let sp = match crate::sp_context::get_sp_mut(sp_id) {
+        Some(sp) => sp,
+        None => return make_error(ffa::FFA_INVALID_PARAMETERS as u64),
+    };
+
+    if sp.state() != crate::sp_context::SpState::Idle {
+        return make_error(ffa::FFA_BUSY as u64);
+    }
+
+    // Set up SP registers with the DIRECT_REQ args
+    sp.set_args(req.x0, req.x1, req.x2, req.x3, req.x4, req.x5, req.x6, req.x7);
+    sp.transition_to(crate::sp_context::SpState::Running)
+        .expect("SP Running transition failed");
+
+    // Reinstall SP's Secure Stage-2 and ERET
+    let s2 = crate::secure_stage2::SecureStage2Config::new_from_vsttbr(sp.vsttbr());
+    s2.install();
+
+    let _exit = unsafe {
+        crate::arch::aarch64::enter_guest(
+            sp.vcpu_ctx_mut() as *mut crate::arch::aarch64::regs::VcpuContext,
+        )
+    };
+
+    // SP trapped back
+    sp.transition_to(crate::sp_context::SpState::Idle)
+        .expect("SP Idle transition failed");
+
+    let (x0, x1, x2, x3, x4, x5, x6, x7) = sp.get_args();
+    SmcResult8 {
+        x0,
+        x1,
+        x2,
+        x3,
+        x4,
+        x5,
+        x6,
+        x7,
     }
 }
 
@@ -113,11 +171,11 @@ pub fn dispatch_ffa(req: &SmcResult8) -> SmcResult8 {
         }
 
         ffa::FFA_PARTITION_INFO_GET => {
-            // No SPs registered yet — return count=0
+            let count = if crate::sp_context::is_registered_sp(0x8001) { 1u64 } else { 0u64 };
             SmcResult8 {
                 x0: ffa::FFA_SUCCESS_32,
                 x1: 0,
-                x2: 0, // partition count = 0
+                x2: count,
                 x3: 0,
                 x4: 0,
                 x5: 0,

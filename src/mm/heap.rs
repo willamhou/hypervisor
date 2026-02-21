@@ -20,6 +20,13 @@ pub unsafe fn init() {
     *HEAP.allocator.get() = Some(alloc);
 }
 
+/// Initialize the global heap at a specific address and size.
+/// Used by S-EL2 SPMC for secure DRAM heap.
+pub unsafe fn init_at(start: u64, size: u64) {
+    let alloc = super::BumpAllocator::new(start, size);
+    *HEAP.allocator.get() = Some(alloc);
+}
+
 /// Allocate a 4KB-aligned page from the global heap
 pub fn alloc_page() -> Option<u64> {
     unsafe {
