@@ -10,7 +10,7 @@ ARM64 Type-1 bare-metal hypervisor written in Rust (no_std) with ARM64 assembly.
 
 ```bash
 make              # Build hypervisor
-make run          # Build + run in QEMU — runs 30 test suites automatically (exit: Ctrl+A then X)
+make run          # Build + run in QEMU — runs 31 test suites automatically (exit: Ctrl+A then X)
 make run-linux    # Build + boot Linux guest (--features linux_guest, 4 vCPUs on 1 pCPU, virtio-blk)
 make run-linux-smp # Build + boot Linux guest (--features multi_pcpu, 4 vCPUs on 4 pCPUs)
 make run-multi-vm # Build + boot 2 Linux VMs time-sliced (--features multi_vm)
@@ -70,6 +70,7 @@ make fmt          # Format code
 | `NetRxRing` | `src/vswitch.rs` | Per-port SPSC ring buffer for async RX frame delivery |
 | `VirtualPl031` | `src/devices/pl031.rs` | PL031 RTC emulation: counter-based time, PrimeCell ID |
 | `SpMcManifest` | `src/manifest.rs` | SPMC manifest parser: TOS_FW_CONFIG DTB (spmc_id, version) |
+| `SpmcHandler` | `src/spmc_handler.rs` | S-EL2 SPMC event loop + FF-A dispatch (VERSION, ID_GET, FEATURES, PARTITION_INFO, DIRECT_REQ echo, framework messages) |
 
 ### Exception Handling Flow
 ```
@@ -285,7 +286,7 @@ Array-based routing: `devices: [Option<Device>; 8]`, scan for `dev.contains(addr
 
 ## Tests
 
-~193 assertions across 30 test suites run automatically on `make run` (no feature flags). Orchestrated sequentially in `src/main.rs`. Located in `tests/`:
+~205 assertions across 31 test suites run automatically on `make run` (no feature flags). Orchestrated sequentially in `src/main.rs`. Located in `tests/`:
 
 | Test | Coverage | Assertions |
 |------|----------|------------|
@@ -318,6 +319,7 @@ Array-based routing: `devices: [Option<Device>; 8]`, scan for `dev.contains(addr
 | `test_page_ownership` | Stage-2 PTE SW bits: read/write OWNED/SHARED_OWNED, unmapped IPA, 2MB block→4KB split | 9 |
 | `test_pl031` | PL031 RTC: RTCDR readable, RTCLR write+readback, PeriphID/PrimeCellID, unknown offset | 4 |
 | `test_ffa` | FF-A proxy: VERSION/ID_GET/FEATURES/RXTX/messaging/MEM_SHARE/RECLAIM/descriptors/SMC forward/VM-to-VM RETRIEVE/RELINQUISH/SPM_ID_GET/RUN/notifications/MSG_SEND2/MSG_WAIT | 44 |
+| `test_spmc_handler` | SPMC dispatch: VERSION/ID_GET/SPM_ID_GET/FEATURES/PARTITION_INFO/DIRECT_REQ echo/framework msg | 24 |
 | `test_guest_interrupt` | Guest interrupt injection + exception vector (blocks) | 1 |
 
 Not wired into `main.rs` (exported but not called):
@@ -381,7 +383,7 @@ NS-EL1: Linux/Android guest
 ```
 
 **Phase 3** (done): NS-EL2 complete — 2MB block split, FF-A notifications, indirect messaging
-**Phase 4** (in progress): QEMU `secure=on` + TF-A boot chain → Sprint 4.1 (build infra) + 4.2 (BL33 boot) + 4.3 (S-EL2 SPMC) done; Sprint 4.4 (SP loading) next
+**Phase 4** (in progress): QEMU `secure=on` + TF-A boot chain → Sprint 4.1 (build infra) + 4.2 (BL33 boot) + 4.3 (S-EL2 SPMC) + 4.4 Phase A (SPMC handler) done; Sprint 4.4 Phase B (SP loading) next
 **Phase 4.5**: pKVM at NS-EL2 + our SPMC at S-EL2 → end-to-end FF-A path
 **Phase 5**: RME & CCA (Realm Manager)
 
