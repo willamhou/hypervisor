@@ -368,7 +368,10 @@ Guest GICR writes only update `VirtualGicr` shadow state. `ensure_vtimer_enabled
 TF-A's default `CPTR_EL3.TFP=1` traps ALL FP/SIMD instructions from S-EL2 to EL3. Rust debug-mode `read_volatile` uses NEON SIMD internally (`cnt v0.8b, v0.8b` for popcount alignment check in `is_aligned_to`), causing silent hangs on any memory read. Fix: `CTX_INCLUDE_FPREGS=1` in TF-A build (clears CPTR_EL3.TFP). Requires `ENABLE_SVE_FOR_NS=0` and `ENABLE_SME_FOR_NS=0` to avoid build conflicts.
 
 ### S-EL2 SPMC Boot (`sel2` feature)
-Entry point: `boot_sel2.S` → `rust_main_sel2(manifest_addr, hw_config_addr, core_id)`. SPMD passes x0=TOS_FW_CONFIG (manifest DTB at 0x0e002000), x1=HW_CONFIG, x4=core_id. Init sequence: exception vectors → manifest parse → HW config DTB → GIC init → FFA_MSG_WAIT (0x8400006B) → idle loop. `src/manifest.rs` parses `/attribute` node (spmc_id, maj_ver, min_ver) per FF-A Core Manifest v1.0 (DEN0077A).
+Entry point: `boot_sel2.S` → `rust_main_sel2(manifest_addr, hw_config_addr, core_id)`. SPMD passes x0=TOS_FW_CONFIG (manifest DTB at 0x0e002000), x1=HW_CONFIG, x4=core_id. Init: exception vectors → manifest parse → GIC init → Secure Stage-2 → parse SPKG header (img_offset=0x4000) → clear SCTLR_EL1/VBAR_EL1 → ERET to SP1 → SP calls FFA_MSG_WAIT → SPMC event loop. `src/manifest.rs` parses `/attribute` node (spmc_id, maj_ver, min_ver) per FF-A Core Manifest v1.0 (DEN0077A).
+
+### SP Package Format (SPKG)
+BL2 loads raw SP packages to `load-address` from `tb_fw_config.dts`. SPKG header (24 bytes LE): magic("SPKG"), version, pm_offset(0x1000), pm_size, img_offset(0x4000), img_size. SPMC must parse header and enter SP at `load_addr + img_offset`. The sp_manifest.dts UUID gets byte-swapped by `sp_mk_generator.py` (LE conversion); `tb_fw_config.dts` UUID must match the swapped form. Use `fiptool info fip.bin` to verify.
 
 ### Diagnostic Fault Handler (`exception.S`)
 `fault_diag_print` handles exceptions when TPIDR_EL2=0 (no vCPU context — host-level fault). Prints ESR_EL2, ELR_EL2, FAR_EL2, HPFAR_EL2 to UART. Used during S-EL2 boot to diagnose Data Aborts. Located at end of `exception.S` (outside vector table alignment constraints).
@@ -388,7 +391,7 @@ NS-EL1: Linux/Android guest
 ```
 
 **Phase 3** (done): NS-EL2 complete — 2MB block split, FF-A notifications, indirect messaging
-**Phase 4** (in progress): QEMU `secure=on` + TF-A boot chain → Sprint 4.1 (build infra) + 4.2 (BL33 boot) + 4.3 (S-EL2 SPMC) + 4.4 Phase A (SPMC handler) done; Sprint 4.4 Phase B (SP loading) next
+**Phase 4** (in progress): QEMU `secure=on` + TF-A boot chain → Sprint 4.1-4.4 done (SPMC + SP Hello + 6/6 BL33 tests)
 **Phase 4.5**: pKVM at NS-EL2 + our SPMC at S-EL2 → end-to-end FF-A path
 **Phase 5**: RME & CCA (Realm Manager)
 
