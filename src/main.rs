@@ -171,6 +171,9 @@ pub extern "C" fn rust_main(dtb_addr: usize) -> ! {
     // Run the FF-A proxy test
     tests::run_ffa_test();
 
+    // Run the SPMC handler dispatch test
+    tests::run_spmc_handler_test();
+
     // Run the guest interrupt injection test (LAST before guest boot — blocks forever)
     // Skip when booting guests since it never returns.
     #[cfg(not(any(feature = "linux_guest", feature = "guest")))]
