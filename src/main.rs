@@ -177,6 +177,9 @@ pub extern "C" fn rust_main(dtb_addr: usize) -> ! {
     // Run the SP context state machine test
     tests::run_sp_context_test();
 
+    // Run the Secure Stage-2 config test
+    tests::run_secure_stage2_test();
+
     // Run the guest interrupt injection test (LAST before guest boot — blocks forever)
     // Skip when booting guests since it never returns.
     #[cfg(not(any(feature = "linux_guest", feature = "guest")))]

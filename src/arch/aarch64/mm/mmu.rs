@@ -582,6 +582,11 @@ impl DynamicIdentityMapper {
         self.l0_table
     }
 
+    /// Get the L0 table physical address (for VTTBR/VSTTBR).
+    pub fn l0_addr(&self) -> u64 {
+        self.l0_table
+    }
+
     /// Get the configuration for this mapper
     pub fn config(&self) -> Stage2Config {
         Stage2Config::new(self.l0_table)
