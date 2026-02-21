@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Overview
 
-ARM64 Type-1 bare-metal hypervisor written in Rust (no_std) with ARM64 assembly. Runs at EL2 (hypervisor exception level) and manages guest VMs at EL1. Targets QEMU virt machine. Boots Linux 6.12.12 to BusyBox shell with 4 vCPUs, virtio-blk storage, and virtio-net inter-VM networking. Supports multi-VM with per-VM Stage-2, VMID-tagged TLBs, two-level scheduling, and L2 virtual switch. Includes FF-A v1.1 proxy with stub SPMC, page ownership validation via Stage-2 PTE SW bits, FF-A v1.1 descriptor parsing, SMC forwarding to EL3, and VM-to-VM memory sharing (MEM_RETRIEVE/RELINQUISH with dynamic Stage-2 page mapping). Android boot with PL031 RTC emulation, Binder IPC, binderfs, minimal init, 1GB guest RAM. TF-A boot chain: BL1→BL2→BL31(SPMD)→BL32(stub S-EL2)→BL33(hypervisor)→Linux via `make run-tfa-linux`.
+ARM64 Type-1 bare-metal hypervisor written in Rust (no_std) with ARM64 assembly. Runs at EL2 (hypervisor exception level) and manages guest VMs at EL1. Targets QEMU virt machine. Boots Linux 6.12.12 to BusyBox shell with 4 vCPUs, virtio-blk storage, and virtio-net inter-VM networking. Supports multi-VM with per-VM Stage-2, VMID-tagged TLBs, two-level scheduling, and L2 virtual switch. Includes FF-A v1.1 proxy with stub SPMC, page ownership validation via Stage-2 PTE SW bits, FF-A v1.1 descriptor parsing, SMC forwarding to EL3, and VM-to-VM memory sharing (MEM_RETRIEVE/RELINQUISH with dynamic Stage-2 page mapping). Android boot with PL031 RTC emulation, Binder IPC, binderfs, minimal init, 1GB guest RAM. Dual boot modes: NS-EL2 hypervisor via `make run-tfa-linux` (BL33) and S-EL2 SPMC via `make run-spmc` (BL32). TF-A boot chain: BL1→BL2→BL31(SPMD)→BL32(SPMC)→BL33 with manifest FDT parsing.
 
 ## Build Commands
 
@@ -18,9 +18,12 @@ make run-android  # Build + boot Android-configured kernel (PL031 RTC, Binder, m
 make run-guest GUEST_ELF=/path/to/zephyr.elf  # Boot Zephyr guest (--features guest)
 make run-sel2     # Boot TF-A with trivial BL32 at S-EL2 (requires build-tfa first)
 make run-tfa-linux # Boot TF-A → hypervisor (BL33) → Linux (requires build-tfa-bl33 first)
+make run-spmc     # Boot TF-A → our SPMC (BL32) at S-EL2 (requires build-tfa-spmc first)
 make build-qemu   # Build QEMU 9.2.3 from source (one-time, Docker)
 make build-tfa    # Build TF-A flash.bin with SPD=spmd (Docker)
 make build-tfa-bl33 # Build TF-A flash.bin with PRELOADED_BL33_BASE=0x40200000
+make build-spmc   # Build hypervisor as S-EL2 SPMC binary (--features sel2)
+make build-tfa-spmc # Build TF-A with real SPMC as BL32
 make debug        # Build + run with GDB server on port 1234
 make clean        # Clean build artifacts
 make check        # Check code without building
@@ -34,8 +37,9 @@ make fmt          # Format code
 - `linux_guest` — Linux guest with DynamicIdentityMapper, GICR trap-and-emulate, virtio-blk, virtio-net
 - `multi_pcpu` — Multi-pCPU support (implies `linux_guest`): 1:1 vCPU-to-pCPU affinity, PSCI boot, TPIDR_EL2 context, SpinLock devices
 - `multi_vm` — Multi-VM support (implies `linux_guest`): 2 VMs time-sliced on 1 pCPU, per-VM Stage-2/VMID, per-VM DeviceManager
+- `sel2` — S-EL2 SPMC mode: hypervisor as BL32 (SPMC role), separate boot_sel2.S entry, linker base 0x0e100000 (secure DRAM), manifest parsing, FFA_MSG_WAIT handshake
 
-**Note**: `multi_pcpu` and `multi_vm` are mutually exclusive — both imply `linux_guest` but use different scheduling models.
+**Note**: `multi_pcpu` and `multi_vm` are mutually exclusive — both imply `linux_guest` but use different scheduling models. `sel2` is mutually exclusive with all others.
 
 **Toolchain requirements**: Rust nightly, `aarch64-linux-gnu-gcc`, `aarch64-linux-gnu-ar`, `aarch64-linux-gnu-objcopy`, `qemu-system-aarch64`
 
@@ -65,6 +69,7 @@ make fmt          # Format code
 | `VSwitch` | `src/vswitch.rs` | L2 virtual switch with MAC learning, inter-VM frame forwarding |
 | `NetRxRing` | `src/vswitch.rs` | Per-port SPSC ring buffer for async RX frame delivery |
 | `VirtualPl031` | `src/devices/pl031.rs` | PL031 RTC emulation: counter-based time, PrimeCell ID |
+| `SpMcManifest` | `src/manifest.rs` | SPMC manifest parser: TOS_FW_CONFIG DTB (spmc_id, version) |
 
 ### Exception Handling Flow
 ```
@@ -222,7 +227,8 @@ Falls back to QEMU virt defaults if DTB parse fails (e.g., QEMU passes addr=0 wi
 
 | Region | Address | Purpose |
 |--------|---------|---------|
-| Hypervisor code | 0x40200000 | Linker base (avoids QEMU DTB at 0x40000000 in -bios mode) |
+| SPMC code (sel2) | 0x0e100000 | S-EL2 linker base (secure DRAM, BL32) |
+| Hypervisor code (NS) | 0x40200000 | NS-EL2 linker base (avoids QEMU DTB at 0x40000000 in -bios mode) |
 | Heap | 0x41000000 (16MB) | Page table allocation, `BumpAllocator` |
 | DTB (VM 0) | 0x47000000 | Device tree blob |
 | Kernel (VM 0) | 0x48000000 | Linux Image load address |
@@ -273,9 +279,9 @@ Array-based routing: `devices: [Option<Device>; 8]`, scan for `dev.contains(addr
 
 ## Build System
 
-- **build.rs**: Cross-compiles `boot.S` and `exception.S` via `aarch64-linux-gnu-gcc`, archives into `libboot.a`, links with `--whole-archive`. Also passes `-Tarch/aarch64/linker.ld` to the linker (moved here from `.cargo/config.toml` to avoid worktree config merging issues)
+- **build.rs**: Cross-compiles boot assembly and `exception.S` via `aarch64-linux-gnu-gcc`, archives into `libboot.a`, links with `--whole-archive`. Feature-gated: `sel2` selects `boot_sel2.S` + `linker_sel2.ld`, otherwise `boot.S` + `linker.ld`
 - **Target**: `aarch64-unknown-none.json` (custom spec: `llvm-target: aarch64-unknown-none`, `panic-strategy: abort`, `disable-redzone: true`)
-- **Linker**: `arch/aarch64/linker.ld` — base at 0x40200000 (avoids QEMU auto-generated DTB at 0x40000000 in `-bios` mode), `.text.boot` first
+- **Linker**: `arch/aarch64/linker.ld` — base at 0x40200000 (NS-EL2, avoids QEMU DTB at 0x40000000 in `-bios` mode); `arch/aarch64/linker_sel2.ld` — base at 0x0e100000 (S-EL2, secure DRAM)
 
 ## Tests
 
@@ -351,6 +357,15 @@ Guest GICR writes only update `VirtualGicr` shadow state. `ensure_vtimer_enabled
 ### HCR_EL2.TSC for SMC Trapping
 `HCR_TSC = 1 << 19` traps guest SMC instructions to EL2 as `EC_SMC64 (0x17)`. Unlike HVC traps, the trapped SMC sets `ELR_EL2` to the SMC instruction itself — exception handler must advance PC by 4. This enables the FF-A proxy to intercept guest FF-A SMC calls and route them through `handle_smc()`.
 
+### CPTR_EL3.TFP Traps FP/SIMD at S-EL2 (must-know for TF-A builds)
+TF-A's default `CPTR_EL3.TFP=1` traps ALL FP/SIMD instructions from S-EL2 to EL3. Rust debug-mode `read_volatile` uses NEON SIMD internally (`cnt v0.8b, v0.8b` for popcount alignment check in `is_aligned_to`), causing silent hangs on any memory read. Fix: `CTX_INCLUDE_FPREGS=1` in TF-A build (clears CPTR_EL3.TFP). Requires `ENABLE_SVE_FOR_NS=0` and `ENABLE_SME_FOR_NS=0` to avoid build conflicts.
+
+### S-EL2 SPMC Boot (`sel2` feature)
+Entry point: `boot_sel2.S` → `rust_main_sel2(manifest_addr, hw_config_addr, core_id)`. SPMD passes x0=TOS_FW_CONFIG (manifest DTB at 0x0e002000), x1=HW_CONFIG, x4=core_id. Init sequence: exception vectors → manifest parse → HW config DTB → GIC init → FFA_MSG_WAIT (0x8400006B) → idle loop. `src/manifest.rs` parses `/attribute` node (spmc_id, maj_ver, min_ver) per FF-A Core Manifest v1.0 (DEN0077A).
+
+### Diagnostic Fault Handler (`exception.S`)
+`fault_diag_print` handles exceptions when TPIDR_EL2=0 (no vCPU context — host-level fault). Prints ESR_EL2, ELR_EL2, FAR_EL2, HPFAR_EL2 to UART. Used during S-EL2 boot to diagnose Data Aborts. Located at end of `exception.S` (outside vector table alignment constraints).
+
 ### Platform Constants
 Guest-specific addresses (heap, kernel load, virtio disk) are in `src/platform.rs`. Host hardware addresses (UART, GIC, RAM, CPU count) are discovered at runtime from DTB via `src/dtb.rs` — use `platform::num_cpus()` and `dtb::platform_info()` instead of hardcoded constants. `MAX_SMP_CPUS = 8` is the compile-time array capacity; `SMP_CPUS = 4` is the fallback default.
 
@@ -366,7 +381,7 @@ NS-EL1: Linux/Android guest
 ```
 
 **Phase 3** (done): NS-EL2 complete — 2MB block split, FF-A notifications, indirect messaging
-**Phase 4** (in progress): QEMU `secure=on` + TF-A boot chain → Sprint 4.1 (build infra) + 4.2 (BL33 boot) done; Sprint 4.3 (S-EL2 SPMC) next
+**Phase 4** (in progress): QEMU `secure=on` + TF-A boot chain → Sprint 4.1 (build infra) + 4.2 (BL33 boot) + 4.3 (S-EL2 SPMC) done; Sprint 4.4 (SP loading) next
 **Phase 4.5**: pKVM at NS-EL2 + our SPMC at S-EL2 → end-to-end FF-A path
 **Phase 5**: RME & CCA (Realm Manager)
 

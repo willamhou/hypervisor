@@ -1,22 +1,22 @@
 # ARM64 Hypervisor 开发计划
 
-**项目版本**: v0.18.0 (Phase 18 Complete — TF-A Boot Chain: BL33 Hypervisor)
+**项目版本**: v0.20.0 (Phase 20 Complete — S-EL2 SPMC: Hypervisor as BL32)
 **计划制定日期**: 2026-01-26
-**最后更新**: 2026-02-20
+**最后更新**: 2026-02-21
 **计划类型**: 敏捷迭代，灵活调整
 
 ---
 
 ## 📊 当前进度概览
 
-**整体完成度**: 🟢 **75%** (Milestone 0-2 + Options A-G + M3 Sprint 3.1/3.1b/3.1c/3.2 + M4 Sprint 4.1/4.2 已完成)
+**整体完成度**: 🟢 **80%** (Milestone 0-2 + Options A-G + M3 Sprint 3.1/3.1b/3.1c/3.2 + M4 Sprint 4.1/4.2/4.3 已完成)
 
 ```
 M0: 项目启动          ████████████████████ 100% ✅
 M1: MVP基础虚拟化     ████████████████████ 100% ✅
 M2: 增强功能          ████████████████████ 100% ✅
 M3: FF-A              ██████████████████░░  90% 🔧 (Sprint 3.2 ✅, Sprint 3.3 推迟到 M4)
-M4: S-EL2 SPMC        ██████████░░░░░░░░░░  50% 🔧 (Sprint 4.1/4.2 ✅, Sprint 4.3/4.4 未开始)
+M4: S-EL2 SPMC        ███████████████░░░░░  75% 🔧 (Sprint 4.1/4.2/4.3 ✅, Sprint 4.4 未开始)
 M4.5: pKVM 集成       ░░░░░░░░░░░░░░░░░░░░   0% ⏸️ (NS-EL2=pKVM, S-EL2=us)
 M5: RME & CCA         ░░░░░░░░░░░░░░░░░░░░   0% ⏸️
 Android Boot          ██████████░░░░░░░░░░  50% ✅ (Phase 2 完成)
@@ -636,6 +636,7 @@ NS-EL1: Linux guest (当前 hypervisor 功能降级为 SPMC)
 1. **交叉编译 ARM Trusted Firmware (TF-A)**:
    - [x] `PLAT=qemu, SPD=spmd, SPMD_SPM_AT_SEL2=1`
    - [x] `CTX_INCLUDE_EL2_REGS=1` (保存/恢复 EL2 寄存器用于 S-EL2)
+   - [x] `CTX_INCLUDE_FPREGS=1` + `ENABLE_SVE_FOR_NS=0` + `ENABLE_SME_FOR_NS=0` (Sprint 4.3: 修复 CPTR_EL3.TFP 陷入)
    - [x] 生成 `flash.bin` (BL1 + FIP: BL2/BL31/BL32/BL33)
    - [x] Docker 构建脚本 (`scripts/build-tfa.sh`, `scripts/build-bl32-bl33.sh`, `scripts/build-qemu.sh`)
 
@@ -690,38 +691,54 @@ NS-EL1: Linux guest (当前 hypervisor 功能降级为 SPMC)
 
 ---
 
-#### Sprint 4.3: Hypervisor 适配 S-EL2 (SPMC 角色)（Week 32-34）⏸️ **未开始**
+#### Sprint 4.3: Hypervisor 适配 S-EL2 (SPMC 角色)（Week 32-34）✅ **已完成**
 **核心**: 将同一份代码编译为 BL32（S-EL2），作为 SPMC 接收 SPMD 转发的 FF-A 调用
 
 **实现任务**:
 1. **S-EL2 入口点和初始化**:
-   - [ ] 新的 `boot_sel2.S` 入口（SPMD 跳转到 BL32 的方式不同于 BL33）
-   - [ ] 处理 SPMD 传递的参数 (x0=TOS_FW_CONFIG, x1=HW_CONFIG, x4=core_id)
-   - [ ] 解析 SPMC manifest (DTS 格式)
-   - [ ] `#[cfg(feature = "sel2")]` feature flag 区分 NS-EL2 和 S-EL2 模式
+   - [x] 新的 `boot_sel2.S` 入口（SPMD 跳转到 BL32 的方式不同于 BL33）
+   - [x] 处理 SPMD 传递的参数 (x0=TOS_FW_CONFIG, x1=HW_CONFIG, x4=core_id)
+   - [x] 解析 SPMC manifest (DTS 格式) — `src/manifest.rs`, fdt crate
+   - [x] `#[cfg(feature = "sel2")]` feature flag 区分 NS-EL2 和 S-EL2 模式
+   - [x] `linker_sel2.ld` — 链接基址 0x0e100000 (secure DRAM)
+   - [x] `build.rs` feature-gated boot assembly + linker script selection
 
 2. **SPMD ↔ SPMC 协议**:
-   - [ ] FFA_SECONDARY_EP_REGISTER (0x84000087) — 注册辅助核入口点
-   - [ ] FFA_VERSION 响应（作为 SPMC 回复 SPMD 的版本查询）
-   - [ ] FFA_FEATURES 响应（向 SPMD 声明支持的功能）
-   - [ ] 处理 SPMD 转发的 FF-A 内存操作
+   - [x] FFA_MSG_WAIT (0x8400006B) — 信号 SPMD init 完成，解锁 BL33
+   - [ ] FFA_SECONDARY_EP_REGISTER (0x84000087) — 注册辅助核入口点 (Sprint 4.4)
+   - [ ] FFA_VERSION 响应（作为 SPMC 回复 SPMD 的版本查询）(Sprint 4.4)
+   - [ ] FFA_FEATURES 响应（向 SPMD 声明支持的功能）(Sprint 4.4)
 
-3. **Secure Stage-2 页表**:
+3. **Secure Stage-2 页表** (推迟到 Sprint 4.4):
    - [ ] VSTTBR_EL2 替代 VTTBR_EL2（Secure 世界用 VSTTBR）
    - [ ] Secure 内存区域隔离（TZASC 配置）
    - [ ] SP 的 Stage-2 隔离
 
 4. **构建系统**:
-   - [ ] `make build-spmc` — 编译 BL32 binary（S-EL2 入口）
-   - [ ] SP manifest 模板 (DTS)
-   - [ ] `sp_layout.json` for TF-A FIP 打包
+   - [x] `make build-spmc` — 编译 BL32 binary（S-EL2 入口, `--features sel2`）
+   - [x] `make build-tfa-spmc` — 用真实 SPMC 构建 TF-A flash.bin
+   - [x] `make run-spmc` — TF-A → 我们的 SPMC(S-EL2) → BL33(hello NS-EL2)
+   - [x] SPMC manifest (DTS): `tfa/spmc_manifest.dts` with binary_size=2MB
+
+5. **关键修复**:
+   - [x] `CTX_INCLUDE_FPREGS=1` in TF-A build — CPTR_EL3.TFP=1 traps FP/SIMD from S-EL2 to EL3
+   - [x] Rust debug `read_volatile` uses NEON internally (cnt v0.8b for popcount alignment check)
+   - [x] `ENABLE_SVE_FOR_NS=0` + `ENABLE_SME_FOR_NS=0` — TF-A build conflict resolution
+   - [x] Diagnostic fault handler (`fault_diag_print` in exception.S) for host-level exceptions
+   - [x] Manifest property names: `maj_ver`/`min_ver` (not `major_version`/`minor_version`)
 
 **验收**:
-- [ ] 我们的 hypervisor 作为 BL32 在 S-EL2 启动
-- [ ] SPMD ↔ SPMC FF-A 握手成功 (VERSION/FEATURES)
-- [ ] FFA_SECONDARY_EP_REGISTER 注册辅助核入口
+- [x] 我们的 hypervisor 作为 BL32 在 S-EL2 启动
+- [x] SPMD ↔ SPMC FFA_MSG_WAIT 握手成功
+- [x] Manifest FDT 解析正常 (spmc_id=0x8000, version=1.1)
+- [x] 回归测试通过 (193 unit assertions, `make run-tfa-linux`)
 
-**预估**: 2-3 周
+**实际完成**: 2026-02-21
+**关键文件**: `arch/aarch64/boot_sel2.S`, `arch/aarch64/linker_sel2.ld`, `src/manifest.rs`, `src/main.rs` (rust_main_sel2), `scripts/build-tfa.sh` (CTX_INCLUDE_FPREGS)
+
+**重要修复**:
+- CPTR_EL3.TFP=1 traps ALL FP/SIMD from S-EL2 to EL3. Rust debug-mode `read_volatile` uses NEON SIMD (cnt v0.8b) for alignment check. Fix: CTX_INCLUDE_FPREGS=1 clears TFP.
+- Docker volume caching: stale TF-A binaries persist. Must `docker volume rm` cache after changing build flags.
 
 ---
 
@@ -753,13 +770,13 @@ NS-EL1: Linux guest (当前 hypervisor 功能降级为 SPMC)
 
 **Milestone 4 总验收**:
 - [x] TF-A boot chain 正常 (BL1 → BL2 → BL31/SPMD → BL32/SPMC → BL33) ✅ Sprint 4.1/4.2
-- [ ] 我们的 hypervisor 同时支持 NS-EL2 和 S-EL2 (SPMC) 模式
-- [ ] SPMD ↔ SPMC 协议握手成功
-- [ ] NS → SP 的 FF-A 直接消息传递正常
+- [x] 我们的 hypervisor 同时支持 NS-EL2 和 S-EL2 (SPMC) 模式 ✅ Sprint 4.3
+- [x] SPMD ↔ SPMC 协议握手成功 (FFA_MSG_WAIT) ✅ Sprint 4.3
+- [ ] NS → SP 的 FF-A 直接消息传递正常 (Sprint 4.4)
 - [ ] 为 pKVM 集成做好准备（NS-EL2 空闲，可被 pKVM 占据）
 
 **预估总时间**: 6-8 周（Week 29-36）
-**状态**: 🔧 进行中 (Sprint 4.1/4.2 ✅, Sprint 4.3/4.4 ⏸️)
+**状态**: 🔧 进行中 (Sprint 4.1/4.2/4.3 ✅, Sprint 4.4 ⏸️)
 
 ---
 
@@ -1174,13 +1191,13 @@ GitHub Actions配置：
 | M2 | 增强功能 | 8周 | 18周 | ✅ 已完成 |
 | M3 | FF-A 实现 + NS-EL2 完善 | 10周 | 28周 | ✅ 核心完成 (Sprint 3.1/3.1b/3.1c/3.2 ✅, ~90%) |
 | Android | Android Boot (4 phases) | 4-8周 | — | ✅ Phase 2 完成 (PL031 RTC + Init) |
-| M4 | S-EL2 SPMC (QEMU secure=on + TF-A) | 6-8周 | 36周 | 🔧 Sprint 4.1/4.2 ✅ (50%) |
+| M4 | S-EL2 SPMC (QEMU secure=on + TF-A) | 6-8周 | 36周 | 🔧 Sprint 4.1/4.2/4.3 ✅ (75%) |
 | M4.5 | pKVM 集成 (NS-EL2=pKVM, S-EL2=us) | 4-6周 | 42周 | ⏸️ 未开始 |
 | M5 | RME & CCA | 16-20周 | 58-62周 | ⏸️ 未开始 |
 
 **总计**: 约12-14个月（灵活调整）
 **当前进度**: 20周 / 52-56周 = **约37%** (按预估周数)
-**实际开发时长**: ~4周 (2026-01-25 至 2026-02-20)
+**实际开发时长**: ~4周 (2026-01-25 至 2026-02-21)
 
 ---
 
@@ -1193,7 +1210,7 @@ GitHub Actions配置：
 - [x] **M3 FF-A**: VM 与 SP 内存共享 + 2MB block 拆分 + notifications ✅ **核心完成 2026-02-20** (proxy + stub SPMC + VM-to-VM + 2MB split + notifications + indirect messaging)
 - [x] **Android Phase 1**: Linux 6.6.126 + Android config boots to BusyBox shell ✅ **已完成 2026-02-19**
 - [x] **Android Phase 2**: PL031 RTC + Android init + 1GB RAM + binderfs ✅ **已完成 2026-02-19**
-- [ ] **M4 S-EL2**: 我们的 hypervisor 作为 SPMC 在 S-EL2 运行 (TF-A boot chain) 🔧 **Sprint 4.1/4.2 ✅** (BL33 via TF-A boots Linux)
+- [ ] **M4 S-EL2**: 我们的 hypervisor 作为 SPMC 在 S-EL2 运行 (TF-A boot chain) 🔧 **Sprint 4.1/4.2/4.3 ✅** (BL32 SPMC boots at S-EL2, BL33 via TF-A boots Linux)
 - [ ] **M4.5 pKVM**: pKVM(NS-EL2) + 我们的 SPMC(S-EL2) + FF-A 端到端 ⏸️ **未开始**
 - [ ] **M5 CCA**: Realm VM 启动 Guest OS ⏸️ **未开始**
 
@@ -1215,9 +1232,9 @@ GitHub Actions配置：
 
 ## 9. 下一步行动
 
-### 🎯 当前位置：M4 Sprint 4.2 ✅ → M4 Sprint 4.3 准备 (Hypervisor 适配 S-EL2 SPMC)
+### 🎯 当前位置：M4 Sprint 4.3 ✅ → M4 Sprint 4.4 准备 (从 S-EL2 启动最小 SP)
 **可行性研究**: `docs/research/2026-02-20-phase4-feasibility.md` — FEASIBLE with moderate effort
-**Sprint 4.1/4.2 完成**: TF-A boot chain + hypervisor as BL33 → Linux BusyBox shell
+**Sprint 4.1/4.2/4.3 完成**: TF-A boot chain + hypervisor as BL33 (NS-EL2) + hypervisor as SPMC (S-EL2)
 
 **Phase 8+ 候选方向** (选择一个):
 
@@ -1363,6 +1380,7 @@ GitHub Actions配置：
 - Phase 17: Sprint 3.2 NS-EL2 完善 ✅ **已完成** — 2MB block→4KB split, FF-A notifications (BIND/SET/GET/INFO_GET, 8 endpoints), indirect messaging (MSG_SEND2/MSG_WAIT), SPM_ID_GET + RUN, 44 FF-A test assertions
 - Phase 18: Sprint 4.1 TF-A + QEMU 构建基础设施 ✅ **已完成** — TF-A v2.12.0 (SPD=spmd), QEMU 9.2.3 build, BL32 trivial S-EL2 (FFA_MSG_WAIT), `make run-sel2`
 - Phase 19: Sprint 4.2 BL33 Hypervisor via TF-A ✅ **已完成** — Linker base 0x40200000, PRELOADED_BL33_BASE, `make run-tfa-linux` (full chain: BL1→BL2→BL31→BL32→BL33→Linux→BusyBox)
+- Phase 20: Sprint 4.3 S-EL2 SPMC ✅ **已完成** — `sel2` feature, `boot_sel2.S`/`linker_sel2.ld` (0x0e100000), manifest FDT parsing, FFA_MSG_WAIT handshake, CTX_INCLUDE_FPREGS=1 fix, diagnostic fault handler, `make run-spmc`
 
 ---
 
