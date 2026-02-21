@@ -83,3 +83,33 @@ pub const VM1_VIRTIO_DISK_ADDR: u64 = 0x7800_0000;
 // ── Heap ─────────────────────────────────────────────────────────────
 pub const HEAP_START: u64 = 0x4100_0000;
 pub const HEAP_SIZE: u64 = 0x100_0000; // 16MB
+
+// ── S-EL2 SPMC / Secure Partition memory layout ────────────────────
+/// SP1 load address in SEC_DRAM (loaded by TF-A BL2 from FIP)
+#[cfg(feature = "sel2")]
+pub const SP1_LOAD_ADDR: u64 = 0x0e30_0000;
+/// SP1 memory size (1MB)
+#[cfg(feature = "sel2")]
+pub const SP1_MEM_SIZE: u64 = 0x10_0000;
+/// SP1 stack pointer (top of SP1 region)
+#[cfg(feature = "sel2")]
+pub const SP1_STACK_TOP: u64 = SP1_LOAD_ADDR + SP1_MEM_SIZE;
+/// SP1 partition ID
+#[cfg(feature = "sel2")]
+pub const SP1_PARTITION_ID: u16 = 0x8001;
+/// Maximum number of Secure Partitions
+#[cfg(feature = "sel2")]
+pub const MAX_SPS: usize = 4;
+
+/// Secure heap start (for S-EL2 page table allocation)
+#[cfg(feature = "sel2")]
+pub const SECURE_HEAP_START: u64 = 0x0e50_0000;
+/// Secure heap size (~11MB, up to end of SEC_DRAM)
+#[cfg(feature = "sel2")]
+pub const SECURE_HEAP_SIZE: u64 = 0x0f00_0000 - SECURE_HEAP_START;
+
+/// UART base for SP Stage-2 mapping (SP debug output)
+#[cfg(feature = "sel2")]
+pub const SP_UART_BASE: u64 = 0x0900_0000;
+#[cfg(feature = "sel2")]
+pub const SP_UART_SIZE: u64 = 0x1000;
