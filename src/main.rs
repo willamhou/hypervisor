@@ -266,7 +266,6 @@ pub extern "C" fn rust_main_sel2(
     uart_puts_local(b"  ARM64 SPMC - S-EL2\n");
     uart_puts_local(b"========================================\n\n");
 
-    // 2. Check current EL (should be EL2 / S-EL2)
     let current_el: u64;
     unsafe {
         core::arch::asm!("mrs {}, CurrentEL", out(reg) current_el);
@@ -277,7 +276,7 @@ pub extern "C" fn rust_main_sel2(
     uart_puts_local(b"\n");
 
     // 3. Parse SPMC manifest (TOS_FW_CONFIG in x0)
-    uart_puts_local(b"[SPMC] Parsing manifest at 0x");
+    uart_puts_local(b"[SPMC] Manifest at 0x");
     hypervisor::uart_put_hex(manifest_addr as u64);
     uart_puts_local(b"\n");
     hypervisor::manifest::init(manifest_addr);
@@ -290,11 +289,15 @@ pub extern "C" fn rust_main_sel2(
     print_digit(mi.min_ver as u8);
     uart_puts_local(b"\n");
 
-    // 4. Parse hardware DTB (HW_CONFIG in x1) — deferred, same secure DRAM issue
+    // 4. Parse hardware DTB (HW_CONFIG in x1)
     uart_puts_local(b"[SPMC] HW config at 0x");
     hypervisor::uart_put_hex(hw_config_addr as u64);
-    uart_puts_local(b" (parsing deferred)\n");
-    // NOTE: dtb::init() skipped — uses QEMU virt defaults for UART/GIC/RAM
+    uart_puts_local(b"\n");
+    if hw_config_addr != 0 {
+        hypervisor::dtb::init(hw_config_addr);
+    } else {
+        uart_puts_local(b"[SPMC] No HW config DTB, using QEMU virt defaults\n");
+    }
 
     // 5. Initialize GIC
     hypervisor::arch::aarch64::peripherals::gicv3::init();

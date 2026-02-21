@@ -266,10 +266,11 @@ guest_exit_wfi:
     ret
 
 exception_no_context:
-    // No valid context - this is a host exception
-    // For now, just halt
-    wfe
-    b       exception_no_context
+    // No valid vCPU context (TPIDR_EL2=0) — host-level fault.
+    // Restore stack from the two pushes, then jump to diagnostic printer.
+    ldp     x2, x3, [sp], #16
+    ldp     x0, x1, [sp], #16
+    b       fault_diag_print
 
 /*
  * IRQ Exception Handler (for interrupts from Lower EL)
@@ -461,3 +462,87 @@ enter_guest:
     // Return 0 (success)
     mov     x0, #0
     ret
+
+/*
+ * Diagnostic fault handler for exceptions when TPIDR_EL2=0 (no vCPU context).
+ * Prints ESR_EL2, ELR_EL2, FAR_EL2, HPFAR_EL2 to UART for debugging.
+ * Used during S-EL2 SPMC boot to diagnose Data Aborts on secure memory.
+ */
+fault_diag_print:
+    mov     x10, #0x09000000        // PL011 UART base
+
+    // Print "[FAULT] exception_no_context\n"
+    adr     x11, .Lfault_msg
+    bl      .Luart_str
+
+    // Print "ESR_EL2  = 0x"
+    adr     x11, .Lesr_msg
+    bl      .Luart_str
+    mrs     x12, esr_el2
+    bl      .Luart_hex64
+
+    // Print "ELR_EL2  = 0x"
+    adr     x11, .Lelr_msg
+    bl      .Luart_str
+    mrs     x12, elr_el2
+    bl      .Luart_hex64
+
+    // Print "FAR_EL2  = 0x"
+    adr     x11, .Lfar_msg
+    bl      .Luart_str
+    mrs     x12, far_el2
+    bl      .Luart_hex64
+
+    // Print "HPFAR_EL2= 0x"
+    adr     x11, .Lhpfar_msg
+    bl      .Luart_str
+    mrs     x12, hpfar_el2
+    bl      .Luart_hex64
+
+    // Halt
+1:  wfe
+    b       1b
+
+/*
+ * Print null-terminated string at x11 to UART at x10.
+ * Clobbers: x13
+ */
+.Luart_str:
+2:  ldrb    w13, [x11], #1
+    cbz     w13, 3f
+    str     w13, [x10]              // UARTDR at offset 0
+    b       2b
+3:  ret
+
+/*
+ * Print 64-bit value in x12 as hex to UART at x10, followed by newline.
+ * Clobbers: x13, x14, x15
+ */
+.Luart_hex64:
+    mov     x14, #60                // shift = 60 (16 nibbles)
+4:  lsr     x13, x12, x14
+    and     x13, x13, #0xF
+    cmp     x13, #10
+    b.lt    5f
+    add     x13, x13, #('a' - 10)
+    b       6f
+5:  add     x13, x13, #'0'
+6:  str     w13, [x10]
+    subs    x14, x14, #4
+    b.ge    4b
+    // newline
+    mov     w13, #'\n'
+    str     w13, [x10]
+    ret
+
+// String data (outside vector table, no alignment issues)
+.Lfault_msg:
+    .asciz  "[FAULT] exception_no_context\n"
+.Lesr_msg:
+    .asciz  "ESR_EL2  = 0x"
+.Lelr_msg:
+    .asciz  "ELR_EL2  = 0x"
+.Lfar_msg:
+    .asciz  "FAR_EL2  = 0x"
+.Lhpfar_msg:
+    .asciz  "HPFAR_EL2= 0x"

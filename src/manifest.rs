@@ -15,9 +15,8 @@ static mut MANIFEST: Option<SpMcManifest> = None;
 
 /// Parse TOS_FW_CONFIG DTB passed in x0 by SPMD.
 ///
-/// For minimal Sprint 4.3 scope, we use defaults if the manifest address
-/// cannot be parsed. Full FDT parsing will be enabled once secure memory
-/// access is validated.
+/// Extracts SPMC properties from the `/attribute` node per FF-A Core Manifest
+/// v1.0 (DEN0077A). Falls back to defaults on parse failure.
 pub fn init(manifest_addr: usize) {
     if manifest_addr == 0 {
         crate::uart_puts(b"[SPMC] WARNING: manifest addr=0, using defaults\n");
@@ -25,15 +24,39 @@ pub fn init(manifest_addr: usize) {
         return;
     }
 
-    // Try to read FDT magic to verify address is accessible.
-    // FDT magic in big-endian: 0xd00dfeed → little-endian reads as 0xedfe0dd0
-    // If the read faults (secure memory not yet accessible), the exception
-    // handler catches it silently — so we guard with a manual read first.
-    //
-    // TODO: Enable full FDT parsing once secure Stage-1 MMU setup is done.
-    // For now, use defaults to avoid potential Data Abort on secure DRAM access.
-    crate::uart_puts(b"[SPMC] Using default manifest (FDT parsing deferred)\n");
-    set_defaults();
+    // Parse manifest DTB using fdt crate (zero-copy, no_std).
+    let fdt = unsafe { fdt::Fdt::from_ptr(manifest_addr as *const u8) };
+    match fdt {
+        Ok(fdt) => {
+            // Extract /attribute node properties (spmc_id, major/minor version)
+            let spmc_id = fdt
+                .find_node("/attribute")
+                .and_then(|n| n.property("spmc_id"))
+                .and_then(|p| p.as_usize())
+                .unwrap_or(0x8000) as u16;
+            let maj = fdt
+                .find_node("/attribute")
+                .and_then(|n| n.property("maj_ver"))
+                .and_then(|p| p.as_usize())
+                .unwrap_or(1) as u16;
+            let min = fdt
+                .find_node("/attribute")
+                .and_then(|n| n.property("min_ver"))
+                .and_then(|p| p.as_usize())
+                .unwrap_or(1) as u16;
+            unsafe {
+                MANIFEST = Some(SpMcManifest {
+                    spmc_id,
+                    maj_ver: maj,
+                    min_ver: min,
+                });
+            }
+        }
+        Err(_) => {
+            crate::uart_puts(b"[SPMC] WARNING: manifest FDT parse failed, using defaults\n");
+            set_defaults();
+        }
+    }
 }
 
 fn set_defaults() {
