@@ -1,0 +1,18 @@
+/dts-v1/;
+
+/ {
+    compatible = "arm,ffa-manifest-1.0";
+    ffa-version = <0x00010001>;  /* FF-A v1.1 */
+
+    uuid = <0x12345678 0x12345678 0x12345678 0x12345678>;
+    id = <0x8001>;
+
+    execution-ctx-count = <1>;     /* Single execution context */
+    exception-level = <2>;         /* S-EL1 */
+    execution-state = <0>;         /* AArch64 */
+    load-address = <0x0 0x0e300000>;
+    entrypoint = <0x0 0x0e300000>;
+    xlat-granule = <0>;            /* 4KB */
+    messaging-method = <3>;        /* Direct request/response */
+    managed-exit;                  /* SPMC manages preemption */
+};
