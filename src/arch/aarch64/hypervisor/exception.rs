@@ -176,26 +176,36 @@ pub extern "C" fn handle_exception(context: &mut VcpuContext) -> bool {
             // Reset exception counter on successful WFI handling
             reset_exception_count();
 
-            // In SMP mode (multiple vCPUs online), always exit on WFI
-            // so the scheduler can switch to another vCPU.
-            // Still inject timer if pending, but always advance PC and exit.
-            let online = crate::global::current_vm_state()
-                .vcpu_online_mask
-                .load(Ordering::Relaxed);
-            let multi_vcpu = online != 0 && (online & (online - 1)) != 0; // >1 bit set
-
-            if multi_vcpu {
-                // Inject timer if pending, then exit for scheduling
-                handle_wfi_with_timer_injection(context);
+            // S-EL2 mode: SP WFI exits to SPMC caller
+            #[cfg(feature = "sel2")]
+            {
                 context.pc += AARCH64_INSN_SIZE;
-                false // Exit to scheduler
-            } else {
-                // Single vCPU: use existing logic
-                if handle_wfi_with_timer_injection(context) {
+                return false;
+            }
+
+            #[cfg(not(feature = "sel2"))]
+            {
+                // In SMP mode (multiple vCPUs online), always exit on WFI
+                // so the scheduler can switch to another vCPU.
+                // Still inject timer if pending, but always advance PC and exit.
+                let online = crate::global::current_vm_state()
+                    .vcpu_online_mask
+                    .load(Ordering::Relaxed);
+                let multi_vcpu = online != 0 && (online & (online - 1)) != 0; // >1 bit set
+
+                if multi_vcpu {
+                    // Inject timer if pending, then exit for scheduling
+                    handle_wfi_with_timer_injection(context);
                     context.pc += AARCH64_INSN_SIZE;
-                    true // Continue with injected interrupt
+                    false // Exit to scheduler
                 } else {
-                    false
+                    // Single vCPU: use existing logic
+                    if handle_wfi_with_timer_injection(context) {
+                        context.pc += AARCH64_INSN_SIZE;
+                        true // Continue with injected interrupt
+                    } else {
+                        false
+                    }
                 }
             }
         }
@@ -212,11 +222,22 @@ pub extern "C" fn handle_exception(context: &mut VcpuContext) -> bool {
 
         ExitReason::SmcCall => {
             reset_exception_count();
-            let should_continue = handle_smc(context);
-            // SMC: ELR_EL2 points to the SMC instruction itself.
-            // Must advance PC by 4 after handling.
-            context.pc += AARCH64_INSN_SIZE;
-            should_continue
+
+            // S-EL2 mode: SP SMC exits to SPMC caller for dispatch
+            #[cfg(feature = "sel2")]
+            {
+                context.pc += AARCH64_INSN_SIZE;
+                return false;
+            }
+
+            #[cfg(not(feature = "sel2"))]
+            {
+                let should_continue = handle_smc(context);
+                // SMC: ELR_EL2 points to the SMC instruction itself.
+                // Must advance PC by 4 after handling.
+                context.pc += AARCH64_INSN_SIZE;
+                should_continue
+            }
         }
 
         ExitReason::TrapMsrMrs => {
