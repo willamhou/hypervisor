@@ -97,6 +97,18 @@ pub const SP1_STACK_TOP: u64 = SP1_LOAD_ADDR + SP1_MEM_SIZE;
 /// SP1 partition ID
 #[cfg(feature = "sel2")]
 pub const SP1_PARTITION_ID: u16 = 0x8001;
+/// SP2 load address in SEC_DRAM (loaded by TF-A BL2 from FIP)
+#[cfg(feature = "sel2")]
+pub const SP2_LOAD_ADDR: u64 = 0x0e40_0000;
+/// SP2 memory size (1MB)
+#[cfg(feature = "sel2")]
+pub const SP2_MEM_SIZE: u64 = 0x10_0000;
+/// SP2 stack pointer (top of SP2 region)
+#[cfg(feature = "sel2")]
+pub const SP2_STACK_TOP: u64 = SP2_LOAD_ADDR + SP2_MEM_SIZE;
+/// SP2 partition ID
+#[cfg(feature = "sel2")]
+pub const SP2_PARTITION_ID: u16 = 0x8002;
 /// Maximum number of Secure Partitions
 #[cfg(feature = "sel2")]
 pub const MAX_SPS: usize = 4;

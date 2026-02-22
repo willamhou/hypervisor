@@ -66,7 +66,7 @@ pub fn run_tests() {
     );
     let resp = dispatch_ffa(&zero_req(ffa::FFA_PARTITION_INFO_GET));
     assert_eq!(resp.x0, ffa::FFA_SUCCESS_32);
-    assert_eq!(resp.x2, 1); // 1 SP registered
+    assert!(resp.x2 >= 1); // at least 1 SP registered
     pass += 2;
 
     // Test 15-21: DIRECT_REQ echoes payload, swaps source/dest
@@ -185,6 +185,45 @@ pub fn run_tests() {
     let resp = dispatch_ffa(&req);
     assert_eq!(resp.x0, ffa::FFA_ERROR);
     assert_eq!(resp.x2, ffa::FFA_DENIED as u64);
+    pass += 1;
+
+    // Test 37-38: Register SP2, PARTITION_INFO_GET returns count=2
+    {
+        let mut sp2 = hypervisor::sp_context::SpContext::new(0x8002, 0x2000, 0x3000, [0xBB; 4]);
+        sp2.set_owned_intids([29, 0, 0, 0]);
+        hypervisor::sp_context::register_sp(sp2);
+    }
+    let resp = dispatch_ffa(&zero_req(ffa::FFA_PARTITION_INFO_GET));
+    assert_eq!(resp.x0, ffa::FFA_SUCCESS_32);
+    assert!(resp.x2 >= 2); // 2+ SPs registered
+    pass += 2;
+
+    // Test 39-40: find_sp_for_intid returns correct SP
+    assert_eq!(hypervisor::sp_context::find_sp_for_intid(29), Some(0x8002));
+    assert_eq!(hypervisor::sp_context::find_sp_for_intid(99), None);
+    pass += 2;
+
+    // Test 41: DIRECT_REQ to SP2 echoes correctly (unit test path, not sel2)
+    let req = SmcResult8 {
+        x0: ffa::FFA_MSG_SEND_DIRECT_REQ_32,
+        x1: (0x0001 << 16) | 0x8002,
+        x2: 0,
+        x3: 0x1111,
+        x4: 0x2222,
+        x5: 0x3333,
+        x6: 0x4444,
+        x7: 0x5555,
+    };
+    let resp = dispatch_ffa(&req);
+    assert_eq!(resp.x0, ffa::FFA_MSG_SEND_DIRECT_RESP_32);
+    pass += 1;
+
+    // Test 42: FFA_RUN with non-existent SP -> INVALID_PARAMETERS
+    let mut req = zero_req(ffa::FFA_RUN);
+    req.x1 = 0x9999 << 16;
+    let resp = dispatch_ffa(&req);
+    assert_eq!(resp.x0, ffa::FFA_ERROR);
+    assert_eq!(resp.x2, ffa::FFA_INVALID_PARAMETERS as u64);
     pass += 1;
 
     crate::uart_puts(b"    ");

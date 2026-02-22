@@ -21,6 +21,18 @@ use core::sync::atomic::Ordering;
 /// whether to return FFA_INTERRUPT (preempted) or DIRECT_RESP (completed).
 pub static SP_IRQ_PREEMPTED: AtomicBool = AtomicBool::new(false);
 
+/// Tracks which SP is currently executing at S-EL1. Set before enter_guest(),
+/// cleared after return. Used by the IRQ handler to inject virtual interrupts
+/// directly via LR without going through SPMD.
+#[cfg(feature = "sel2")]
+static CURRENT_RUNNING_SP: core::sync::atomic::AtomicU16 = core::sync::atomic::AtomicU16::new(0);
+
+/// Get the currently running SP ID (0 if none).
+#[cfg(feature = "sel2")]
+pub fn current_running_sp() -> u16 {
+    CURRENT_RUNNING_SP.load(Ordering::Acquire)
+}
+
 // ── NWd RXTX state (SPMD forwards RXTX_MAP from NWd to SPMC) ──
 
 /// Tracks the Normal World endpoint's RXTX buffer registration.
@@ -89,6 +101,8 @@ fn dispatch_request(req: &SmcResult8) -> SmcResult8 {
 /// returns, checks SP_IRQ_PREEMPTED to determine if the SP was preempted
 /// by a physical IRQ (returns FFA_INTERRUPT) or completed normally
 /// (returns DIRECT_RESP).
+///
+/// Before each ERET, injects any pending virtual interrupt via GIC List Register.
 #[cfg(feature = "sel2")]
 fn dispatch_to_sp(req: &SmcResult8, sp_id: u16) -> SmcResult8 {
     let sp = match crate::sp_context::get_sp_mut(sp_id) {
@@ -109,9 +123,15 @@ fn dispatch_to_sp(req: &SmcResult8, sp_id: u16) -> SmcResult8 {
     SP_IRQ_PREEMPTED.store(false, Ordering::Release);
     crate::arch::aarch64::peripherals::timer::arm_preemption_timer();
 
+    // Inject any pending virtual interrupt via GIC LR before ERET
+    inject_pending_virq(sp);
+
     // Reinstall SP's Secure Stage-2 and ERET
     let s2 = crate::secure_stage2::SecureStage2Config::new_from_vsttbr(sp.vsttbr());
     s2.install();
+
+    // Track which SP is running so the IRQ handler can inject via LR directly
+    CURRENT_RUNNING_SP.store(sp_id, Ordering::Release);
 
     let _exit = unsafe {
         crate::arch::aarch64::enter_guest(
@@ -119,13 +139,24 @@ fn dispatch_to_sp(req: &SmcResult8, sp_id: u16) -> SmcResult8 {
         )
     };
 
+    CURRENT_RUNNING_SP.store(0, Ordering::Release);
     crate::arch::aarch64::peripherals::timer::disarm_preemption_timer();
 
-    // Check if SP was preempted by a physical IRQ
+    // Check if SP was preempted by a physical IRQ (unowned interrupt → NS preemption).
+    // NOTE: When the IRQ handler injects a virtual interrupt via LR for the current
+    // SP's owned INTID, it returns true (continue guest) and does NOT set this flag.
+    // SP_IRQ_PREEMPTED is only set for unowned interrupts or cross-SP preemption.
     if SP_IRQ_PREEMPTED.swap(false, Ordering::Acquire) {
-        // SP preempted — save context (already saved by enter_guest), mark Preempted
         sp.transition_to(crate::sp_context::SpState::Preempted)
             .expect("SP Preempted transition failed");
+
+        // Check if another SP has a pending interrupt (cross-SP preemption)
+        if let Some(target_id) = crate::sp_context::find_sp_with_pending_irq() {
+            if target_id != sp_id {
+                dispatch_interrupt_to_sp(target_id);
+            }
+        }
+
         return SmcResult8 {
             x0: ffa::FFA_INTERRUPT,
             x1: 0,
@@ -157,6 +188,8 @@ fn dispatch_to_sp(req: &SmcResult8, sp_id: u16) -> SmcResult8 {
 
 /// Resume a preempted SP via FFA_RUN. Returns FFA_INTERRUPT if preempted
 /// again, or the SP's DIRECT_RESP when it completes.
+///
+/// Injects any pending virtual interrupt via GIC LR before resuming.
 #[cfg(feature = "sel2")]
 fn resume_preempted_sp(sp_id: u16) -> SmcResult8 {
     let sp = match crate::sp_context::get_sp_mut(sp_id) {
@@ -175,9 +208,15 @@ fn resume_preempted_sp(sp_id: u16) -> SmcResult8 {
     SP_IRQ_PREEMPTED.store(false, Ordering::Release);
     crate::arch::aarch64::peripherals::timer::arm_preemption_timer();
 
+    // Inject any pending virtual interrupt via GIC LR before resume
+    inject_pending_virq(sp);
+
     // Reinstall SP's Secure Stage-2 and ERET (resumes from saved PC)
     let s2 = crate::secure_stage2::SecureStage2Config::new_from_vsttbr(sp.vsttbr());
     s2.install();
+
+    // Track which SP is running so the IRQ handler can inject via LR directly
+    CURRENT_RUNNING_SP.store(sp_id, Ordering::Release);
 
     let _exit = unsafe {
         crate::arch::aarch64::enter_guest(
@@ -185,12 +224,21 @@ fn resume_preempted_sp(sp_id: u16) -> SmcResult8 {
         )
     };
 
+    CURRENT_RUNNING_SP.store(0, Ordering::Release);
     crate::arch::aarch64::peripherals::timer::disarm_preemption_timer();
 
-    // Check if SP was preempted again
+    // Check if SP was preempted again (unowned interrupt only)
     if SP_IRQ_PREEMPTED.swap(false, Ordering::Acquire) {
         sp.transition_to(crate::sp_context::SpState::Preempted)
             .expect("SP Preempted transition failed");
+
+        // Cross-SP preemption check
+        if let Some(target_id) = crate::sp_context::find_sp_with_pending_irq() {
+            if target_id != sp_id {
+                dispatch_interrupt_to_sp(target_id);
+            }
+        }
+
         return SmcResult8 {
             x0: ffa::FFA_INTERRUPT,
             x1: 0,
@@ -218,6 +266,70 @@ fn resume_preempted_sp(sp_id: u16) -> SmcResult8 {
         x6,
         x7,
     }
+}
+
+/// Set HCR_EL2.VI if the SP has a pending virtual interrupt.
+///
+/// Called before enter_guest() during FFA_RUN resume or cross-SP dispatch.
+/// Uses the Hafnium-compatible HCR_EL2.VI mechanism: setting VI causes
+/// hardware to auto-vector to VBAR_EL1+0x280 on ERET. The SP then calls
+/// HVC (HF_INTERRUPT_GET) to retrieve the INTID.
+///
+/// Note: Does NOT consume the pending_irq — that happens when the SP
+/// calls HF_INTERRUPT_GET via HVC (handled in exception.rs).
+#[cfg(feature = "sel2")]
+fn inject_pending_virq(sp: &mut crate::sp_context::SpContext) {
+    if sp.has_pending_irq() {
+        // Set HCR_EL2.VI → hardware auto-vectors to IRQ handler on ERET
+        unsafe {
+            let mut hcr: u64;
+            core::arch::asm!("mrs {}, hcr_el2", out(reg) hcr, options(nostack, nomem));
+            hcr |= 1 << 7; // HCR_EL2.VI
+            core::arch::asm!("msr hcr_el2, {}", "isb", in(reg) hcr, options(nostack, nomem));
+        }
+    }
+}
+
+/// Dispatch a pending interrupt to an SP that is currently Idle.
+///
+/// Transitions the SP: Idle → Running, injects vIRQ via LR, enters guest.
+/// The SP's IRQ handler fires, processes the interrupt, and traps back
+/// (e.g., via FFA_MSG_WAIT). SPMC transitions SP back to Idle.
+///
+/// Used for cross-SP preemption: SP1 running + SP2's interrupt fires →
+/// preempt SP1 → dispatch interrupt to SP2 → SP2 returns → resume SP1.
+#[cfg(feature = "sel2")]
+fn dispatch_interrupt_to_sp(sp_id: u16) {
+    let sp = match crate::sp_context::get_sp_mut(sp_id) {
+        Some(sp) => sp,
+        None => return,
+    };
+
+    // Only dispatch to Idle SPs
+    if sp.state() != crate::sp_context::SpState::Idle {
+        return;
+    }
+
+    sp.transition_to(crate::sp_context::SpState::Running)
+        .expect("SP Running transition failed");
+
+    // Inject the pending vIRQ
+    inject_pending_virq(sp);
+
+    // Install SP's Stage-2 and ERET
+    let s2 = crate::secure_stage2::SecureStage2Config::new_from_vsttbr(sp.vsttbr());
+    s2.install();
+
+    let _exit = unsafe {
+        crate::arch::aarch64::enter_guest(
+            sp.vcpu_ctx_mut() as *mut crate::arch::aarch64::regs::VcpuContext,
+        )
+    };
+
+    // SP trapped back — transition to Idle
+    // (SP's IRQ handler ran, then SP returned via SMC/FFA_MSG_WAIT)
+    sp.transition_to(crate::sp_context::SpState::Idle)
+        .expect("SP Idle transition failed");
 }
 
 /// Dispatch an FF-A request and return the appropriate response.

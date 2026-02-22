@@ -312,6 +312,36 @@ pub extern "C" fn rust_main_sel2(
     hypervisor::arch::aarch64::peripherals::gicv3::init();
     uart_puts_local(b"[SPMC] GIC initialized\n");
 
+    // 5.1. Enable PPIs in GICR for physical delivery at S-EL2:
+    //   - PPI 26 (CNTHP timer): preemption watchdog for SP execution
+    //   - PPI 29 (Secure Physical Timer): virtual interrupt injection to SPs
+    //
+    // Both must be Secure Group 1 (IGROUPR0 bit=0, IGRPMODR0 bit=1).
+    // NS Group 1 interrupts route to EL3 as FIQ in the Secure world,
+    // so ICC_IAR1_EL1 at S-EL2 would never see them.
+    {
+        let gicr_sgi_base = hypervisor::dtb::gicr_sgi_base(0);
+        unsafe {
+            let ppi_mask: u32 = (1 << 26) | (1 << 29);
+
+            // GICR_IGROUPR0: clear bits 26,29 → NOT Non-secure Group 1
+            let igroupr0 = (gicr_sgi_base + 0x0080) as *mut u32;
+            let val = core::ptr::read_volatile(igroupr0);
+            core::ptr::write_volatile(igroupr0, val & !ppi_mask);
+
+            // GICR_IGRPMODR0: set bits 26,29 → Secure Group 1
+            let igrpmodr0 = (gicr_sgi_base + 0x0D00) as *mut u32;
+            let val = core::ptr::read_volatile(igrpmodr0);
+            core::ptr::write_volatile(igrpmodr0, val | ppi_mask);
+
+            // GICR_ISENABLER0: enable both PPIs
+            let isenabler0 = (gicr_sgi_base + 0x0100) as *mut u32;
+            core::ptr::write_volatile(isenabler0, ppi_mask);
+
+            core::arch::asm!("isb");
+        }
+    }
+
     // 5.5. Initialize secure heap (for page table allocation)
     uart_puts_local(b"[SPMC] Initializing secure heap\n");
     unsafe {
@@ -319,6 +349,15 @@ pub extern "C" fn rust_main_sel2(
             hypervisor::platform::SECURE_HEAP_START,
             hypervisor::platform::SECURE_HEAP_SIZE,
         );
+    }
+
+    // 5.5b. Enable S-EL1 access to physical timer/counter (CNTHCTL_EL2)
+    unsafe {
+        let mut cnthctl: u64;
+        core::arch::asm!("mrs {}, cnthctl_el2", out(reg) cnthctl);
+        cnthctl |= hypervisor::arch::aarch64::defs::CNTHCTL_EL1PCTEN
+            | hypervisor::arch::aarch64::defs::CNTHCTL_EL1PCEN;
+        core::arch::asm!("msr cnthctl_el2, {}", "isb", in(reg) cnthctl);
     }
 
     // 5.6. Build Secure Stage-2 for SP1
@@ -410,6 +449,85 @@ pub extern "C" fn rust_main_sel2(
 
     // Store SP1 context globally for dispatch
     hypervisor::sp_context::register_sp(sp1);
+
+    // 5.8. Boot SP2 (if present at SP2_LOAD_ADDR)
+    {
+        let sp2_pkg_base = hypervisor::platform::SP2_LOAD_ADDR;
+        let sp2_magic = unsafe { core::ptr::read_volatile(sp2_pkg_base as *const u32) };
+        if sp2_magic == 0x474B5053 {
+            // "SPKG" magic found
+            uart_puts_local(b"[SPMC] SP2 package found at 0x");
+            hypervisor::uart_put_hex(sp2_pkg_base);
+            uart_puts_local(b"\n");
+
+            // Build Secure Stage-2 for SP2
+            let mapper2 = hypervisor::secure_stage2::build_sp_stage2(
+                hypervisor::platform::SP2_LOAD_ADDR,
+                hypervisor::platform::SP2_MEM_SIZE,
+            )
+            .expect("Failed to build SP2 Stage-2");
+            let s2_config2 =
+                hypervisor::secure_stage2::SecureStage2Config::new(mapper2.l0_addr());
+
+            // Parse SPKG header for SP2
+            let sp2_img_offset = unsafe {
+                let ptr = sp2_pkg_base as *const u32;
+                core::ptr::read_volatile(ptr.add(4)) as u64
+            };
+            let sp2_entry = sp2_pkg_base + sp2_img_offset;
+
+            uart_puts_local(b"[SPMC] SP2 entry=0x");
+            hypervisor::uart_put_hex(sp2_entry);
+            uart_puts_local(b"\n");
+
+            // SP2 UUID from sp_manifest.dts (byte-swapped)
+            let sp2_uuid: [u32; 4] = [0xAABBCCDD, 0xAABBCCDD, 0xAABBCCDD, 0xAABBCCDD];
+            let mut sp2 = hypervisor::sp_context::SpContext::new(
+                hypervisor::platform::SP2_PARTITION_ID,
+                sp2_entry,
+                hypervisor::platform::SP2_STACK_TOP,
+                sp2_uuid,
+            );
+            sp2.set_vsttbr(s2_config2.vsttbr);
+
+            // Register INTID 29 (Secure Physical Timer PPI) ownership
+            sp2.set_owned_intids([29, 0, 0, 0]);
+
+            // Install SP2's Stage-2, clear EL1 state, ERET to SP2
+            s2_config2.install();
+            unsafe {
+                core::arch::asm!(
+                    "msr sctlr_el1, xzr",
+                    "msr tcr_el1, xzr",
+                    "msr ttbr0_el1, xzr",
+                    "msr vbar_el1, xzr",
+                    "isb",
+                );
+            }
+
+            {
+                use hypervisor::arch::aarch64::enter_guest;
+                use hypervisor::arch::aarch64::regs::VcpuContext;
+                let _exit = unsafe { enter_guest(sp2.vcpu_ctx_mut() as *mut VcpuContext) };
+            }
+
+            // Verify SP2 called FFA_MSG_WAIT
+            let (x0, _, _, _, _, _, _, _) = sp2.get_args();
+            if x0 == hypervisor::ffa::FFA_MSG_WAIT {
+                uart_puts_local(b"[SPMC] SP2 booted, now Idle (FFA_MSG_WAIT received)\n");
+                sp2.transition_to(hypervisor::sp_context::SpState::Idle)
+                    .expect("SP2 transition failed");
+            } else {
+                uart_puts_local(b"[SPMC] WARNING: SP2 did not call FFA_MSG_WAIT, x0=0x");
+                hypervisor::uart_put_hex(x0);
+                uart_puts_local(b"\n");
+            }
+
+            hypervisor::sp_context::register_sp(sp2);
+        } else {
+            uart_puts_local(b"[SPMC] No SP2 package found (single-SP mode)\n");
+        }
+    }
 
     // 6. Signal SPMD: init complete, receive first NWd request
     // Note: NWd RXTX is managed by the SPMC event loop (SPMD forwards

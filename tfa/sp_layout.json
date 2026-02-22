@@ -3,5 +3,10 @@
         "image": "sp_hello/sp_hello.bin",
         "pm": "sp_hello/sp_manifest.dts",
         "owner": "Plat"
+    },
+    "SP2": {
+        "image": "sp_irq/sp_irq.bin",
+        "pm": "sp_irq/sp_manifest.dts",
+        "owner": "Plat"
     }
 }

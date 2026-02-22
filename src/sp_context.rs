@@ -36,6 +36,10 @@ pub struct SpContext {
     vsttbr: u64,
     /// 128-bit UUID from SP manifest (4 x u32 LE words).
     uuid: [u32; 4],
+    /// Pending virtual interrupt to inject via LR on next entry.
+    pending_irq: Option<u32>,
+    /// INTIDs owned by this SP (up to 4, 0 = unused slot).
+    owned_intids: [u32; 4],
 }
 
 impl SpContext {
@@ -54,6 +58,8 @@ impl SpContext {
             entry: entry_point,
             vsttbr: 0,
             uuid,
+            pending_irq: None,
+            owned_intids: [0; 4],
         }
     }
 
@@ -146,6 +152,36 @@ impl SpContext {
             self.ctx.gp_regs.x7,
         )
     }
+
+    /// Set the INTID ownership array for this SP.
+    pub fn set_owned_intids(&mut self, intids: [u32; 4]) {
+        self.owned_intids = intids;
+    }
+
+    /// Check if this SP owns the given INTID.
+    pub fn owns_intid(&self, intid: u32) -> bool {
+        self.owned_intids.iter().any(|&id| id != 0 && id == intid)
+    }
+
+    /// Set a pending virtual interrupt for injection on next SP entry.
+    pub fn set_pending_irq(&mut self, intid: u32) {
+        self.pending_irq = Some(intid);
+    }
+
+    /// Take the pending virtual interrupt (returns None if none pending).
+    pub fn take_pending_irq(&mut self) -> Option<u32> {
+        self.pending_irq.take()
+    }
+
+    /// Check if this SP has a pending interrupt.
+    pub fn has_pending_irq(&self) -> bool {
+        self.pending_irq.is_some()
+    }
+
+    /// Return the first non-zero owned INTID, if any.
+    pub fn first_owned_intid(&self) -> Option<u32> {
+        self.owned_intids.iter().copied().find(|&id| id != 0)
+    }
 }
 
 // ── Global SP store ─────────────────────────────────────────────────
@@ -219,5 +255,51 @@ pub fn for_each_sp<F: FnMut(&SpContext)>(mut f: F) {
                 f(sp);
             }
         }
+    }
+}
+
+/// Get the first owned INTID for a given SP (read-only lookup).
+/// Used by the IRQ handler to inject virtual interrupts without &mut.
+pub fn first_owned_intid_for(sp_id: u16) -> Option<u32> {
+    unsafe {
+        let contexts = &*SP_STORE.contexts.get();
+        for slot in contexts.iter() {
+            if let Some(ref sp) = slot {
+                if sp.sp_id() == sp_id {
+                    return sp.first_owned_intid();
+                }
+            }
+        }
+        None
+    }
+}
+
+/// Find which SP owns a given INTID. Returns the SP's partition ID, or None.
+pub fn find_sp_for_intid(intid: u32) -> Option<u16> {
+    unsafe {
+        let contexts = &*SP_STORE.contexts.get();
+        for slot in contexts.iter() {
+            if let Some(ref sp) = slot {
+                if sp.owns_intid(intid) {
+                    return Some(sp.sp_id());
+                }
+            }
+        }
+        None
+    }
+}
+
+/// Find any SP that has a pending interrupt. Returns the SP's partition ID, or None.
+pub fn find_sp_with_pending_irq() -> Option<u16> {
+    unsafe {
+        let contexts = &*SP_STORE.contexts.get();
+        for slot in contexts.iter() {
+            if let Some(ref sp) = slot {
+                if sp.has_pending_irq() {
+                    return Some(sp.sp_id());
+                }
+            }
+        }
+        None
     }
 }

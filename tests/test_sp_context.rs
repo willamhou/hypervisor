@@ -68,6 +68,28 @@ pub fn run_tests() {
     assert!(ctx5.transition_to(SpState::Idle).is_err());
     pass += 1;
 
+    // Test 22-23: owns_intid returns true for assigned INTIDs
+    let mut ctx6 = SpContext::new(0x8002, 0x0e400000, 0x0e500000, [0; 4]);
+    ctx6.set_owned_intids([29, 0, 0, 0]);
+    assert!(ctx6.owns_intid(29));
+    assert!(!ctx6.owns_intid(27));
+    pass += 2;
+
+    // Test 24: owns_intid returns false for unset (zero) slots
+    assert!(!ctx6.owns_intid(0));
+    pass += 1;
+
+    // Test 25-27: set_pending_irq / take_pending_irq lifecycle
+    assert!(!ctx6.has_pending_irq());
+    ctx6.set_pending_irq(29);
+    assert!(ctx6.has_pending_irq());
+    assert_eq!(ctx6.take_pending_irq(), Some(29));
+    pass += 3;
+
+    // Test 28: take_pending_irq returns None after take
+    assert_eq!(ctx6.take_pending_irq(), None);
+    pass += 1;
+
     crate::uart_puts(b"    ");
     crate::print_u32(pass);
     crate::uart_puts(b" assertions passed\n");

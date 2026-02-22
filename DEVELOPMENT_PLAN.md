@@ -1,6 +1,6 @@
 # ARM64 Hypervisor 开发计划
 
-**项目版本**: v0.25.0 (Phase C Complete — NS Interrupt Preemption + FFA_RUN Resume)
+**项目版本**: v0.26.0 (Phase D Complete — Multi-SP + Secure vIRQ Injection)
 **计划制定日期**: 2026-01-26
 **最后更新**: 2026-02-22
 **计划类型**: 敏捷迭代，灵活调整
@@ -9,7 +9,7 @@
 
 ## 📊 当前进度概览
 
-**整体完成度**: 🟢 **90%** (Milestone 0-2 + Options A-G + M3 Sprint 3.1/3.1b/3.1c/3.2 + M4 Sprint 4.1/4.2/4.3/4.4A/4.4B + Sprint 5.1/5.2 + Phase C 已完成)
+**整体完成度**: 🟢 **92%** (Milestone 0-2 + Options A-G + M3 Sprint 3.1/3.1b/3.1c/3.2 + M4 Sprint 4.1/4.2/4.3/4.4A/4.4B + Sprint 5.1/5.2 + Phase C/D 已完成)
 
 ```
 M0: 项目启动          ████████████████████ 100% ✅
@@ -17,13 +17,13 @@ M1: MVP基础虚拟化     █████████████████�
 M2: 增强功能          ████████████████████ 100% ✅
 M3: FF-A              ██████████████████░░  90% 🔧 (Sprint 3.2 ✅, Sprint 3.3 推迟到 M4)
 M4: S-EL2 SPMC        ████████████████████ 100% ✅ (Sprint 4.1/4.2/4.3/4.4A/4.4B ✅)
-M4→5 Bridge           ██████████████░░░░░░  70% 🔧 (Sprint 5.1/5.2 ✅, Phase C ✅, pKVM 未开始)
+M4→5 Bridge           ████████████████░░░░  80% 🔧 (Sprint 5.1/5.2 ✅, Phase C/D ✅, pKVM 未开始)
 M4.5: pKVM 集成       ░░░░░░░░░░░░░░░░░░░░   0% ⏸️ (NS-EL2=pKVM, S-EL2=us)
 M5: RME & CCA         ░░░░░░░░░░░░░░░░░░░░   0% ⏸️
 Android Boot          ██████████░░░░░░░░░░  50% ✅ (Phase 2 完成)
 ```
 
-**测试覆盖**: ~262 assertions / 33 test suites (100% pass)
+**测试覆盖**: ~285 assertions / 33 test suites (100% pass)
 **代码量**: ~18000 行
 **Linux启动**: 4 vCPU, BusyBox shell, virtio-blk, virtio-net, multi-VM, FF-A proxy
 **Android启动**: 4 vCPU, PL031 RTC, Binder IPC, minimal init, 1GB RAM
@@ -829,7 +829,7 @@ NS-EL1: Linux guest (当前 hypervisor 功能降级为 SPMC)
 - [ ] 为 pKVM 集成做好准备（NS-EL2 空闲，可被 pKVM 占据）
 
 **预估总时间**: 6-8 周（Week 29-36）
-**状态**: 🔧 进行中 (Sprint 4.1/4.2/4.3 ✅, Sprint 4.4 Phase A/B ✅, Phase C ✅ — NS interrupt preemption + FFA_RUN, 9/9 BL33 tests)
+**状态**: 🔧 进行中 (Sprint 4.1/4.2/4.3 ✅, Sprint 4.4 Phase A/B ✅, Phase C ✅ — NS interrupt preemption + FFA_RUN, Phase D ✅ — multi-SP + secure vIRQ injection, 11/11 BL33 tests)
 
 ---
 
@@ -1285,11 +1285,13 @@ GitHub Actions配置：
 
 ## 9. 下一步行动
 
-### 🎯 当前位置：Phase C ✅ → Phase D (Secure 中断注入) 或 M4.5 (pKVM 集成)
+### 🎯 当前位置：Phase D ✅ → M4.5 (pKVM 集成)
 **可行性研究**: `docs/research/2026-02-20-phase4-feasibility.md` — FEASIBLE with moderate effort
 **Sprint 4.1/4.2/4.3/4.4A/4.4B 完成**: TF-A boot chain + hypervisor as BL33 (NS-EL2) + hypervisor as SPMC (S-EL2) + SPMC event loop + FF-A dispatch + SP boot at S-EL1
 **Sprint 5.1 完成**: DIRECT_REQ end-to-end (NS proxy → SPMD → SPMC → SP1), `tfa_boot` feature flag, 8-register SMC forwarding, SP1 x4+=0x1000 proof, 7/7 BL33 tests PASS
 **Sprint 5.2 完成**: SPMC NWd RXTX management (SPMD forwards RXTX_MAP/UNMAP/RX_RELEASE to SPMC), PARTITION_INFO_GET writes to NWd RX buffer, Linux FF-A discovery, 8/8 BL33 tests PASS, 33 SPMC handler assertions
+**Phase C 完成**: NS interrupt preemption — FFA_INTERRUPT + FFA_RUN resume, CNTHP timer, SP_IRQ_PREEMPTED flag, Preempted state, 9/9 BL33 tests PASS
+**Phase D 完成**: Multi-SP + secure vIRQ injection — SP2 (sp_irq), per-SP INTID ownership, HCR_EL2.VI + HF_INTERRUPT_GET paravirt (Hafnium-compatible), CNTHP poll timer, cross-SP preemption, 11/11 BL33 tests PASS, 42 SPMC handler + 28 SP context assertions
 
 **Phase 8+ 候选方向** (选择一个):
 

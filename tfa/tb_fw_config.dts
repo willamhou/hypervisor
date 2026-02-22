@@ -8,5 +8,11 @@
 			load-address = <0x0e300000>;
 			owner = "Plat";
 		};
+
+		sp2 {
+			uuid = "ddccbbaa-ddcc-bbaa-ddcc-bbaaddccbbaa";
+			load-address = <0x0e400000>;
+			owner = "Plat";
+		};
 	};
 };

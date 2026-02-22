@@ -165,9 +165,9 @@ _start:
     ldr     x9, =FFA_SUCCESS_32
     cmp     x0, x9
     b.ne    .Lfail_5
-    /* x2 = count, should be 1 (SP1 registered) */
+    /* x2 = count, should be >= 1 (at least SP1 registered, maybe SP2 too) */
     cmp     x2, #1
-    b.ne    .Lfail_5
+    b.lt    .Lfail_5
     adr     x0, str_pass
     bl      uart_print
     b       .Ltest_6
@@ -396,8 +396,130 @@ _start:
     b.ne    .Lfail_9
     adr     x0, str_pass
     bl      uart_print
-    b       .Ldone
+    b       .Ltest_10
 .Lfail_9:
+    adr     x0, str_fail
+    bl      uart_print
+
+    /* ============ Test 10: Multi-SP DIRECT_REQ (SP1 + SP2) ============ */
+.Ltest_10:
+    adr     x0, str_t10
+    bl      uart_print
+
+    /* Step 1: Fast-path DIRECT_REQ to SP1 (0x8001) */
+    ldr     x0, =FFA_DIRECT_REQ_32
+    movz    x1, #0x8001
+    movk    x1, #0x0001, lsl #16
+    mov     x2, xzr
+    movz    x3, #0xAAAA
+    movz    x4, #0x1111
+    movz    x5, #0xCCCC
+    movz    x6, #0xDDDD
+    movz    x7, #0xEEEE
+    smc     #0
+
+    /* x0 should be DIRECT_RESP, x4 += 0x1000 */
+    ldr     x9, =FFA_DIRECT_RESP_32
+    cmp     x0, x9
+    b.ne    .Lfail_10
+    movz    x9, #0x2111            /* 0x1111 + 0x1000 */
+    cmp     x4, x9
+    b.ne    .Lfail_10
+
+    /* Step 2: Fast-path DIRECT_REQ to SP2 (0x8002) */
+    ldr     x0, =FFA_DIRECT_REQ_32
+    movz    x1, #0x8002
+    movk    x1, #0x0001, lsl #16
+    mov     x2, xzr
+    movz    x3, #0xBBBB
+    movz    x4, #0x2222
+    movz    x5, #0xDDDD
+    movz    x6, #0xEEEE
+    movz    x7, #0xFFFF
+    smc     #0
+
+    /* x0 should be DIRECT_RESP, x4 += 0x1000 */
+    ldr     x9, =FFA_DIRECT_RESP_32
+    cmp     x0, x9
+    b.ne    .Lfail_10
+    movz    x9, #0x3222            /* 0x2222 + 0x1000 */
+    cmp     x4, x9
+    b.ne    .Lfail_10
+
+    adr     x0, str_pass
+    bl      uart_print
+    b       .Ltest_11
+.Lfail_10:
+    adr     x0, str_fail
+    bl      uart_print
+
+    /* ============ Test 11: Secure vIRQ injection (SP2 timer) ============ */
+.Ltest_11:
+    adr     x0, str_t11
+    bl      uart_print
+
+    /* Send DIRECT_REQ to SP2 with x3=0xDEADBEEF (slow-path + timer arm) */
+    ldr     x0, =FFA_DIRECT_REQ_32
+    movz    x1, #0x8002
+    movk    x1, #0x0001, lsl #16
+    mov     x2, xzr
+    ldr     x3, =0xDEADBEEF        /* slow-path trigger */
+    movz    x4, #0xBBBB            /* SP2 will add 0x2000 -> 0xDBBB */
+    movz    x5, #0xCCCC
+    movz    x6, #0xDDDD
+    movz    x7, #0xEEEE
+    smc     #0
+
+    /* Result is either FFA_INTERRUPT (preempted) or DIRECT_RESP (completed) */
+    ldr     x9, =FFA_DIRECT_RESP_32
+    cmp     x0, x9
+    b.eq    .Ltest11_got_resp
+
+    /* Expect FFA_INTERRUPT — call FFA_RUN to resume */
+    ldr     x9, =FFA_INTERRUPT
+    cmp     x0, x9
+    b.ne    .Lfail_11
+
+    /* FFA_RUN loop: resume SP2, handle possible repeated preemptions */
+    mov     x15, #20               /* max FFA_RUN attempts */
+.Ltest11_run_loop:
+    cbz     x15, .Lfail_11         /* too many preemptions */
+    sub     x15, x15, #1
+
+    ldr     x0, =FFA_RUN
+    /* x1[31:16] = SP ID = 0x8002 */
+    movz    x1, #0x0000
+    movk    x1, #0x8002, lsl #16
+    mov     x2, xzr
+    mov     x3, xzr
+    mov     x4, xzr
+    mov     x5, xzr
+    mov     x6, xzr
+    mov     x7, xzr
+    smc     #0
+
+    /* Check if SP2 completed or was preempted again */
+    ldr     x9, =FFA_DIRECT_RESP_32
+    cmp     x0, x9
+    b.eq    .Ltest11_got_resp
+
+    ldr     x9, =FFA_INTERRUPT
+    cmp     x0, x9
+    b.eq    .Ltest11_run_loop      /* preempted again, retry */
+    b       .Lfail_11              /* unexpected response */
+
+.Ltest11_got_resp:
+    /* x4 should be 0xBBBB + 0x2000 = 0xDBBB (slow-path proof) */
+    movz    x9, #0xDBBB
+    cmp     x4, x9
+    b.ne    .Lfail_11
+    /* x5 should be 29 (INTID of secure timer) */
+    cmp     x5, #29
+    b.ne    .Lfail_11
+    adr     x0, str_pass
+    bl      uart_print
+    b       .Ldone
+.Lfail_11:
     adr     x0, str_fail
     bl      uart_print
 
@@ -447,6 +569,10 @@ str_t8:
     .asciz "  Test 8: RXTX + PARTITION_INFO .... "
 str_t9:
     .asciz "  Test 9: Preemption + FFA_RUN ..... "
+str_t10:
+    .asciz "  Test 10: Multi-SP DIRECT_REQ ..... "
+str_t11:
+    .asciz "  Test 11: Secure vIRQ injection ... "
 str_pass:
     .asciz "PASS\r\n"
 str_fail:
