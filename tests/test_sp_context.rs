@@ -90,6 +90,46 @@ pub fn run_tests() {
     assert_eq!(ctx6.take_pending_irq(), None);
     pass += 1;
 
+    // Test 29-37: vfiq-gated FIQ tests
+    #[cfg(feature = "vfiq")]
+    {
+        // Test 29-30: fiq_intids — is_fiq_delivery returns true for assigned FIQ INTIDs
+        let mut ctx7 = SpContext::new(0x8002, 0x0e400000, 0x0e500000, [0; 4]);
+        ctx7.set_fiq_intids([30, 0, 0, 0]);
+        assert!(ctx7.is_fiq_delivery(30));
+        assert!(!ctx7.is_fiq_delivery(29));
+        pass += 2;
+
+        // Test 31: is_fiq_delivery returns false for unset (zero) slots
+        assert!(!ctx7.is_fiq_delivery(0));
+        pass += 1;
+
+        // Test 32-34: set_pending_fiq / take_pending_fiq lifecycle
+        assert!(!ctx7.has_pending_fiq());
+        ctx7.set_pending_fiq(30);
+        assert!(ctx7.has_pending_fiq());
+        assert_eq!(ctx7.take_pending_fiq(), Some(30));
+        pass += 3;
+
+        // Test 35: take_pending_fiq returns None after take
+        assert_eq!(ctx7.take_pending_fiq(), None);
+        pass += 1;
+
+        // Test 36: first_fiq_intid returns the first non-zero FIQ INTID
+        assert_eq!(ctx7.first_fiq_intid(), Some(30));
+        pass += 1;
+
+        // Test 37: IRQ and FIQ can be pending simultaneously
+        ctx7.set_owned_intids([29, 0, 0, 0]);
+        ctx7.set_pending_irq(29);
+        ctx7.set_pending_fiq(30);
+        assert!(ctx7.has_pending_irq());
+        assert!(ctx7.has_pending_fiq());
+        assert_eq!(ctx7.take_pending_fiq(), Some(30));
+        assert_eq!(ctx7.take_pending_irq(), Some(29));
+        pass += 4;
+    }
+
     crate::uart_puts(b"    ");
     crate::print_u32(pass);
     crate::uart_puts(b" assertions passed\n");

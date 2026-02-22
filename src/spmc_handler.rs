@@ -123,8 +123,10 @@ fn dispatch_to_sp(req: &SmcResult8, sp_id: u16) -> SmcResult8 {
     SP_IRQ_PREEMPTED.store(false, Ordering::Release);
     crate::arch::aarch64::peripherals::timer::arm_preemption_timer();
 
-    // Inject any pending virtual interrupt via GIC LR before ERET
+    // Inject any pending virtual interrupt before ERET (VI for IRQ, VF for FIQ)
     inject_pending_virq(sp);
+    #[cfg(feature = "vfiq")]
+    inject_pending_vfiq(sp);
 
     // Reinstall SP's Secure Stage-2 and ERET
     let s2 = crate::secure_stage2::SecureStage2Config::new_from_vsttbr(sp.vsttbr());
@@ -208,8 +210,10 @@ fn resume_preempted_sp(sp_id: u16) -> SmcResult8 {
     SP_IRQ_PREEMPTED.store(false, Ordering::Release);
     crate::arch::aarch64::peripherals::timer::arm_preemption_timer();
 
-    // Inject any pending virtual interrupt via GIC LR before resume
+    // Inject any pending virtual interrupt before resume (VI for IRQ, VF for FIQ)
     inject_pending_virq(sp);
+    #[cfg(feature = "vfiq")]
+    inject_pending_vfiq(sp);
 
     // Reinstall SP's Secure Stage-2 and ERET (resumes from saved PC)
     let s2 = crate::secure_stage2::SecureStage2Config::new_from_vsttbr(sp.vsttbr());
@@ -290,6 +294,23 @@ fn inject_pending_virq(sp: &mut crate::sp_context::SpContext) {
     }
 }
 
+/// Set HCR_EL2.VF if the SP has a pending virtual FIQ.
+///
+/// Called before enter_guest() alongside inject_pending_virq(). When VF=1,
+/// hardware auto-vectors to VBAR_EL1+0x300 (Current EL SPx FIQ) on ERET.
+/// The SP calls HVC (HF_FIQ_GET = 0xFF05) to retrieve the FIQ INTID.
+#[cfg(feature = "vfiq")]
+fn inject_pending_vfiq(sp: &mut crate::sp_context::SpContext) {
+    if sp.has_pending_fiq() {
+        unsafe {
+            let mut hcr: u64;
+            core::arch::asm!("mrs {}, hcr_el2", out(reg) hcr, options(nostack, nomem));
+            hcr |= 1 << 6; // HCR_EL2.VF
+            core::arch::asm!("msr hcr_el2, {}", "isb", in(reg) hcr, options(nostack, nomem));
+        }
+    }
+}
+
 /// Dispatch a pending interrupt to an SP that is currently Idle.
 ///
 /// Transitions the SP: Idle → Running, injects vIRQ via LR, enters guest.
@@ -313,8 +334,10 @@ fn dispatch_interrupt_to_sp(sp_id: u16) {
     sp.transition_to(crate::sp_context::SpState::Running)
         .expect("SP Running transition failed");
 
-    // Inject the pending vIRQ
+    // Inject pending virtual interrupt (VI for IRQ, VF for FIQ)
     inject_pending_virq(sp);
+    #[cfg(feature = "vfiq")]
+    inject_pending_vfiq(sp);
 
     // Install SP's Stage-2 and ERET
     let s2 = crate::secure_stage2::SecureStage2Config::new_from_vsttbr(sp.vsttbr());

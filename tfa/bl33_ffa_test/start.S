@@ -518,8 +518,77 @@ _start:
     b.ne    .Lfail_11
     adr     x0, str_pass
     bl      uart_print
-    b       .Ldone
+    b       .Ltest_12
 .Lfail_11:
+    adr     x0, str_fail
+    bl      uart_print
+
+    /* ============ Test 12: Secure vFIQ injection (SP2 HCR_EL2.VF) ============ */
+.Ltest_12:
+    adr     x0, str_t12
+    bl      uart_print
+
+    /* Send DIRECT_REQ to SP2 with x3=0xCAFEBEEF (FIQ slow-path trigger) */
+    ldr     x0, =FFA_DIRECT_REQ_32
+    movz    x1, #0x8002
+    movk    x1, #0x0001, lsl #16
+    mov     x2, xzr
+    ldr     x3, =0xCAFEBEEF        /* FIQ slow-path trigger */
+    movz    x4, #0xBBBB            /* SP2 will add 0x3000 -> 0xEBBB */
+    movz    x5, #0xCCCC
+    movz    x6, #0xDDDD
+    movz    x7, #0xEEEE
+    smc     #0
+
+    /* Result is either FFA_INTERRUPT (preempted) or DIRECT_RESP (completed) */
+    ldr     x9, =FFA_DIRECT_RESP_32
+    cmp     x0, x9
+    b.eq    .Ltest12_got_resp
+
+    /* Expect FFA_INTERRUPT — call FFA_RUN to resume */
+    ldr     x9, =FFA_INTERRUPT
+    cmp     x0, x9
+    b.ne    .Lfail_12
+
+    /* FFA_RUN loop: resume SP2, handle possible repeated preemptions */
+    mov     x15, #20               /* max FFA_RUN attempts */
+.Ltest12_run_loop:
+    cbz     x15, .Lfail_12         /* too many preemptions */
+    sub     x15, x15, #1
+
+    ldr     x0, =FFA_RUN
+    movz    x1, #0x0000
+    movk    x1, #0x8002, lsl #16
+    mov     x2, xzr
+    mov     x3, xzr
+    mov     x4, xzr
+    mov     x5, xzr
+    mov     x6, xzr
+    mov     x7, xzr
+    smc     #0
+
+    /* Check if SP2 completed or was preempted again */
+    ldr     x9, =FFA_DIRECT_RESP_32
+    cmp     x0, x9
+    b.eq    .Ltest12_got_resp
+
+    ldr     x9, =FFA_INTERRUPT
+    cmp     x0, x9
+    b.eq    .Ltest12_run_loop      /* preempted again, retry */
+    b       .Lfail_12              /* unexpected response */
+
+.Ltest12_got_resp:
+    /* x4 should be 0xBBBB + 0x3000 = 0xEBBB (FIQ slow-path proof) */
+    movz    x9, #0xEBBB
+    cmp     x4, x9
+    b.ne    .Lfail_12
+    /* x5 should be 30 (INTID of virtual FIQ test) */
+    cmp     x5, #30
+    b.ne    .Lfail_12
+    adr     x0, str_pass
+    bl      uart_print
+    b       .Ldone
+.Lfail_12:
     adr     x0, str_fail
     bl      uart_print
 
@@ -573,6 +642,8 @@ str_t10:
     .asciz "  Test 10: Multi-SP DIRECT_REQ ..... "
 str_t11:
     .asciz "  Test 11: Secure vIRQ injection ... "
+str_t12:
+    .asciz "  Test 12: Secure vFIQ injection ... "
 str_pass:
     .asciz "PASS\r\n"
 str_fail:

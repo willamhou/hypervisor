@@ -233,6 +233,21 @@ pub extern "C" fn handle_exception(context: &mut VcpuContext) -> bool {
                     // HVC: ELR_EL2 already points past the HVC instruction
                     return true;
                 }
+
+                #[cfg(feature = "vfiq")]
+                if context.gp_regs.x0 == HF_FIQ_GET {
+                    let sp_id = crate::spmc_handler::current_running_sp();
+                    let intid = if sp_id != 0 {
+                        crate::sp_context::get_sp_mut(sp_id)
+                            .and_then(|sp| sp.take_pending_fiq())
+                            .unwrap_or(0xFFFFFFFF)
+                    } else {
+                        0xFFFFFFFF
+                    };
+                    context.gp_regs.x0 = intid as u64;
+                    set_hcr_vf(false);
+                    return true;
+                }
             }
 
             // HVC: Hypercall from guest
@@ -576,10 +591,35 @@ fn set_hcr_vi(enable: bool) {
     }
 }
 
+/// Set or clear HCR_EL2.VF (bit 6) — Virtual FIQ injection.
+///
+/// When VF=1, ERET from EL2 to EL1 delivers a virtual FIQ to the guest
+/// (hardware auto-vectors to VBAR_EL1+0x300). The SP then calls HVC
+/// (HF_FIQ_GET) to retrieve the INTID, at which point we clear VF.
+#[cfg(feature = "vfiq")]
+fn set_hcr_vf(enable: bool) {
+    unsafe {
+        let mut hcr: u64;
+        core::arch::asm!("mrs {}, hcr_el2", out(reg) hcr, options(nostack, nomem));
+        if enable {
+            hcr |= 1 << 6; // HCR_EL2.VF
+        } else {
+            hcr &= !(1 << 6);
+        }
+        core::arch::asm!("msr hcr_el2, {}", "isb", in(reg) hcr, options(nostack, nomem));
+    }
+}
+
 /// Hafnium-compatible paravirtualized interrupt interface.
-/// SP calls `hvc #0` with x0 = HF_INTERRUPT_GET to retrieve pending INTID.
+/// SP calls `hvc #0` with x0 = HF_INTERRUPT_GET to retrieve pending IRQ INTID.
 #[cfg(feature = "sel2")]
 const HF_INTERRUPT_GET: u64 = 0xFF04;
+
+/// Virtual FIQ counterpart of HF_INTERRUPT_GET.
+/// SP calls `hvc #0` with x0 = HF_FIQ_GET from its FIQ handler to retrieve
+/// a pending FIQ INTID. SPMC returns the INTID and clears HCR_EL2.VF.
+#[cfg(feature = "vfiq")]
+const HF_FIQ_GET: u64 = 0xFF05;
 
 #[no_mangle]
 pub extern "C" fn handle_irq_exception(_context: &mut VcpuContext) -> bool {
@@ -601,16 +641,15 @@ pub extern "C" fn handle_irq_exception(_context: &mut VcpuContext) -> bool {
 
     // S-EL2 SPMC: route IRQs based on per-SP interrupt ownership.
     //
-    // Virtual interrupt injection uses HCR_EL2.VI (Hafnium-compatible):
-    //   1. Queue INTID to SP's pending list
-    //   2. Set HCR_EL2.VI → hardware auto-vectors to VBAR_EL1+0x280 on ERET
-    //   3. SP's IRQ handler calls HVC (HF_INTERRUPT_GET) to read INTID
-    //   4. SPMC returns INTID and clears HCR_EL2.VI
+    // Virtual interrupt injection uses HCR_EL2.VI/VF:
+    //   IRQ delivery: queue → set VI → VBAR_EL1+0x280 → HVC(0xFF04) → clear VI
+    //   FIQ delivery: queue → set VF → VBAR_EL1+0x300 → HVC(0xFF05) → clear VF
+    //   Per-SP: owned_intids[] → VI (IRQ), fiq_intids[] → VF (FIQ)
     //
     // Cases:
-    //   Case 1: IRQ owned by current SP → queue + set VI, return true (continue)
-    //   Case 2: IRQ owned by another SP → queue to other SP, preempt current
-    //   CNTHP (26): timer poll — if current SP has owned INTIDs, inject via VI
+    //   Case 1: INTID owned by current SP → queue + set VI or VF, continue
+    //   Case 2: INTID owned by another SP → queue, preempt current
+    //   CNTHP (26): timer poll — inject owned INTIDs via VI and/or VF
     //   Unowned: NS preemption via FFA_INTERRUPT
     #[cfg(feature = "sel2")]
     {
@@ -623,17 +662,35 @@ pub extern "C" fn handle_irq_exception(_context: &mut VcpuContext) -> bool {
         if current_sp_id != 0 {
             // An SP is currently running at S-EL1.
 
-            // Check if any SP owns this physical INTID
+            // Check if any SP owns this physical INTID (IRQ or FIQ delivery)
             if let Some(owner_id) = crate::sp_context::find_sp_for_intid(intid) {
                 if owner_id == current_sp_id {
-                    // Case 1: Owned by current SP → queue + set HCR_EL2.VI
+                    // Case 1: Owned by current SP → choose VI or VF based on delivery type
+                    #[cfg(feature = "vfiq")]
+                    if crate::sp_context::is_fiq_delivery_for(current_sp_id, intid) {
+                        if let Some(sp) = crate::sp_context::get_sp_mut(current_sp_id) {
+                            sp.set_pending_fiq(intid);
+                        }
+                        set_hcr_vf(true);
+                        return true;
+                    }
+                    // IRQ delivery (default path)
                     if let Some(sp) = crate::sp_context::get_sp_mut(current_sp_id) {
                         sp.set_pending_irq(intid);
                     }
                     set_hcr_vi(true);
                     return true;
                 }
-                // Case 2: Owned by another SP → set pending, preempt current SP
+                // Case 2: Owned by another SP → set pending (IRQ or FIQ), preempt current SP
+                #[cfg(feature = "vfiq")]
+                if crate::sp_context::is_fiq_delivery_for(owner_id, intid) {
+                    if let Some(sp) = crate::sp_context::get_sp_mut(owner_id) {
+                        sp.set_pending_fiq(intid);
+                    }
+                } else if let Some(sp) = crate::sp_context::get_sp_mut(owner_id) {
+                    sp.set_pending_irq(intid);
+                }
+                #[cfg(not(feature = "vfiq"))]
                 if let Some(sp) = crate::sp_context::get_sp_mut(owner_id) {
                     sp.set_pending_irq(intid);
                 }
@@ -642,10 +699,26 @@ pub extern "C" fn handle_irq_exception(_context: &mut VcpuContext) -> bool {
             }
 
             // CNTHP preemption timer (INTID 26): if current SP has owned INTIDs,
-            // inject the owned INTID via HCR_EL2.VI. CNTHP serves as a poll
-            // timer because CNTPS is inaccessible at S-EL1 (SCR_EL3.ST=0).
+            // inject via HCR_EL2.VI (IRQ) and/or HCR_EL2.VF (FIQ). CNTHP
+            // serves as a poll timer because CNTPS is inaccessible at S-EL1
+            // (SCR_EL3.ST=0).
             if intid == 26 {
                 timer::disarm_preemption_timer();
+                let mut injected = false;
+
+                // Inject FIQ-delivery INTIDs via VF
+                #[cfg(feature = "vfiq")]
+                if let Some(fiq_intid) =
+                    crate::sp_context::first_fiq_intid_for(current_sp_id)
+                {
+                    if let Some(sp) = crate::sp_context::get_sp_mut(current_sp_id) {
+                        sp.set_pending_fiq(fiq_intid);
+                    }
+                    set_hcr_vf(true);
+                    injected = true;
+                }
+
+                // Inject IRQ-delivery INTIDs via VI
                 if let Some(owned_intid) =
                     crate::sp_context::first_owned_intid_for(current_sp_id)
                 {
@@ -653,6 +726,10 @@ pub extern "C" fn handle_irq_exception(_context: &mut VcpuContext) -> bool {
                         sp.set_pending_irq(owned_intid);
                     }
                     set_hcr_vi(true);
+                    injected = true;
+                }
+
+                if injected {
                     return true;
                 }
             }

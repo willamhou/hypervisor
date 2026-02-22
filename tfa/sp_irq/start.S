@@ -7,19 +7,22 @@
  *   3. Call FFA_MSG_WAIT to signal idle to SPMC
  *   4. On DIRECT_REQ:
  *      - Fast path: x4 += 0x1000, respond
- *      - Slow path (x3 == 0xDEADBEEF): busy-loop until virtual IRQ,
+ *      - IRQ slow path (x3 == 0xDEADBEEF): busy-loop until virtual IRQ,
  *        respond with x4 += 0x2000, x5 = INTID (29)
+ *      - FIQ slow path (x3 == 0xCAFEBEEF): busy-loop until virtual FIQ,
+ *        respond with x4 += 0x3000, x5 = INTID (30)
  *
- * Virtual interrupt injection flow (Hafnium-compatible HCR_EL2.VI):
- *   SP2 busy-loops → CNTHP timer fires at S-EL2 → S-EL2 IRQ handler
- *   queues INTID 29 + sets HCR_EL2.VI → returns true → ERET →
- *   hardware auto-vectors to VBAR_EL1+0x280 → IRQ handler calls HVC
- *   (HF_INTERRUPT_GET) → SPMC returns INTID + clears VI → SP2 records
- *   INTID, exits busy-loop → responds with DIRECT_RESP.
+ * Virtual interrupt injection flow:
+ *   IRQ: SPMC sets HCR_EL2.VI → VBAR_EL1+0x280 → HVC(0xFF04) → clears VI
+ *   FIQ: SPMC sets HCR_EL2.VF → VBAR_EL1+0x300 → HVC(0xFF05) → clears VF
  *
  * IRQ handler (VBAR_EL1 + 0x280, Current EL SPx IRQ):
  *   HVC #0 with x0=0xFF04 (HF_INTERRUPT_GET) → SPMC returns INTID in x0.
  *   Store captured_intid, set irq_handled=1, ERET back to busy-loop.
+ *
+ * FIQ handler (VBAR_EL1 + 0x300, Current EL SPx FIQ):
+ *   HVC #0 with x0=0xFF05 (HF_FIQ_GET) → SPMC returns INTID in x0.
+ *   Store captured_fiq_intid, set fiq_handled=1, ERET back to busy-loop.
  *
  * Loaded at 0x0e400000 by TF-A BL2. Stack at 0x0e500000.
  */
@@ -37,8 +40,10 @@
 
 .equ SP2_STACK_TOP,      0x0e500000
 
-/* Secure Physical Timer: INTID 29 (PPI) */
+/* Secure Physical Timer: INTID 29 (PPI) — IRQ delivery */
 .equ CNTPS_INTID,        29
+/* Virtual FIQ test INTID: 30 — FIQ delivery */
+.equ VFIQ_TEST_INTID,    30
 
 _start:
     /* Set up stack */
@@ -87,13 +92,21 @@ _start:
     and     x9, x1, #0xFFFF
     orr     x1, x8, x9, lsl #16
 
-    /* Check for slow-path trigger: x3 == 0xDEADBEEF */
+    /* Check for IRQ slow-path trigger: x3 == 0xDEADBEEF */
     ldr     x8, =0xDEADBEEF
     cmp     x3, x8
-    b.ne    .Lfast_path
+    b.eq    .Lslow_irq
 
-    /* === Slow path: arm Secure timer + wait for IRQ === */
+    /* Check for FIQ slow-path trigger: x3 == 0xCAFEBEEF */
+    ldr     x8, =0xCAFEBEEF
+    cmp     x3, x8
+    b.eq    .Lslow_fiq
 
+    /* Fast path: x4 += 0x1000, respond */
+    b       .Lfast_path
+
+    /* === IRQ slow path: wait for virtual IRQ === */
+.Lslow_irq:
     /* Clear irq_handled flag */
     adr     x8, irq_handled
     str     xzr, [x8]
@@ -142,6 +155,50 @@ _start:
     smc     #0
     b       .Lmsg_loop
 
+    /* === FIQ slow path: wait for virtual FIQ === */
+.Lslow_fiq:
+    /* Clear fiq_handled flag */
+    adr     x8, fiq_handled
+    str     xzr, [x8]
+
+    /* Clear captured FIQ INTID */
+    adr     x8, captured_fiq_intid
+    str     xzr, [x8]
+
+    /* Unmask FIQs (DAIFClr #1 = unmask FIQ bit) */
+    msr     daifclr, #1
+    isb
+
+    /*
+     * Virtual FIQ injection: SPMC sets HCR_EL2.VF=1 on CNTHP poll.
+     * Hardware auto-vectors to VBAR_EL1+0x300 (Current EL SPx FIQ).
+     * FIQ handler calls HVC (HF_FIQ_GET = 0xFF05) to get INTID.
+     */
+
+    /* Busy-loop until virtual FIQ handler sets fiq_handled */
+    adr     x8, fiq_handled
+    mov     x10, #0x4000000
+.Lwait_fiq:
+    ldr     x9, [x8]
+    cbnz    x9, .Lgot_fiq
+    sub     x10, x10, #1
+    cbz     x10, .Lgot_fiq         /* timeout: proceed anyway */
+    b       .Lwait_fiq
+
+.Lgot_fiq:
+    /* Re-mask FIQs */
+    msr     daifset, #1
+    isb
+
+    /* Build response: x4 += 0x3000, x5 = captured FIQ INTID */
+    ldr     x0, =FFA_DIRECT_RESP_32
+    mov     x2, xzr
+    add     x4, x4, #0x3000
+    adr     x8, captured_fiq_intid
+    ldr     x5, [x8]
+    smc     #0
+    b       .Lmsg_loop
+
 .Lfast_path:
     /* Build DIRECT_RESP: x4 += 0x1000, echo rest */
     ldr     x0, =FFA_DIRECT_RESP_32
@@ -182,11 +239,11 @@ _vectors:
     /* Current EL, SPx, Sync */
     b       .Lvec_unhandled
     .balign 128
-    /* Current EL, SPx, IRQ — this is the one we handle */
+    /* Current EL, SPx, IRQ — virtual IRQ handler (HCR_EL2.VI) */
     b       .Lirq_handler
     .balign 128
-    /* Current EL, SPx, FIQ */
-    b       .Lvec_unhandled
+    /* Current EL, SPx, FIQ — virtual FIQ handler (HCR_EL2.VF) */
+    b       .Lfiq_handler
     .balign 128
     /* Current EL, SPx, SError */
     b       .Lvec_unhandled
@@ -243,6 +300,32 @@ _vectors:
     ldp     x0, x1, [sp], #16
     eret
 
+/* ============ FIQ handler (Current EL, SPx) ============ */
+.Lfiq_handler:
+    /*
+     * Hardware auto-vectors here because SPMC set HCR_EL2.VF=1.
+     * Call HF_FIQ_GET (HVC, x0=0xFF05) to retrieve the pending FIQ
+     * INTID from the SPMC. SPMC returns INTID in x0 and clears VF.
+     */
+    stp     x0, x1, [sp, #-16]!
+
+    /* HF_FIQ_GET: ask SPMC for the pending virtual FIQ INTID */
+    ldr     x0, =0xFF05
+    hvc     #0
+    /* x0 = INTID (e.g. 30) or 0xFFFFFFFF if none */
+
+    /* Store captured FIQ INTID */
+    adr     x1, captured_fiq_intid
+    str     x0, [x1]
+
+    /* Set fiq_handled = 1 */
+    adr     x1, fiq_handled
+    mov     x0, #1
+    str     x0, [x1]
+
+    ldp     x0, x1, [sp], #16
+    eret
+
 .Lvec_unhandled:
     /* Infinite loop on unhandled exception */
     wfe
@@ -254,6 +337,10 @@ _vectors:
 irq_handled:
     .quad   0
 captured_intid:
+    .quad   0
+fiq_handled:
+    .quad   0
+captured_fiq_intid:
     .quad   0
 
 /* ============ UART print subroutine ============ */
