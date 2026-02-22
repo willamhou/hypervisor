@@ -411,10 +411,9 @@ pub extern "C" fn rust_main_sel2(
     // Store SP1 context globally for dispatch
     hypervisor::sp_context::register_sp(sp1);
 
-    // 5.8. Register SPMC RXTX buffers with SPMD (for PARTITION_INFO relay)
-    hypervisor::spmc_handler::spmc_register_rxtx();
-
     // 6. Signal SPMD: init complete, receive first NWd request
+    // Note: NWd RXTX is managed by the SPMC event loop (SPMD forwards
+    // FFA_RXTX_MAP from NWd to SPMC, not handled by SPMD itself).
     uart_puts_local(b"[SPMC] Init complete, signaling SPMD via FFA_MSG_WAIT\n");
     let first_req = hypervisor::manifest::signal_spmc_ready();
 

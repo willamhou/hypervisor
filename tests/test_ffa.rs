@@ -140,8 +140,10 @@ pub fn run_ffa_test() {
         }
     }
 
-    // Test 9: FFA_MSG_SEND_DIRECT_REQ echo
-    {
+    // Test 9: FFA_MSG_SEND_DIRECT_REQ echo (stub SPMC only)
+    // Under tfa_boot, SPMC_PRESENT=true → proxy forwards to real SPMC which
+    // modifies x4 differently (SP1 adds 0x1000), so stub echo doesn't apply.
+    if !cfg!(feature = "tfa_boot") {
         let mut ctx = VcpuContext::default();
         ctx.gp_regs.x0 = ffa::FFA_MSG_SEND_DIRECT_REQ_32;
         // x1: sender=1 (VM0 partition ID), receiver=0x8001 (SP1)
@@ -165,8 +167,9 @@ pub fn run_ffa_test() {
         }
     }
 
-    // Test 10: FFA_MSG_SEND_DIRECT_REQ to invalid SP
-    {
+    // Test 10: FFA_MSG_SEND_DIRECT_REQ to invalid SP (stub SPMC only)
+    // Under tfa_boot, forwarded to real SPMC — error path differs.
+    if !cfg!(feature = "tfa_boot") {
         let mut ctx = VcpuContext::default();
         ctx.gp_regs.x0 = ffa::FFA_MSG_SEND_DIRECT_REQ_32;
         ctx.gp_regs.x1 = (1u64 << 16) | 0x9999; // Invalid SP
@@ -328,7 +331,8 @@ pub fn run_ffa_test() {
     // probe_spmc() is tested implicitly by ffa::proxy::init() at boot in linux_guest mode.
 
     // Test 18: Unknown FF-A call returns NOT_SUPPORTED when no SPMC
-    {
+    // Under tfa_boot, unknown calls are forwarded to EL3 instead.
+    if !cfg!(feature = "tfa_boot") {
         let mut ctx = VcpuContext::default();
         ctx.gp_regs.x0 = 0x8400009F; // Unknown FF-A function ID
         let cont = ffa::proxy::handle_ffa_call(&mut ctx);
@@ -858,40 +862,44 @@ pub fn run_ffa_test() {
         }
 
         // Test 40: MSG_SEND2 from VM0 to VM1
-        {
-            let mut ctx = VcpuContext::default();
-            ctx.gp_regs.x0 = ffa::FFA_MSG_SEND2;
-            ctx.gp_regs.x1 = 0;
-            let cont = ffa::proxy::handle_ffa_call(&mut ctx);
-            if cont && ctx.gp_regs.x0 == ffa::FFA_SUCCESS_32 {
-                hypervisor::uart_puts(b"  [PASS] MSG_SEND2 VM0->VM1\n");
-                pass += 1;
-            } else {
-                hypervisor::uart_puts(b"  [FAIL] MSG_SEND2 VM0->VM1\n");
-                fail += 1;
-            }
-        }
-
         // Test 41: MSG_WAIT by VM1 returns pending message
-        hypervisor::global::CURRENT_VM_ID.store(1, core::sync::atomic::Ordering::Relaxed);
-        {
-            let mut ctx = VcpuContext::default();
-            ctx.gp_regs.x0 = ffa::FFA_MSG_WAIT;
-            let cont = ffa::proxy::handle_ffa_call(&mut ctx);
-            if cont && ctx.gp_regs.x0 == ffa::FFA_SUCCESS_32 && ctx.gp_regs.x1 == 1 {
-                hypervisor::uart_puts(b"  [PASS] MSG_WAIT returns sender=VM0\n");
-                pass += 1;
-            } else {
-                hypervisor::uart_puts(b"  [FAIL] MSG_WAIT\n");
-                fail += 1;
+        // Under tfa_boot (implies linux_guest), is_guest_ram() rejects stack-allocated
+        // RXTX buffers (hypervisor memory, not guest RAM). Skip these tests.
+        if !cfg!(feature = "tfa_boot") {
+            {
+                let mut ctx = VcpuContext::default();
+                ctx.gp_regs.x0 = ffa::FFA_MSG_SEND2;
+                ctx.gp_regs.x1 = 0;
+                let cont = ffa::proxy::handle_ffa_call(&mut ctx);
+                if cont && ctx.gp_regs.x0 == ffa::FFA_SUCCESS_32 {
+                    hypervisor::uart_puts(b"  [PASS] MSG_SEND2 VM0->VM1\n");
+                    pass += 1;
+                } else {
+                    hypervisor::uart_puts(b"  [FAIL] MSG_SEND2 VM0->VM1\n");
+                    fail += 1;
+                }
             }
-        }
 
-        // Release RX buffer so msg_pending clears
-        {
-            let mut ctx = VcpuContext::default();
-            ctx.gp_regs.x0 = ffa::FFA_RX_RELEASE;
-            ffa::proxy::handle_ffa_call(&mut ctx);
+            hypervisor::global::CURRENT_VM_ID.store(1, core::sync::atomic::Ordering::Relaxed);
+            {
+                let mut ctx = VcpuContext::default();
+                ctx.gp_regs.x0 = ffa::FFA_MSG_WAIT;
+                let cont = ffa::proxy::handle_ffa_call(&mut ctx);
+                if cont && ctx.gp_regs.x0 == ffa::FFA_SUCCESS_32 && ctx.gp_regs.x1 == 1 {
+                    hypervisor::uart_puts(b"  [PASS] MSG_WAIT returns sender=VM0\n");
+                    pass += 1;
+                } else {
+                    hypervisor::uart_puts(b"  [FAIL] MSG_WAIT\n");
+                    fail += 1;
+                }
+            }
+
+            // Release RX buffer so msg_pending clears
+            {
+                let mut ctx = VcpuContext::default();
+                ctx.gp_regs.x0 = ffa::FFA_RX_RELEASE;
+                ffa::proxy::handle_ffa_call(&mut ctx);
+            }
         }
 
         // Test 42: MSG_WAIT with no message → NO_DATA

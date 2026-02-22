@@ -38,14 +38,13 @@ pub fn run_tests() {
     assert_eq!(resp.x0, ffa::FFA_SUCCESS_32);
     pass += 1;
 
-    // Test 7-8: FFA_FEATURES(FFA_RXTX_MAP) -> NOT_SUPPORTED
-    // (SPMD handles NWd RXTX, not SPMC)
+    // Test 7: FFA_FEATURES(FFA_RXTX_MAP) -> SUCCESS
+    // (SPMD forwards NWd RXTX_MAP to SPMC in TF-A v2.12)
     let mut req = zero_req(ffa::FFA_FEATURES);
     req.x1 = ffa::FFA_RXTX_MAP;
     let resp = dispatch_ffa(&req);
-    assert_eq!(resp.x0, ffa::FFA_ERROR);
-    assert_eq!(resp.x2, ffa::FFA_NOT_SUPPORTED as u64);
-    pass += 2;
+    assert_eq!(resp.x0, ffa::FFA_SUCCESS_32);
+    pass += 1;
 
     // Test 9-10: FFA_FEATURES with unsupported function -> NOT_SUPPORTED
     let mut req = zero_req(ffa::FFA_FEATURES);
@@ -112,11 +111,58 @@ pub fn run_tests() {
     assert_eq!(resp.x4, 0);
     pass += 5;
 
-    // Test 27-28: Unknown function -> FFA_ERROR(NOT_SUPPORTED)
+    // Test 26-27: Unknown function -> FFA_ERROR(NOT_SUPPORTED)
     let resp = dispatch_ffa(&zero_req(0xDEADBEEF));
     assert_eq!(resp.x0, ffa::FFA_ERROR);
     assert_eq!(resp.x2, ffa::FFA_NOT_SUPPORTED as u64);
     pass += 2;
+
+    // Test 28: FFA_RXTX_MAP with valid 4KB-aligned buffers -> SUCCESS
+    let req = SmcResult8 {
+        x0: ffa::FFA_RXTX_MAP,
+        x1: 0x6000_1000, // TX PA (4KB aligned)
+        x2: 0x6000_2000, // RX PA (4KB aligned)
+        x3: 1,           // 1 page
+        x4: 0, x5: 0, x6: 0, x7: 0,
+    };
+    let resp = dispatch_ffa(&req);
+    assert_eq!(resp.x0, ffa::FFA_SUCCESS_32);
+    pass += 1;
+
+    // Test 29: FFA_RXTX_MAP again -> DENIED (already mapped)
+    let resp = dispatch_ffa(&req);
+    assert_eq!(resp.x0, ffa::FFA_ERROR);
+    assert_eq!(resp.x2, ffa::FFA_DENIED as u64);
+    pass += 1;
+
+    // Test 30: FFA_RX_RELEASE -> SUCCESS (mapped)
+    let resp = dispatch_ffa(&zero_req(ffa::FFA_RX_RELEASE));
+    assert_eq!(resp.x0, ffa::FFA_SUCCESS_32);
+    pass += 1;
+
+    // Test 31: FFA_RXTX_UNMAP -> SUCCESS
+    let resp = dispatch_ffa(&zero_req(ffa::FFA_RXTX_UNMAP));
+    assert_eq!(resp.x0, ffa::FFA_SUCCESS_32);
+    pass += 1;
+
+    // Test 32: FFA_RXTX_UNMAP again -> DENIED (not mapped)
+    let resp = dispatch_ffa(&zero_req(ffa::FFA_RXTX_UNMAP));
+    assert_eq!(resp.x0, ffa::FFA_ERROR);
+    assert_eq!(resp.x2, ffa::FFA_DENIED as u64);
+    pass += 1;
+
+    // Test 33: FFA_RXTX_MAP with misaligned TX -> INVALID_PARAMETERS
+    let req = SmcResult8 {
+        x0: ffa::FFA_RXTX_MAP,
+        x1: 0x6000_1001, // Not aligned
+        x2: 0x6000_2000,
+        x3: 1,
+        x4: 0, x5: 0, x6: 0, x7: 0,
+    };
+    let resp = dispatch_ffa(&req);
+    assert_eq!(resp.x0, ffa::FFA_ERROR);
+    assert_eq!(resp.x2, ffa::FFA_INVALID_PARAMETERS as u64);
+    pass += 1;
 
     crate::uart_puts(b"    ");
     crate::print_u32(pass);

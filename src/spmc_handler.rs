@@ -5,47 +5,31 @@
 //! SPMD (EL3), which returns the first Normal World FF-A request. The SPMC
 //! then enters an event loop: dispatch the request, send the response via
 //! SMC, and receive the next request.
+//!
+//! TF-A v2.12 SPMD forwards FFA_RXTX_MAP, RXTX_UNMAP, RX_RELEASE, and
+//! PARTITION_INFO_GET from NWd directly to the SPMC. The SPMC manages NWd
+//! RXTX state and writes PARTITION_INFO descriptors to the NWd RX buffer.
 
 use crate::ffa;
 use crate::ffa::smc_forward::SmcResult8;
 
-// ── SPMC RXTX buffers (registered with SPMD for PARTITION_INFO relay) ──
+// ── NWd RXTX state (SPMD forwards RXTX_MAP from NWd to SPMC) ──
 
-/// 4KB-aligned page for SPMC TX/RX buffers.
-#[cfg(feature = "sel2")]
-#[repr(C, align(4096))]
-struct AlignedPage([u8; 4096]);
-
-#[cfg(feature = "sel2")]
-static mut SPMC_TX_BUF: AlignedPage = AlignedPage([0u8; 4096]);
-#[cfg(feature = "sel2")]
-static mut SPMC_RX_BUF: AlignedPage = AlignedPage([0u8; 4096]);
-
-/// Register SPMC's TX/RX buffers with SPMD via FFA_RXTX_MAP.
-///
-/// Must be called after SP boot completes, before `signal_spmc_ready()`.
-#[cfg(feature = "sel2")]
-pub fn spmc_register_rxtx() {
-    let tx_pa = &raw const SPMC_TX_BUF as u64;
-    let rx_pa = &raw const SPMC_RX_BUF as u64;
-    let result = crate::ffa::smc_forward::forward_smc8(
-        ffa::FFA_RXTX_MAP,
-        tx_pa,
-        rx_pa,
-        1, // 1 page
-        0,
-        0,
-        0,
-        0,
-    );
-    if result.x0 == ffa::FFA_SUCCESS_32 {
-        crate::uart_puts(b"[SPMC] RXTX registered with SPMD\n");
-    } else {
-        crate::uart_puts(b"[SPMC] WARNING: RXTX registration failed, x0=0x");
-        crate::uart_put_hex(result.x0);
-        crate::uart_puts(b"\n");
-    }
+/// Tracks the Normal World endpoint's RXTX buffer registration.
+/// SPMD at EL3 forwards FFA_RXTX_MAP from NWd to SPMC (not handled by SPMD).
+struct NwdRxtxState {
+    tx_pa: u64,
+    rx_pa: u64,
+    page_count: u32,
+    mapped: bool,
 }
+
+static mut NWD_RXTX: NwdRxtxState = NwdRxtxState {
+    tx_pa: 0,
+    rx_pa: 0,
+    page_count: 0,
+    mapped: false,
+};
 
 /// SPMC event loop — dispatches FF-A requests from SPMD (EL3) forever.
 ///
@@ -182,8 +166,7 @@ pub fn dispatch_ffa(req: &SmcResult8) -> SmcResult8 {
         ffa::FFA_FEATURES => {
             // Check if the queried function ID (in x1) is supported
             let queried_fid = req.x1;
-            // Note: FFA_RXTX_MAP is NOT listed here because SPMD handles
-            // NWd RXTX registration directly — it is never forwarded to SPMC.
+            // RXTX_MAP is listed because SPMD forwards it from NWd to SPMC.
             let supported = matches!(
                 queried_fid,
                 ffa::FFA_VERSION
@@ -193,6 +176,8 @@ pub fn dispatch_ffa(req: &SmcResult8) -> SmcResult8 {
                     | ffa::FFA_PARTITION_INFO_GET
                     | ffa::FFA_MSG_SEND_DIRECT_REQ_32
                     | ffa::FFA_MSG_SEND_DIRECT_REQ_64
+                    | ffa::FFA_RXTX_MAP
+                    | ffa::FFA_RX_RELEASE
             );
             if supported {
                 SmcResult8 {
@@ -209,6 +194,10 @@ pub fn dispatch_ffa(req: &SmcResult8) -> SmcResult8 {
                 make_error(ffa::FFA_NOT_SUPPORTED as u64)
             }
         }
+
+        ffa::FFA_RXTX_MAP => handle_rxtx_map(req),
+        ffa::FFA_RXTX_UNMAP => handle_rxtx_unmap(),
+        ffa::FFA_RX_RELEASE => handle_rx_release(),
 
         ffa::FFA_PARTITION_INFO_GET => {
             handle_partition_info_get()
@@ -238,7 +227,87 @@ pub fn dispatch_ffa(req: &SmcResult8) -> SmcResult8 {
     }
 }
 
-/// Handle PARTITION_INFO_GET — writes 24-byte descriptors to SPMC TX buffer.
+/// Handle FFA_RXTX_MAP — store NWd's TX/RX buffer PAs.
+///
+/// SPMD at EL3 forwards this from NWd to SPMC. We store the PAs for later
+/// use by PARTITION_INFO_GET (which writes descriptors directly to NWd's RX).
+fn handle_rxtx_map(req: &SmcResult8) -> SmcResult8 {
+    let tx_pa = req.x1;
+    let rx_pa = req.x2;
+    let page_count = req.x3 as u32;
+
+    // Validate alignment
+    if tx_pa & 0xFFF != 0 || rx_pa & 0xFFF != 0 || page_count == 0 {
+        return make_error(ffa::FFA_INVALID_PARAMETERS as u64);
+    }
+
+    unsafe {
+        if NWD_RXTX.mapped {
+            return make_error(ffa::FFA_DENIED as u64);
+        }
+        NWD_RXTX.tx_pa = tx_pa;
+        NWD_RXTX.rx_pa = rx_pa;
+        NWD_RXTX.page_count = page_count;
+        NWD_RXTX.mapped = true;
+    }
+
+    SmcResult8 {
+        x0: ffa::FFA_SUCCESS_32,
+        x1: 0,
+        x2: 0,
+        x3: 0,
+        x4: 0,
+        x5: 0,
+        x6: 0,
+        x7: 0,
+    }
+}
+
+/// Handle FFA_RXTX_UNMAP — clear NWd's RXTX registration.
+fn handle_rxtx_unmap() -> SmcResult8 {
+    unsafe {
+        if !NWD_RXTX.mapped {
+            return make_error(ffa::FFA_DENIED as u64);
+        }
+        NWD_RXTX.tx_pa = 0;
+        NWD_RXTX.rx_pa = 0;
+        NWD_RXTX.page_count = 0;
+        NWD_RXTX.mapped = false;
+    }
+
+    SmcResult8 {
+        x0: ffa::FFA_SUCCESS_32,
+        x1: 0,
+        x2: 0,
+        x3: 0,
+        x4: 0,
+        x5: 0,
+        x6: 0,
+        x7: 0,
+    }
+}
+
+/// Handle FFA_RX_RELEASE — acknowledge NWd has consumed the RX buffer.
+fn handle_rx_release() -> SmcResult8 {
+    unsafe {
+        if !NWD_RXTX.mapped {
+            return make_error(ffa::FFA_DENIED as u64);
+        }
+    }
+    // No-op: we write descriptors synchronously in PARTITION_INFO_GET.
+    SmcResult8 {
+        x0: ffa::FFA_SUCCESS_32,
+        x1: 0,
+        x2: 0,
+        x3: 0,
+        x4: 0,
+        x5: 0,
+        x6: 0,
+        x7: 0,
+    }
+}
+
+/// Handle PARTITION_INFO_GET — writes 24-byte descriptors to NWd's RX buffer.
 ///
 /// FF-A v1.1 partition info descriptor (DEN0077A Table 5.37):
 ///   Offset 0:  partition_id    (u16 LE)
@@ -246,35 +315,40 @@ pub fn dispatch_ffa(req: &SmcResult8) -> SmcResult8 {
 ///   Offset 4:  properties      (u32 LE)
 ///   Offset 8:  uuid[16]        (128-bit UUID)
 ///
-/// Returns SUCCESS + count in x2. SPMD copies TX→NWd RX.
+/// If NWd has registered RXTX, writes descriptors to NWd's RX PA.
+/// If no RXTX registered, returns count only (FF-A "count query" mode).
 fn handle_partition_info_get() -> SmcResult8 {
     let mut count = 0u64;
 
-    // Write descriptors for each registered SP into the TX buffer.
-    // In unit-test mode (no sel2 feature), we can't write to the TX buffer
-    // because it doesn't exist, so we just return the count.
+    // Write descriptors to NWd's RX buffer (sel2 mode) or just count (unit tests).
     #[cfg(feature = "sel2")]
     {
-        let tx_ptr = &raw mut SPMC_TX_BUF as *mut u8;
+        let mapped = unsafe { NWD_RXTX.mapped };
+        let rx_pa = unsafe { NWD_RXTX.rx_pa };
+        let max_bytes = if mapped {
+            unsafe { NWD_RXTX.page_count as usize * 4096 }
+        } else {
+            0
+        };
+
         crate::sp_context::for_each_sp(|sp| {
             let offset = count as usize * 24;
-            if offset + 24 > 4096 {
-                return; // TX buffer full
-            }
-            unsafe {
-                let ptr = tx_ptr.add(offset);
-                // partition_id (u16 LE)
-                core::ptr::write_unaligned(ptr as *mut u16, sp.sp_id());
-                // exec_ctx_count (u16 LE)
-                core::ptr::write_unaligned(ptr.add(2) as *mut u16, 1);
-                // properties (u32 LE) — bit 0: supports DIRECT_REQ
-                core::ptr::write_unaligned(ptr.add(4) as *mut u32, 0x1);
-                // UUID (16 bytes) — read from SpContext (parsed from SP manifest)
-                core::ptr::copy_nonoverlapping(
-                    sp.uuid().as_ptr() as *const u8,
-                    ptr.add(8),
-                    16,
-                );
+            if mapped && offset + 24 <= max_bytes {
+                unsafe {
+                    let ptr = (rx_pa as *mut u8).add(offset);
+                    // partition_id (u16 LE)
+                    core::ptr::write_unaligned(ptr as *mut u16, sp.sp_id());
+                    // exec_ctx_count (u16 LE)
+                    core::ptr::write_unaligned(ptr.add(2) as *mut u16, 1);
+                    // properties (u32 LE) — bit 0: supports DIRECT_REQ
+                    core::ptr::write_unaligned(ptr.add(4) as *mut u32, 0x1);
+                    // UUID (16 bytes) — read from SpContext
+                    core::ptr::copy_nonoverlapping(
+                        sp.uuid().as_ptr() as *const u8,
+                        ptr.add(8),
+                        16,
+                    );
+                }
             }
             count += 1;
         });
