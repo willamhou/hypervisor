@@ -1,6 +1,6 @@
 # ARM64 Hypervisor 开发计划
 
-**项目版本**: v0.23.0 (Sprint 5.1 Complete — DIRECT_REQ End-to-End NS→SPMD→SPMC→SP1)
+**项目版本**: v0.24.0 (Sprint 5.2 Complete — SPMC NWd RXTX + PARTITION_INFO_GET + Linux FF-A)
 **计划制定日期**: 2026-01-26
 **最后更新**: 2026-02-22
 **计划类型**: 敏捷迭代，灵活调整
@@ -9,7 +9,7 @@
 
 ## 📊 当前进度概览
 
-**整体完成度**: 🟢 **87%** (Milestone 0-2 + Options A-G + M3 Sprint 3.1/3.1b/3.1c/3.2 + M4 Sprint 4.1/4.2/4.3/4.4A/4.4B + Sprint 5.1 已完成)
+**整体完成度**: 🟢 **88%** (Milestone 0-2 + Options A-G + M3 Sprint 3.1/3.1b/3.1c/3.2 + M4 Sprint 4.1/4.2/4.3/4.4A/4.4B + Sprint 5.1/5.2 已完成)
 
 ```
 M0: 项目启动          ████████████████████ 100% ✅
@@ -17,13 +17,13 @@ M1: MVP基础虚拟化     █████████████████�
 M2: 增强功能          ████████████████████ 100% ✅
 M3: FF-A              ██████████████████░░  90% 🔧 (Sprint 3.2 ✅, Sprint 3.3 推迟到 M4)
 M4: S-EL2 SPMC        ████████████████████ 100% ✅ (Sprint 4.1/4.2/4.3/4.4A/4.4B ✅)
-M4→5 Bridge           ██████░░░░░░░░░░░░░░  30% 🔧 (Sprint 5.1 ✅ DIRECT_REQ E2E, Phase C/pKVM 未开始)
+M4→5 Bridge           ██████████░░░░░░░░░░  50% 🔧 (Sprint 5.1/5.2 ✅, Phase C/pKVM 未开始)
 M4.5: pKVM 集成       ░░░░░░░░░░░░░░░░░░░░   0% ⏸️ (NS-EL2=pKVM, S-EL2=us)
 M5: RME & CCA         ░░░░░░░░░░░░░░░░░░░░   0% ⏸️
 Android Boot          ██████████░░░░░░░░░░  50% ✅ (Phase 2 完成)
 ```
 
-**测试覆盖**: ~248 assertions / 33 test suites (100% pass)
+**测试覆盖**: ~262 assertions / 33 test suites (100% pass)
 **代码量**: ~18000 行
 **Linux启动**: 4 vCPU, BusyBox shell, virtio-blk, virtio-net, multi-VM, FF-A proxy
 **Android启动**: 4 vCPU, PL031 RTC, Binder IPC, minimal init, 1GB RAM
@@ -1285,10 +1285,11 @@ GitHub Actions配置：
 
 ## 9. 下一步行动
 
-### 🎯 当前位置：Sprint 5.1 ✅ → Sprint 5.2 (pKVM NS-EL2 + FF-A transport) 或 Phase C (Secure 中断路由)
+### 🎯 当前位置：Sprint 5.2 ✅ → Phase C (Secure 中断路由) 或 M4.5 (pKVM 集成)
 **可行性研究**: `docs/research/2026-02-20-phase4-feasibility.md` — FEASIBLE with moderate effort
 **Sprint 4.1/4.2/4.3/4.4A/4.4B 完成**: TF-A boot chain + hypervisor as BL33 (NS-EL2) + hypervisor as SPMC (S-EL2) + SPMC event loop + FF-A dispatch + SP boot at S-EL1
 **Sprint 5.1 完成**: DIRECT_REQ end-to-end (NS proxy → SPMD → SPMC → SP1), `tfa_boot` feature flag, 8-register SMC forwarding, SP1 x4+=0x1000 proof, 7/7 BL33 tests PASS
+**Sprint 5.2 完成**: SPMC NWd RXTX management (SPMD forwards RXTX_MAP/UNMAP/RX_RELEASE to SPMC), PARTITION_INFO_GET writes to NWd RX buffer, Linux FF-A discovery, 8/8 BL33 tests PASS, 33 SPMC handler assertions
 
 **Phase 8+ 候选方向** (选择一个):
 
