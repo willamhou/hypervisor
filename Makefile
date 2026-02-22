@@ -1,4 +1,4 @@
-.PHONY: all build run debug clean build-qemu build-bl32-bl33 build-tfa build-tfa-bl33 build-spmc build-sp-hello build-sp-irq build-tfa-spmc build-tfa-full run-sel2 run-tfa-linux run-tfa-linux-ffa run-spmc build-pkvm-dtb run-pkvm
+.PHONY: all build run debug clean build-qemu build-bl32-bl33 build-tfa build-tfa-bl33 build-spmc build-sp-hello build-sp-irq build-tfa-spmc build-tfa-full build-tfa-pkvm run-sel2 run-tfa-linux run-tfa-linux-ffa run-spmc build-pkvm-dtb run-pkvm
 
 # Auto-load Cargo environment
 SHELL := /bin/bash
@@ -355,19 +355,40 @@ run-tfa-linux-ffa:
 # pKVM DTB (kvm-arm.mode=protected, psci method=smc)
 PKVM_DTB ?= guest/linux/guest-pkvm.dtb
 
+# TF-A flash with ARM_LINUX_KERNEL_AS_BL33 (passes DTB addr in x0 to Linux)
+TFA_FLASH_PKVM := $(TFA_DIR)/flash-pkvm.bin
+
 # Build pKVM DTB from source
 build-pkvm-dtb:
 	dtc -I dts -O dtb guest/linux/guest-pkvm.dts -o $(PKVM_DTB)
 
+# Build TF-A with SPMC + Linux kernel as BL33 (ARM_LINUX_KERNEL_AS_BL33=1)
+build-tfa-pkvm: build-bl32-bl33 build-spmc build-sp-hello build-sp-irq
+	@echo "Replacing bl32.bin with real SPMC..."
+	docker run --rm \
+	    -v $(PWD)/tfa:/output \
+	    -v $(PWD)/$(SPMC_BIN):/spmc.bin:ro \
+	    debian:bookworm-slim cp /spmc.bin /output/bl32.bin
+	@echo "Building TF-A with SPMC + Linux as BL33 (ARM_LINUX_KERNEL_AS_BL33=1)..."
+	docker run --rm \
+	    -v $(PWD)/tfa:/output \
+	    -v $(PWD):/src \
+	    -v tfa-pkvm-build-cache:/output/tfa-src \
+	    -e TFA_PRELOADED_BL33_BASE=0x40200000 \
+	    -e TFA_LINUX_AS_BL33=1 \
+	    -e TFA_DTB_BASE=0x47000000 \
+	    debian:bookworm-slim bash /src/scripts/build-tfa.sh
+	mv $(TFA_DIR)/flash.bin $(TFA_FLASH_PKVM)
+
 # Boot: TF-A → SPMC (S-EL2) → pKVM kernel (NS-EL2) → Linux host (NS-EL1)
 # BL33 = Linux kernel (not our hypervisor) — pKVM replaces our NS-EL2 code
 run-pkvm: build-pkvm-dtb
-	@test -f $(TFA_FLASH_FULL) || (echo "ERROR: $(TFA_FLASH_FULL) not found. Run 'make build-tfa-full' first." && exit 1)
+	@test -f $(TFA_FLASH_PKVM) || (echo "ERROR: $(TFA_FLASH_PKVM) not found. Run 'make build-tfa-pkvm' first." && exit 1)
 	@echo "Starting pKVM + SPMC boot chain..."
 	@echo "Press Ctrl+A then X to exit QEMU"
 	$(QEMU_SEL2) -machine virt,secure=on,virtualization=on,gic-version=3 \
 	    -cpu max,pauth-impdef=on -smp 4 -m 2G -nographic \
-	    -bios $(TFA_FLASH_FULL) \
+	    -bios $(TFA_FLASH_PKVM) \
 	    -device loader,file=$(LINUX_IMAGE),addr=0x40200000,force-raw=on \
 	    -device loader,file=$(PKVM_DTB),addr=0x47000000,force-raw=on \
 	    -device loader,file=$(LINUX_INITRAMFS),addr=0x54000000,force-raw=on \
@@ -404,6 +425,7 @@ help:
 	@echo "  build-sp-irq  - Build SP IRQ binary (S-EL1, interrupt handling)"
 	@echo "  build-tfa-spmc - Build TF-A with real SPMC as BL32"
 	@echo "  run-spmc      - Boot TF-A with real SPMC at S-EL2"
+	@echo "  build-tfa-pkvm - Build TF-A with SPMC + Linux as BL33 (Phase 4.5)"
 	@echo "  run-pkvm      - Boot TF-A -> SPMC -> pKVM kernel -> Linux (Phase 4.5)"
 	@echo "  build-tfa     - Build TF-A + flash.bin with SPD=spmd"
 	@echo "  build-tfa-bl33 - Build TF-A flash.bin with preloaded BL33"

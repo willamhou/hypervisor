@@ -69,6 +69,17 @@ if [ -n "${TFA_PRELOADED_BL33_BASE:-}" ]; then
     make PLAT=qemu realclean 2>/dev/null || true
 fi
 
+# Support ARM_LINUX_KERNEL_AS_BL33: pass DTB address in x0 to BL33
+# (Linux kernel boot protocol requires x0=DTB, not MPIDR)
+if [ -n "${TFA_LINUX_AS_BL33:-}" ]; then
+    EXTRA_ARGS="${EXTRA_ARGS} ARM_LINUX_KERNEL_AS_BL33=1"
+    echo ">>> ARM_LINUX_KERNEL_AS_BL33=1"
+    if [ -n "${TFA_DTB_BASE:-}" ]; then
+        EXTRA_ARGS="${EXTRA_ARGS} ARM_PRELOADED_DTB_BASE=${TFA_DTB_BASE}"
+        echo ">>> ARM_PRELOADED_DTB_BASE=${TFA_DTB_BASE}"
+    fi
+fi
+
 # Build TF-A with SPMD at EL3 + SPMC at S-EL2
 echo ">>> Building TF-A..."
 make -j${NCPU} \
