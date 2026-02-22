@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Overview
 
-ARM64 Type-1 bare-metal hypervisor written in Rust (no_std) with ARM64 assembly. Runs at EL2 (hypervisor exception level) and manages guest VMs at EL1. Targets QEMU virt machine. Boots Linux 6.12.12 to BusyBox shell with 4 vCPUs, virtio-blk storage, and virtio-net inter-VM networking. Supports multi-VM with per-VM Stage-2, VMID-tagged TLBs, two-level scheduling, and L2 virtual switch. Includes FF-A v1.1 proxy with stub SPMC, page ownership validation via Stage-2 PTE SW bits, FF-A v1.1 descriptor parsing, SMC forwarding to EL3, and VM-to-VM memory sharing (MEM_RETRIEVE/RELINQUISH with dynamic Stage-2 page mapping). Android boot with PL031 RTC emulation, Binder IPC, binderfs, minimal init, 1GB guest RAM. Dual boot modes: NS-EL2 hypervisor via `make run-tfa-linux` (BL33) and S-EL2 SPMC via `make run-spmc` (BL32). TF-A boot chain: BL1→BL2→BL31(SPMD)→BL32(SPMC)→BL33 with manifest FDT parsing. SPMC boots SP Hello at S-EL1 via ERET with Secure Stage-2, dispatches NWd→SP DIRECT_REQ/RESP messaging.
+ARM64 Type-1 bare-metal hypervisor written in Rust (no_std) with ARM64 assembly. Runs at EL2 (hypervisor exception level) and manages guest VMs at EL1. Targets QEMU virt machine. Boots Linux 6.12.12 to BusyBox shell with 4 vCPUs, virtio-blk storage, and virtio-net inter-VM networking. Supports multi-VM with per-VM Stage-2, VMID-tagged TLBs, two-level scheduling, and L2 virtual switch. Includes FF-A v1.1 proxy with stub SPMC, page ownership validation via Stage-2 PTE SW bits, FF-A v1.1 descriptor parsing, SMC forwarding to EL3, and VM-to-VM memory sharing (MEM_RETRIEVE/RELINQUISH with dynamic Stage-2 page mapping). Android boot with PL031 RTC emulation, Binder IPC, binderfs, minimal init, 1GB guest RAM. Dual boot modes: NS-EL2 hypervisor via `make run-tfa-linux` (BL33, `tfa_boot` feature) and S-EL2 SPMC via `make run-spmc` (BL32). TF-A boot chain: BL1→BL2→BL31(SPMD)→BL32(SPMC)→BL33 with manifest FDT parsing. SPMC boots SP Hello at S-EL1 via ERET with Secure Stage-2, dispatches NWd→SP DIRECT_REQ/RESP messaging. End-to-end FF-A DIRECT_REQ: NS proxy → SPMD → SPMC → SP1 (SP modifies x4 += 0x1000 as proof), 7/7 BL33 integration tests pass.
 
 ## Build Commands
 
@@ -39,8 +39,9 @@ make fmt          # Format code
 - `multi_pcpu` — Multi-pCPU support (implies `linux_guest`): 1:1 vCPU-to-pCPU affinity, PSCI boot, TPIDR_EL2 context, SpinLock devices
 - `multi_vm` — Multi-VM support (implies `linux_guest`): 2 VMs time-sliced on 1 pCPU, per-VM Stage-2/VMID, per-VM DeviceManager
 - `sel2` — S-EL2 SPMC mode: hypervisor as BL32 (SPMC role), separate boot_sel2.S entry, linker base 0x0e100000 (secure DRAM), manifest parsing, FFA_MSG_WAIT handshake
+- `tfa_boot` — TF-A boot mode (implies `linux_guest`): sets SPMC_PRESENT=true at compile time, NS proxy forwards DIRECT_REQ to real SPMC via 8-register SMC
 
-**Note**: `multi_pcpu` and `multi_vm` are mutually exclusive — both imply `linux_guest` but use different scheduling models. `sel2` is mutually exclusive with all others.
+**Note**: `multi_pcpu` and `multi_vm` are mutually exclusive — both imply `linux_guest` but use different scheduling models. `sel2` is mutually exclusive with all others. `tfa_boot` is used with `run-tfa-linux` when a real SPMC is available at S-EL2.
 
 **Toolchain requirements**: Rust nightly, `aarch64-linux-gnu-gcc`, `aarch64-linux-gnu-ar`, `aarch64-linux-gnu-objcopy`, `qemu-system-aarch64`
 
@@ -391,7 +392,8 @@ NS-EL1: Linux/Android guest
 ```
 
 **Phase 3** (done): NS-EL2 complete — 2MB block split, FF-A notifications, indirect messaging
-**Phase 4** (in progress): QEMU `secure=on` + TF-A boot chain → Sprint 4.1-4.4 done (SPMC + SP Hello + 6/6 BL33 tests)
+**Phase 4** (done): QEMU `secure=on` + TF-A boot chain → Sprint 4.1-4.4 done (SPMC + SP Hello + 7/7 BL33 tests)
+**Sprint 5.1** (done): DIRECT_REQ end-to-end — `tfa_boot` feature, NS proxy → SPMD → SPMC → SP1 (x4 += 0x1000 proof)
 **Phase 4.5**: pKVM at NS-EL2 + our SPMC at S-EL2 → end-to-end FF-A path
 **Phase 5**: RME & CCA (Realm Manager)
 

@@ -1,22 +1,23 @@
 # ARM64 Hypervisor 开发计划
 
-**项目版本**: v0.22.0 (Phase 22 Complete — SP Boot at S-EL1 + DIRECT_REQ Dispatch)
+**项目版本**: v0.23.0 (Sprint 5.1 Complete — DIRECT_REQ End-to-End NS→SPMD→SPMC→SP1)
 **计划制定日期**: 2026-01-26
-**最后更新**: 2026-02-21
+**最后更新**: 2026-02-22
 **计划类型**: 敏捷迭代，灵活调整
 
 ---
 
 ## 📊 当前进度概览
 
-**整体完成度**: 🟢 **85%** (Milestone 0-2 + Options A-G + M3 Sprint 3.1/3.1b/3.1c/3.2 + M4 Sprint 4.1/4.2/4.3/4.4A/4.4B 已完成)
+**整体完成度**: 🟢 **87%** (Milestone 0-2 + Options A-G + M3 Sprint 3.1/3.1b/3.1c/3.2 + M4 Sprint 4.1/4.2/4.3/4.4A/4.4B + Sprint 5.1 已完成)
 
 ```
 M0: 项目启动          ████████████████████ 100% ✅
 M1: MVP基础虚拟化     ████████████████████ 100% ✅
 M2: 增强功能          ████████████████████ 100% ✅
 M3: FF-A              ██████████████████░░  90% 🔧 (Sprint 3.2 ✅, Sprint 3.3 推迟到 M4)
-M4: S-EL2 SPMC        ██████████████████░░  90% 🔧 (Sprint 4.1/4.2/4.3/4.4A/4.4B ✅, Phase C 未开始)
+M4: S-EL2 SPMC        ████████████████████ 100% ✅ (Sprint 4.1/4.2/4.3/4.4A/4.4B ✅)
+M4→5 Bridge           ██████░░░░░░░░░░░░░░  30% 🔧 (Sprint 5.1 ✅ DIRECT_REQ E2E, Phase C/pKVM 未开始)
 M4.5: pKVM 集成       ░░░░░░░░░░░░░░░░░░░░   0% ⏸️ (NS-EL2=pKVM, S-EL2=us)
 M5: RME & CCA         ░░░░░░░░░░░░░░░░░░░░   0% ⏸️
 Android Boot          ██████████░░░░░░░░░░  50% ✅ (Phase 2 完成)
@@ -1262,7 +1263,7 @@ GitHub Actions配置：
 - [x] **M3 FF-A**: VM 与 SP 内存共享 + 2MB block 拆分 + notifications ✅ **核心完成 2026-02-20** (proxy + stub SPMC + VM-to-VM + 2MB split + notifications + indirect messaging)
 - [x] **Android Phase 1**: Linux 6.6.126 + Android config boots to BusyBox shell ✅ **已完成 2026-02-19**
 - [x] **Android Phase 2**: PL031 RTC + Android init + 1GB RAM + binderfs ✅ **已完成 2026-02-19**
-- [ ] **M4 S-EL2**: 我们的 hypervisor 作为 SPMC 在 S-EL2 运行 (TF-A boot chain) 🔧 **Sprint 4.1/4.2/4.3 ✅** (BL32 SPMC boots at S-EL2, BL33 via TF-A boots Linux)
+- [x] **M4 S-EL2**: 我们的 hypervisor 作为 SPMC 在 S-EL2 运行 (TF-A boot chain) ✅ **Sprint 4.1/4.2/4.3/4.4 + 5.1 完成** (SPMC + SP + DIRECT_REQ E2E, 7/7 BL33 tests)
 - [ ] **M4.5 pKVM**: pKVM(NS-EL2) + 我们的 SPMC(S-EL2) + FF-A 端到端 ⏸️ **未开始**
 - [ ] **M5 CCA**: Realm VM 启动 Guest OS ⏸️ **未开始**
 
@@ -1284,9 +1285,10 @@ GitHub Actions配置：
 
 ## 9. 下一步行动
 
-### 🎯 当前位置：M4 Sprint 4.4 Phase B ✅ → M4 Sprint 4.4 Phase C 准备 (Secure 中断路由) 或 M4.5 pKVM 集成
+### 🎯 当前位置：Sprint 5.1 ✅ → Sprint 5.2 (pKVM NS-EL2 + FF-A transport) 或 Phase C (Secure 中断路由)
 **可行性研究**: `docs/research/2026-02-20-phase4-feasibility.md` — FEASIBLE with moderate effort
-**Sprint 4.1/4.2/4.3/4.4A 完成**: TF-A boot chain + hypervisor as BL33 (NS-EL2) + hypervisor as SPMC (S-EL2) + SPMC event loop + FF-A dispatch
+**Sprint 4.1/4.2/4.3/4.4A/4.4B 完成**: TF-A boot chain + hypervisor as BL33 (NS-EL2) + hypervisor as SPMC (S-EL2) + SPMC event loop + FF-A dispatch + SP boot at S-EL1
+**Sprint 5.1 完成**: DIRECT_REQ end-to-end (NS proxy → SPMD → SPMC → SP1), `tfa_boot` feature flag, 8-register SMC forwarding, SP1 x4+=0x1000 proof, 7/7 BL33 tests PASS
 
 **Phase 8+ 候选方向** (选择一个):
 
