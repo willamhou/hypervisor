@@ -191,11 +191,12 @@ _start:
     ldr     x9, =FFA_DIRECT_RESP_32
     cmp     x0, x9
     b.ne    .Lfail_6
-    /* Check echoed payload x3, x4, x5 */
+    /* Check payload: x3 echoed, x4 += 0x1000 by SP, x5 echoed */
     movz    x9, #0xAAAA
     cmp     x3, x9
     b.ne    .Lfail_6
-    movz    x9, #0xBBBB
+    /* x4: SP adds 0x1000 to x4 -> 0xBBBB + 0x1000 = 0xCBBB */
+    movz    x9, #0xCBBB
     cmp     x4, x9
     b.ne    .Lfail_6
     movz    x9, #0xCCCC
@@ -203,8 +204,48 @@ _start:
     b.ne    .Lfail_6
     adr     x0, str_pass
     bl      uart_print
-    b       .Ldone
+    b       .Ltest_7
 .Lfail_6:
+    adr     x0, str_fail
+    bl      uart_print
+
+    /* ============ Test 7: DIRECT_REQ via real SP (x4 += 0x1000) ============ */
+.Ltest_7:
+    adr     x0, str_t7
+    bl      uart_print
+
+    ldr     x0, =FFA_DIRECT_REQ_32
+    /* x1: source=0x0001 (NWd VM), dest=0x8001 (SP1) */
+    movz    x1, #0x8001
+    movk    x1, #0x0001, lsl #16
+    mov     x2, xzr
+    movz    x3, #0xAAAA            /* payload */
+    movz    x4, #0xBBBB            /* SP will add 0x1000 -> 0xCBBB */
+    movz    x5, #0xCCCC
+    movz    x6, #0xDDDD
+    movz    x7, #0xEEEE
+    smc     #0
+
+    /* x0 should be FFA_DIRECT_RESP_32 */
+    ldr     x9, =FFA_DIRECT_RESP_32
+    cmp     x0, x9
+    b.ne    .Lfail_7
+    /* x3 should be echoed unchanged */
+    movz    x9, #0xAAAA
+    cmp     x3, x9
+    b.ne    .Lfail_7
+    /* x4 should be 0xBBBB + 0x1000 = 0xCBBB (SP proof) */
+    movz    x9, #0xCBBB
+    cmp     x4, x9
+    b.ne    .Lfail_7
+    /* x5 should be echoed unchanged */
+    movz    x9, #0xCCCC
+    cmp     x5, x9
+    b.ne    .Lfail_7
+    adr     x0, str_pass
+    bl      uart_print
+    b       .Ldone
+.Lfail_7:
     adr     x0, str_fail
     bl      uart_print
 
@@ -248,6 +289,8 @@ str_t5:
     .asciz "  Test 5: PARTITION_INFO_GET ........ "
 str_t6:
     .asciz "  Test 6: DIRECT_REQ echo .......... "
+str_t7:
+    .asciz "  Test 7: DIRECT_REQ real SP ....... "
 str_pass:
     .asciz "PASS\r\n"
 str_fail:

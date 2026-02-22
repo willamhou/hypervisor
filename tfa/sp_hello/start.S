@@ -59,10 +59,12 @@ _start:
     and     x9, x1, #0xFFFF     /* x9 = dest (our SP ID) */
     orr     x1, x8, x9, lsl #16 /* x1 = (dest << 16) | source */
 
-    /* Build DIRECT_RESP: echo x3-x7, x2=0 */
+    /* Build DIRECT_RESP: echo x3,x5,x6,x7; modify x4 += 0x1000 as proof */
     ldr     x0, =FFA_DIRECT_RESP_32
     mov     x2, xzr
-    /* x3-x7 already contain the payload — pass through */
+    /* x3 passed through unchanged */
+    add     x4, x4, #0x1000     /* SP signature: x4 += 0x1000 */
+    /* x5-x7 passed through unchanged */
     smc     #0
 
     /* After ERET from SPMC with next request */

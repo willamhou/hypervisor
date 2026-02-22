@@ -229,8 +229,8 @@ build-tfa-bl33: build-bl32-bl33
 # Boot: TF-A → BL32 (stub S-EL2) → BL33 (our hypervisor at NS-EL2) → Linux
 run-tfa-linux:
 	@test -f $(TFA_FLASH_BL33) || (echo "ERROR: $(TFA_FLASH_BL33) not found. Run 'make build-tfa-bl33' first." && exit 1)
-	@echo "Building hypervisor with Linux guest support..."
-	cargo build --target aarch64-unknown-none --features linux_guest
+	@echo "Building hypervisor with TF-A boot support..."
+	cargo build --target aarch64-unknown-none --features tfa_boot
 	@echo "Creating raw binary..."
 	aarch64-linux-gnu-objcopy -O binary $(BINARY) $(BINARY_BIN)
 	@echo "Starting TF-A → hypervisor → Linux boot chain..."

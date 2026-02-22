@@ -18,10 +18,27 @@ static SPMC_PRESENT: AtomicBool = AtomicBool::new(false);
 ///
 /// Called once at boot before guest entry.
 pub fn init() {
-    if smc_forward::probe_spmc() {
+    // When booted through TF-A (tfa_boot feature), SPMD+SPMC are present
+    // by construction — no runtime probing needed.
+    #[cfg(feature = "tfa_boot")]
+    {
         SPMC_PRESENT.store(true, Ordering::Relaxed);
-        crate::uart_puts(b"[FFA] Real SPMC detected at EL3\n");
+        crate::uart_puts(b"[FFA] TF-A boot: SPMC present (build-time)\n");
+        return;
     }
+
+    #[cfg(not(feature = "tfa_boot"))]
+    {
+        if smc_forward::probe_spmc() {
+            SPMC_PRESENT.store(true, Ordering::Relaxed);
+            crate::uart_puts(b"[FFA] Real SPMC detected at EL3\n");
+        }
+    }
+}
+
+/// Check if a real SPMC is present (for testing/debugging).
+pub fn spmc_present() -> bool {
+    SPMC_PRESENT.load(Ordering::Relaxed)
 }
 
 /// Handle an FF-A SMC call from guest.
@@ -90,9 +107,11 @@ pub fn handle_ffa_call(context: &mut VcpuContext) -> bool {
     }
 }
 
-/// Forward an FF-A call transparently to the Secure World.
+/// Forward an FF-A call transparently to the Secure World (8-register).
+///
+/// Uses forward_smc8() to preserve x4-x7 (needed for DIRECT_REQ/RESP payload).
 fn forward_ffa_to_spmc(context: &mut VcpuContext) -> bool {
-    let result = smc_forward::forward_smc(
+    let result = smc_forward::forward_smc8(
         context.gp_regs.x0,
         context.gp_regs.x1,
         context.gp_regs.x2,
@@ -106,6 +125,10 @@ fn forward_ffa_to_spmc(context: &mut VcpuContext) -> bool {
     context.gp_regs.x1 = result.x1;
     context.gp_regs.x2 = result.x2;
     context.gp_regs.x3 = result.x3;
+    context.gp_regs.x4 = result.x4;
+    context.gp_regs.x5 = result.x5;
+    context.gp_regs.x6 = result.x6;
+    context.gp_regs.x7 = result.x7;
     true
 }
 
@@ -318,13 +341,17 @@ fn handle_msg_send_direct_req(context: &mut VcpuContext) -> bool {
         return true;
     }
 
-    // Validate receiver is a known SP
+    // If real SPMC present and receiver is an SP (ID >= 0x8000), forward
+    if SPMC_PRESENT.load(Ordering::Relaxed) && receiver >= FFA_SPMC_ID {
+        return forward_ffa_to_spmc(context);
+    }
+
+    // Stub path: validate receiver is a known SP, echo x3-x7
     if !stub_spmc::is_valid_sp(receiver) {
         ffa_error(context, FFA_INVALID_PARAMETERS);
         return true;
     }
 
-    // Stub SPMC: echo back x3-x7 as direct response
     let x3 = context.gp_regs.x3;
     let x4 = context.gp_regs.x4;
     let x5 = context.gp_regs.x5;
