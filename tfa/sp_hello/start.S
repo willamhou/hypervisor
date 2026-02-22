@@ -59,6 +59,25 @@ _start:
     and     x9, x1, #0xFFFF     /* x9 = dest (our SP ID) */
     orr     x1, x8, x9, lsl #16 /* x1 = (dest << 16) | source */
 
+    /* Check for slow-path trigger: x3 == 0xDEADBEEF */
+    ldr     x8, =0xDEADBEEF
+    cmp     x3, x8
+    b.ne    .Lfast_path
+
+    /* Slow path: busy-loop ~2M iterations (long enough for CNTHP timer) */
+    mov     x8, #0x200000       /* 2M iterations */
+.Lslow_loop:
+    sub     x8, x8, #1
+    cbnz    x8, .Lslow_loop
+
+    /* Slow-path response: x4 += 0x2000 (distinguishes from fast path) */
+    ldr     x0, =FFA_DIRECT_RESP_32
+    mov     x2, xzr
+    add     x4, x4, #0x2000
+    smc     #0
+    b       .Lmsg_loop
+
+.Lfast_path:
     /* Build DIRECT_RESP: echo x3,x5,x6,x7; modify x4 += 0x1000 as proof */
     ldr     x0, =FFA_DIRECT_RESP_32
     mov     x2, xzr

@@ -18,6 +18,8 @@ pub enum SpState {
     Running,
     /// SP is blocked waiting for an event.
     Blocked,
+    /// SP was preempted by NS interrupt, resume via FFA_RUN.
+    Preempted,
 }
 
 /// Per-SP context: register state + metadata.
@@ -97,6 +99,8 @@ impl SpContext {
             (SpState::Running, SpState::Idle) => true,
             (SpState::Running, SpState::Blocked) => true,
             (SpState::Blocked, SpState::Running) => true,
+            (SpState::Running, SpState::Preempted) => true,
+            (SpState::Preempted, SpState::Running) => true,
             _ => false,
         };
         if valid {

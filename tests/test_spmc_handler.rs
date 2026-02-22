@@ -164,6 +164,29 @@ pub fn run_tests() {
     assert_eq!(resp.x2, ffa::FFA_INVALID_PARAMETERS as u64);
     pass += 1;
 
+    // Test 34: FFA_FEATURES(FFA_RUN) -> SUCCESS
+    let mut req = zero_req(ffa::FFA_FEATURES);
+    req.x1 = ffa::FFA_RUN;
+    let resp = dispatch_ffa(&req);
+    assert_eq!(resp.x0, ffa::FFA_SUCCESS_32);
+    pass += 1;
+
+    // Test 35: FFA_RUN with non-existent SP -> INVALID_PARAMETERS
+    let mut req = zero_req(ffa::FFA_RUN);
+    req.x1 = 0x9999 << 16; // non-existent SP
+    let resp = dispatch_ffa(&req);
+    assert_eq!(resp.x0, ffa::FFA_ERROR);
+    assert_eq!(resp.x2, ffa::FFA_INVALID_PARAMETERS as u64);
+    pass += 1;
+
+    // Test 36: FFA_RUN with SP in Idle state -> DENIED
+    let mut req = zero_req(ffa::FFA_RUN);
+    req.x1 = 0x8001 << 16; // SP1 (registered above, in Idle state)
+    let resp = dispatch_ffa(&req);
+    assert_eq!(resp.x0, ffa::FFA_ERROR);
+    assert_eq!(resp.x2, ffa::FFA_DENIED as u64);
+    pass += 1;
+
     crate::uart_puts(b"    ");
     crate::print_u32(pass);
     crate::uart_puts(b" assertions passed\n");

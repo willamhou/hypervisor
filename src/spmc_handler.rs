@@ -12,6 +12,14 @@
 
 use crate::ffa;
 use crate::ffa::smc_forward::SmcResult8;
+use core::sync::atomic::AtomicBool;
+#[cfg(feature = "sel2")]
+use core::sync::atomic::Ordering;
+
+/// Flag set by the IRQ handler when a physical IRQ preempts SP execution.
+/// The SPMC event loop checks this after enter_guest() returns to decide
+/// whether to return FFA_INTERRUPT (preempted) or DIRECT_RESP (completed).
+pub static SP_IRQ_PREEMPTED: AtomicBool = AtomicBool::new(false);
 
 // ── NWd RXTX state (SPMD forwards RXTX_MAP from NWd to SPMC) ──
 
@@ -67,10 +75,20 @@ fn dispatch_request(req: &SmcResult8) -> SmcResult8 {
             return dispatch_to_sp(req, dest);
         }
     }
+    // FFA_RUN: resume a preempted SP
+    if req.x0 == ffa::FFA_RUN {
+        let sp_id = ((req.x1 >> 16) & 0xFFFF) as u16;
+        return resume_preempted_sp(sp_id);
+    }
     dispatch_ffa(req)
 }
 
 /// Route DIRECT_REQ to an SP: ERET, wait for response, return it.
+///
+/// Arms the CNTHP preemption timer before SP entry. After enter_guest()
+/// returns, checks SP_IRQ_PREEMPTED to determine if the SP was preempted
+/// by a physical IRQ (returns FFA_INTERRUPT) or completed normally
+/// (returns DIRECT_RESP).
 #[cfg(feature = "sel2")]
 fn dispatch_to_sp(req: &SmcResult8, sp_id: u16) -> SmcResult8 {
     let sp = match crate::sp_context::get_sp_mut(sp_id) {
@@ -87,6 +105,10 @@ fn dispatch_to_sp(req: &SmcResult8, sp_id: u16) -> SmcResult8 {
     sp.transition_to(crate::sp_context::SpState::Running)
         .expect("SP Running transition failed");
 
+    // Clear preemption flag and arm timer before SP entry
+    SP_IRQ_PREEMPTED.store(false, Ordering::Release);
+    crate::arch::aarch64::peripherals::timer::arm_preemption_timer();
+
     // Reinstall SP's Secure Stage-2 and ERET
     let s2 = crate::secure_stage2::SecureStage2Config::new_from_vsttbr(sp.vsttbr());
     s2.install();
@@ -97,7 +119,91 @@ fn dispatch_to_sp(req: &SmcResult8, sp_id: u16) -> SmcResult8 {
         )
     };
 
-    // SP trapped back
+    crate::arch::aarch64::peripherals::timer::disarm_preemption_timer();
+
+    // Check if SP was preempted by a physical IRQ
+    if SP_IRQ_PREEMPTED.swap(false, Ordering::Acquire) {
+        // SP preempted — save context (already saved by enter_guest), mark Preempted
+        sp.transition_to(crate::sp_context::SpState::Preempted)
+            .expect("SP Preempted transition failed");
+        return SmcResult8 {
+            x0: ffa::FFA_INTERRUPT,
+            x1: 0,
+            x2: 0,
+            x3: 0,
+            x4: 0,
+            x5: 0,
+            x6: 0,
+            x7: 0,
+        };
+    }
+
+    // SP completed normally — transition to Idle, return DIRECT_RESP
+    sp.transition_to(crate::sp_context::SpState::Idle)
+        .expect("SP Idle transition failed");
+
+    let (x0, x1, x2, x3, x4, x5, x6, x7) = sp.get_args();
+    SmcResult8 {
+        x0,
+        x1,
+        x2,
+        x3,
+        x4,
+        x5,
+        x6,
+        x7,
+    }
+}
+
+/// Resume a preempted SP via FFA_RUN. Returns FFA_INTERRUPT if preempted
+/// again, or the SP's DIRECT_RESP when it completes.
+#[cfg(feature = "sel2")]
+fn resume_preempted_sp(sp_id: u16) -> SmcResult8 {
+    let sp = match crate::sp_context::get_sp_mut(sp_id) {
+        Some(sp) => sp,
+        None => return make_error(ffa::FFA_INVALID_PARAMETERS as u64),
+    };
+
+    if sp.state() != crate::sp_context::SpState::Preempted {
+        return make_error(ffa::FFA_DENIED as u64);
+    }
+
+    sp.transition_to(crate::sp_context::SpState::Running)
+        .expect("SP Running transition failed");
+
+    // Clear preemption flag and arm timer before resume
+    SP_IRQ_PREEMPTED.store(false, Ordering::Release);
+    crate::arch::aarch64::peripherals::timer::arm_preemption_timer();
+
+    // Reinstall SP's Secure Stage-2 and ERET (resumes from saved PC)
+    let s2 = crate::secure_stage2::SecureStage2Config::new_from_vsttbr(sp.vsttbr());
+    s2.install();
+
+    let _exit = unsafe {
+        crate::arch::aarch64::enter_guest(
+            sp.vcpu_ctx_mut() as *mut crate::arch::aarch64::regs::VcpuContext,
+        )
+    };
+
+    crate::arch::aarch64::peripherals::timer::disarm_preemption_timer();
+
+    // Check if SP was preempted again
+    if SP_IRQ_PREEMPTED.swap(false, Ordering::Acquire) {
+        sp.transition_to(crate::sp_context::SpState::Preempted)
+            .expect("SP Preempted transition failed");
+        return SmcResult8 {
+            x0: ffa::FFA_INTERRUPT,
+            x1: 0,
+            x2: 0,
+            x3: 0,
+            x4: 0,
+            x5: 0,
+            x6: 0,
+            x7: 0,
+        };
+    }
+
+    // SP completed — transition to Idle, return DIRECT_RESP
     sp.transition_to(crate::sp_context::SpState::Idle)
         .expect("SP Idle transition failed");
 
@@ -178,6 +284,7 @@ pub fn dispatch_ffa(req: &SmcResult8) -> SmcResult8 {
                     | ffa::FFA_MSG_SEND_DIRECT_REQ_64
                     | ffa::FFA_RXTX_MAP
                     | ffa::FFA_RX_RELEASE
+                    | ffa::FFA_RUN
             );
             if supported {
                 SmcResult8 {
@@ -193,6 +300,21 @@ pub fn dispatch_ffa(req: &SmcResult8) -> SmcResult8 {
             } else {
                 make_error(ffa::FFA_NOT_SUPPORTED as u64)
             }
+        }
+
+        ffa::FFA_RUN => {
+            // FFA_RUN: x1[31:16] = target SP ID
+            let sp_id = ((req.x1 >> 16) & 0xFFFF) as u16;
+            if !crate::sp_context::is_registered_sp(sp_id) {
+                return make_error(ffa::FFA_INVALID_PARAMETERS as u64);
+            }
+            let sp = crate::sp_context::get_sp_mut(sp_id).unwrap();
+            if sp.state() != crate::sp_context::SpState::Preempted {
+                return make_error(ffa::FFA_DENIED as u64);
+            }
+            // In sel2 mode, dispatch_request() handles this before we get here.
+            // In unit tests (no sel2), just validate the state.
+            make_error(ffa::FFA_NOT_SUPPORTED as u64)
         }
 
         ffa::FFA_RXTX_MAP => handle_rxtx_map(req),

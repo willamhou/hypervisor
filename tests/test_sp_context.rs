@@ -50,6 +50,24 @@ pub fn run_tests() {
     assert_eq!(x7, 0x22);
     pass += 3;
 
+    // Test 17-18: Running -> Preempted transition
+    let mut ctx5 = SpContext::new(0x8003, 0x0e300000, 0x0e400000, [0; 4]);
+    ctx5.transition_to(SpState::Idle).unwrap();
+    ctx5.transition_to(SpState::Running).unwrap();
+    assert!(ctx5.transition_to(SpState::Preempted).is_ok());
+    assert_eq!(ctx5.state(), SpState::Preempted);
+    pass += 2;
+
+    // Test 19-20: Preempted -> Running transition (resume via FFA_RUN)
+    assert!(ctx5.transition_to(SpState::Running).is_ok());
+    assert_eq!(ctx5.state(), SpState::Running);
+    pass += 2;
+
+    // Test 21: Preempted -> Idle is invalid (must go through Running first)
+    ctx5.transition_to(SpState::Preempted).unwrap();
+    assert!(ctx5.transition_to(SpState::Idle).is_err());
+    pass += 1;
+
     crate::uart_puts(b"    ");
     crate::print_u32(pass);
     crate::uart_puts(b" assertions passed\n");

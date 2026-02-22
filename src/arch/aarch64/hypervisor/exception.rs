@@ -552,6 +552,16 @@ pub extern "C" fn handle_irq_exception(_context: &mut VcpuContext) -> bool {
         return true;
     }
 
+    // S-EL2 SPMC: any IRQ during SP execution = NS interrupt preemption.
+    // ACK, set flag, exit to SPMC event loop which returns FFA_INTERRUPT.
+    #[cfg(feature = "sel2")]
+    {
+        GicV3SystemRegs::write_eoir1(intid);
+        GicV3SystemRegs::write_dir(intid);
+        crate::spmc_handler::SP_IRQ_PREEMPTED.store(true, core::sync::atomic::Ordering::Release);
+        return false;
+    }
+
     match intid {
         0..=15 => {
             // Physical SGI arrived.

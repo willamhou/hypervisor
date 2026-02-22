@@ -26,6 +26,8 @@
 .equ FFA_ID_GET,          0x84000069
 .equ FFA_DIRECT_REQ_32,   0x8400006F
 .equ FFA_DIRECT_RESP_32,  0x84000070
+.equ FFA_INTERRUPT,        0x84000062
+.equ FFA_RUN,              0x8400006D
 .equ FFA_RXTX_MAP,        0xC4000066
 
 .equ FFA_VERSION_1_1,     0x00010001
@@ -327,8 +329,75 @@ _start:
 
     adr     x0, str_pass
     bl      uart_print
-    b       .Ldone
+    b       .Ltest_9
 .Lfail_8:
+    adr     x0, str_fail
+    bl      uart_print
+
+    /* ============ Test 9: Preemption + FFA_RUN ============ */
+.Ltest_9:
+    adr     x0, str_t9
+    bl      uart_print
+
+    /* Send DIRECT_REQ with x3=0xDEADBEEF (slow-path trigger) */
+    ldr     x0, =FFA_DIRECT_REQ_32
+    movz    x1, #0x8001
+    movk    x1, #0x0001, lsl #16
+    mov     x2, xzr
+    ldr     x3, =0xDEADBEEF        /* slow-path trigger */
+    movz    x4, #0xBBBB            /* SP will add 0x2000 -> 0xDBBB */
+    movz    x5, #0xCCCC
+    movz    x6, #0xDDDD
+    movz    x7, #0xEEEE
+    smc     #0
+
+    /* Result is either FFA_INTERRUPT (preempted) or DIRECT_RESP (completed) */
+    ldr     x9, =FFA_DIRECT_RESP_32
+    cmp     x0, x9
+    b.eq    .Ltest9_got_resp
+
+    /* Expect FFA_INTERRUPT — call FFA_RUN to resume */
+    ldr     x9, =FFA_INTERRUPT
+    cmp     x0, x9
+    b.ne    .Lfail_9
+
+    /* FFA_RUN loop: resume SP, handle possible repeated preemptions */
+    mov     x15, #10               /* max FFA_RUN attempts */
+.Ltest9_run_loop:
+    cbz     x15, .Lfail_9          /* too many preemptions */
+    sub     x15, x15, #1
+
+    ldr     x0, =FFA_RUN
+    /* x1[31:16] = SP ID = 0x8001 */
+    movz    x1, #0x0000
+    movk    x1, #0x8001, lsl #16
+    mov     x2, xzr
+    mov     x3, xzr
+    mov     x4, xzr
+    mov     x5, xzr
+    mov     x6, xzr
+    mov     x7, xzr
+    smc     #0
+
+    /* Check if SP completed or was preempted again */
+    ldr     x9, =FFA_DIRECT_RESP_32
+    cmp     x0, x9
+    b.eq    .Ltest9_got_resp
+
+    ldr     x9, =FFA_INTERRUPT
+    cmp     x0, x9
+    b.eq    .Ltest9_run_loop       /* preempted again, retry */
+    b       .Lfail_9               /* unexpected response */
+
+.Ltest9_got_resp:
+    /* x4 should be 0xBBBB + 0x2000 = 0xDBBB (slow-path proof) */
+    movz    x9, #0xDBBB
+    cmp     x4, x9
+    b.ne    .Lfail_9
+    adr     x0, str_pass
+    bl      uart_print
+    b       .Ldone
+.Lfail_9:
     adr     x0, str_fail
     bl      uart_print
 
@@ -376,6 +445,8 @@ str_t7:
     .asciz "  Test 7: DIRECT_REQ real SP ....... "
 str_t8:
     .asciz "  Test 8: RXTX + PARTITION_INFO .... "
+str_t9:
+    .asciz "  Test 9: Preemption + FFA_RUN ..... "
 str_pass:
     .asciz "PASS\r\n"
 str_fail:
