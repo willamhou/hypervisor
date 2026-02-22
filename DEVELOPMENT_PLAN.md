@@ -1,6 +1,6 @@
 # ARM64 Hypervisor 开发计划
 
-**项目版本**: v0.26.0 (Phase D Complete — Multi-SP + Secure vIRQ Injection)
+**项目版本**: v0.27.0 (Phase D Complete — Multi-SP + Secure vIRQ/vFIQ Injection + vfiq Feature Flag)
 **计划制定日期**: 2026-01-26
 **最后更新**: 2026-02-22
 **计划类型**: 敏捷迭代，灵活调整
@@ -23,7 +23,7 @@ M5: RME & CCA         ░░░░░░░░░░░░░░░░░░░�
 Android Boot          ██████████░░░░░░░░░░  50% ✅ (Phase 2 完成)
 ```
 
-**测试覆盖**: ~285 assertions / 33 test suites (100% pass)
+**测试覆盖**: ~282 assertions / 33 test suites (100% pass); with `vfiq` feature: ~297 assertions
 **代码量**: ~18000 行
 **Linux启动**: 4 vCPU, BusyBox shell, virtio-blk, virtio-net, multi-VM, FF-A proxy
 **Android启动**: 4 vCPU, PL031 RTC, Binder IPC, minimal init, 1GB RAM
@@ -829,7 +829,7 @@ NS-EL1: Linux guest (当前 hypervisor 功能降级为 SPMC)
 - [ ] 为 pKVM 集成做好准备（NS-EL2 空闲，可被 pKVM 占据）
 
 **预估总时间**: 6-8 周（Week 29-36）
-**状态**: 🔧 进行中 (Sprint 4.1/4.2/4.3 ✅, Sprint 4.4 Phase A/B ✅, Phase C ✅ — NS interrupt preemption + FFA_RUN, Phase D ✅ — multi-SP + secure vIRQ injection, 11/11 BL33 tests)
+**状态**: 🔧 进行中 (Sprint 4.1/4.2/4.3 ✅, Sprint 4.4 Phase A/B ✅, Phase C ✅ — NS interrupt preemption + FFA_RUN, Phase D ✅ — multi-SP + secure vIRQ/vFIQ injection + `vfiq` feature flag, 12/12 BL33 tests with vfiq)
 
 ---
 
@@ -1291,7 +1291,7 @@ GitHub Actions配置：
 **Sprint 5.1 完成**: DIRECT_REQ end-to-end (NS proxy → SPMD → SPMC → SP1), `tfa_boot` feature flag, 8-register SMC forwarding, SP1 x4+=0x1000 proof, 7/7 BL33 tests PASS
 **Sprint 5.2 完成**: SPMC NWd RXTX management (SPMD forwards RXTX_MAP/UNMAP/RX_RELEASE to SPMC), PARTITION_INFO_GET writes to NWd RX buffer, Linux FF-A discovery, 8/8 BL33 tests PASS, 33 SPMC handler assertions
 **Phase C 完成**: NS interrupt preemption — FFA_INTERRUPT + FFA_RUN resume, CNTHP timer, SP_IRQ_PREEMPTED flag, Preempted state, 9/9 BL33 tests PASS
-**Phase D 完成**: Multi-SP + secure vIRQ injection — SP2 (sp_irq), per-SP INTID ownership, HCR_EL2.VI + HF_INTERRUPT_GET paravirt (Hafnium-compatible), CNTHP poll timer, cross-SP preemption, 11/11 BL33 tests PASS, 42 SPMC handler + 28 SP context assertions
+**Phase D 完成**: Multi-SP + secure vIRQ/vFIQ injection — SP2 (sp_irq), per-SP INTID ownership, HCR_EL2.VI + HF_INTERRUPT_GET paravirt (Hafnium-compatible), CNTHP poll timer, cross-SP preemption, `vfiq` feature flag for HCR_EL2.VF + HF_FIQ_GET (FIQ delivery, per-SP `fiq_intids[]`), 12/12 BL33 tests PASS (11 base + 1 vFIQ), 42 SPMC handler + 28 SP context assertions (45/40 with vfiq)
 
 **Phase 8+ 候选方向** (选择一个):
 
