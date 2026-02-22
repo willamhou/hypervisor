@@ -53,6 +53,9 @@ scripts/config --enable CONFIG_SERIAL_AMBA_PL011_CONSOLE
 scripts/config --enable CONFIG_PRINTK
 scripts/config --enable CONFIG_SMP
 
+# FF-A transport driver (discovers Secure Partitions via SMC)
+scripts/config --enable CONFIG_ARM_FFA_TRANSPORT
+
 # Resolve any dependency issues
 make ARCH=arm64 CROSS_COMPILE=aarch64-linux-gnu- olddefconfig
 

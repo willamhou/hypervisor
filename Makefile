@@ -1,4 +1,4 @@
-.PHONY: all build run debug clean build-qemu build-bl32-bl33 build-tfa build-tfa-bl33 build-spmc build-sp-hello build-tfa-spmc run-sel2 run-tfa-linux run-spmc
+.PHONY: all build run debug clean build-qemu build-bl32-bl33 build-tfa build-tfa-bl33 build-spmc build-sp-hello build-tfa-spmc build-tfa-full run-sel2 run-tfa-linux run-tfa-linux-ffa run-spmc
 
 # Auto-load Cargo environment
 SHELL := /bin/bash
@@ -301,6 +301,45 @@ build-tfa-spmc: build-bl32-bl33 build-spmc build-sp-hello build-bl33-ffa-test
 	    debian:bookworm-slim bash /src/scripts/build-tfa.sh
 	mv $(TFA_DIR)/flash.bin $(TFA_FLASH_SPMC)
 
+# === Full SPMC + BL33 hypervisor (Sprint 5.2) ===
+
+# Build TF-A with real SPMC (BL32) + SP Hello + PRELOADED_BL33_BASE for our hypervisor
+TFA_FLASH_FULL := $(TFA_DIR)/flash-full.bin
+
+build-tfa-full: build-bl32-bl33 build-spmc build-sp-hello
+	@echo "Replacing bl32.bin with real SPMC..."
+	docker run --rm \
+	    -v $(PWD)/tfa:/output \
+	    -v $(PWD)/$(SPMC_BIN):/spmc.bin:ro \
+	    debian:bookworm-slim cp /spmc.bin /output/bl32.bin
+	@echo "Building TF-A with SPMC + preloaded BL33..."
+	docker run --rm \
+	    -v $(PWD)/tfa:/output \
+	    -v $(PWD):/src \
+	    -v tfa-full-build-cache:/output/tfa-src \
+	    -e TFA_PRELOADED_BL33_BASE=0x40200000 \
+	    debian:bookworm-slim bash /src/scripts/build-tfa.sh
+	mv $(TFA_DIR)/flash.bin $(TFA_FLASH_FULL)
+
+# Boot: TF-A → SPMC (S-EL2) → SP1 → hypervisor (NS-EL2 BL33) → Linux
+run-tfa-linux-ffa:
+	@test -f $(TFA_FLASH_FULL) || (echo "ERROR: $(TFA_FLASH_FULL) not found. Run 'make build-tfa-full' first." && exit 1)
+	@echo "Building hypervisor with TF-A boot support..."
+	cargo build --target aarch64-unknown-none --features tfa_boot
+	@echo "Creating raw binary..."
+	aarch64-linux-gnu-objcopy -O binary $(BINARY) $(BINARY_BIN)
+	@echo "Starting TF-A → SPMC → hypervisor → Linux boot chain..."
+	@echo "Press Ctrl+A then X to exit QEMU"
+	$(QEMU_SEL2) -machine virt,secure=on,virtualization=on,gic-version=3 \
+	    -cpu max -smp 4 -m 2G -nographic \
+	    -bios $(TFA_FLASH_FULL) \
+	    -device loader,file=$(BINARY_BIN),addr=0x40200000,force-raw=on \
+	    -device loader,file=$(LINUX_IMAGE),addr=0x48000000,force-raw=on \
+	    -device loader,file=$(LINUX_DTB),addr=0x47000000,force-raw=on \
+	    -device loader,file=$(LINUX_INITRAMFS),addr=0x54000000,force-raw=on \
+	    -device loader,file=$(LINUX_DISK),addr=0x58000000,force-raw=on \
+	    -nic none
+
 # Boot TF-A with SPMC (S-EL2) + FF-A test client (NS-EL2)
 run-spmc:
 	@test -f $(TFA_FLASH_SPMC) || (echo "ERROR: $(TFA_FLASH_SPMC) not found. Run 'make build-tfa-spmc' first." && exit 1)
@@ -323,6 +362,8 @@ help:
 	@echo "  run-android   - Build and run with Android-configured kernel"
 	@echo "  run-sel2      - Boot TF-A with BL32 at S-EL2 (Phase 4)"
 	@echo "  run-tfa-linux - Boot TF-A -> hypervisor -> Linux (Phase 4)"
+	@echo "  run-tfa-linux-ffa - Boot TF-A -> SPMC -> hypervisor -> Linux (FF-A)"
+	@echo "  build-tfa-full - Build TF-A with real SPMC + preloaded BL33"
 	@echo "  build-qemu    - Build QEMU 9.2.3 from source (one-time)"
 	@echo "  build-spmc    - Build hypervisor as S-EL2 SPMC (BL32)"
 	@echo "  build-sp-hello - Build SP Hello binary (S-EL1)"

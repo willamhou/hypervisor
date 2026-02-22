@@ -13,6 +13,13 @@
 		linux,initrd-end = <0x00 0x54200000>;
 	};
 
+	firmware {
+		arm_ffa {
+			compatible = "arm,ffa";
+			method = "smc";
+		};
+	};
+
 	psci {
 		migrate = <0xc4000005>;
 		cpu_on = <0xc4000003>;

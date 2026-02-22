@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Overview
 
-ARM64 Type-1 bare-metal hypervisor written in Rust (no_std) with ARM64 assembly. Runs at EL2 (hypervisor exception level) and manages guest VMs at EL1. Targets QEMU virt machine. Boots Linux 6.12.12 to BusyBox shell with 4 vCPUs, virtio-blk storage, and virtio-net inter-VM networking. Supports multi-VM with per-VM Stage-2, VMID-tagged TLBs, two-level scheduling, and L2 virtual switch. Includes FF-A v1.1 proxy with stub SPMC, page ownership validation via Stage-2 PTE SW bits, FF-A v1.1 descriptor parsing, SMC forwarding to EL3, and VM-to-VM memory sharing (MEM_RETRIEVE/RELINQUISH with dynamic Stage-2 page mapping). Android boot with PL031 RTC emulation, Binder IPC, binderfs, minimal init, 1GB guest RAM. Dual boot modes: NS-EL2 hypervisor via `make run-tfa-linux` (BL33, `tfa_boot` feature) and S-EL2 SPMC via `make run-spmc` (BL32). TF-A boot chain: BL1→BL2→BL31(SPMD)→BL32(SPMC)→BL33 with manifest FDT parsing. SPMC boots SP Hello at S-EL1 via ERET with Secure Stage-2, dispatches NWd→SP DIRECT_REQ/RESP messaging. End-to-end FF-A DIRECT_REQ: NS proxy → SPMD → SPMC → SP1 (SP modifies x4 += 0x1000 as proof), 7/7 BL33 integration tests pass.
+ARM64 Type-1 bare-metal hypervisor written in Rust (no_std) with ARM64 assembly. Runs at EL2 (hypervisor exception level) and manages guest VMs at EL1. Targets QEMU virt machine. Boots Linux 6.12.12 to BusyBox shell with 4 vCPUs, virtio-blk storage, and virtio-net inter-VM networking. Supports multi-VM with per-VM Stage-2, VMID-tagged TLBs, two-level scheduling, and L2 virtual switch. Includes FF-A v1.1 proxy with stub SPMC, page ownership validation via Stage-2 PTE SW bits, FF-A v1.1 descriptor parsing, SMC forwarding to EL3, and VM-to-VM memory sharing (MEM_RETRIEVE/RELINQUISH with dynamic Stage-2 page mapping). Android boot with PL031 RTC emulation, Binder IPC, binderfs, minimal init, 1GB guest RAM. Dual boot modes: NS-EL2 hypervisor via `make run-tfa-linux` (BL33, `tfa_boot` feature) and S-EL2 SPMC via `make run-spmc` (BL32). TF-A boot chain: BL1→BL2→BL31(SPMD)→BL32(SPMC)→BL33 with manifest FDT parsing. SPMC boots SP Hello at S-EL1 via ERET with Secure Stage-2, dispatches NWd→SP DIRECT_REQ/RESP messaging. End-to-end FF-A DIRECT_REQ: NS proxy → SPMD → SPMC → SP1 (SP modifies x4 += 0x1000 as proof), 8/8 BL33 integration tests pass. RXTX buffer registration with SPMD (both SPMC and NS proxy), PARTITION_INFO_GET forwarding with 24-byte FF-A v1.1 descriptors, Linux FF-A driver support (`CONFIG_ARM_FFA_TRANSPORT`, guest DTB `arm,ffa` node).
 
 ## Build Commands
 
@@ -19,6 +19,8 @@ make run-guest GUEST_ELF=/path/to/zephyr.elf  # Boot Zephyr guest (--features gu
 make run-sel2     # Boot TF-A with trivial BL32 at S-EL2 (requires build-tfa first)
 make run-tfa-linux # Boot TF-A → hypervisor (BL33) → Linux (requires build-tfa-bl33 first)
 make run-spmc     # Boot TF-A → our SPMC (BL32) at S-EL2 (requires build-tfa-spmc first)
+make build-tfa-full # Build TF-A with real SPMC (BL32) + preloaded BL33 hypervisor
+make run-tfa-linux-ffa # Boot TF-A → SPMC → hypervisor (BL33) → Linux (FF-A discovery)
 make build-qemu   # Build QEMU 9.2.3 from source (one-time, Docker)
 make build-tfa    # Build TF-A flash.bin with SPD=spmd (Docker)
 make build-tfa-bl33 # Build TF-A flash.bin with PRELOADED_BL33_BASE=0x40200000
@@ -39,7 +41,7 @@ make fmt          # Format code
 - `multi_pcpu` — Multi-pCPU support (implies `linux_guest`): 1:1 vCPU-to-pCPU affinity, PSCI boot, TPIDR_EL2 context, SpinLock devices
 - `multi_vm` — Multi-VM support (implies `linux_guest`): 2 VMs time-sliced on 1 pCPU, per-VM Stage-2/VMID, per-VM DeviceManager
 - `sel2` — S-EL2 SPMC mode: hypervisor as BL32 (SPMC role), separate boot_sel2.S entry, linker base 0x0e100000 (secure DRAM), manifest parsing, FFA_MSG_WAIT handshake
-- `tfa_boot` — TF-A boot mode (implies `linux_guest`): sets SPMC_PRESENT=true at compile time, NS proxy forwards DIRECT_REQ to real SPMC via 8-register SMC
+- `tfa_boot` — TF-A boot mode (implies `linux_guest`): sets SPMC_PRESENT=true at compile time, NS proxy registers RXTX with SPMD, forwards DIRECT_REQ and PARTITION_INFO_GET to real SPMC via 8-register SMC
 
 **Note**: `multi_pcpu` and `multi_vm` are mutually exclusive — both imply `linux_guest` but use different scheduling models. `sel2` is mutually exclusive with all others. `tfa_boot` is used with `run-tfa-linux` when a real SPMC is available at S-EL2.
 
@@ -72,8 +74,8 @@ make fmt          # Format code
 | `NetRxRing` | `src/vswitch.rs` | Per-port SPSC ring buffer for async RX frame delivery |
 | `VirtualPl031` | `src/devices/pl031.rs` | PL031 RTC emulation: counter-based time, PrimeCell ID |
 | `SpMcManifest` | `src/manifest.rs` | SPMC manifest parser: TOS_FW_CONFIG DTB (spmc_id, version) |
-| `SpmcHandler` | `src/spmc_handler.rs` | S-EL2 SPMC event loop + FF-A dispatch, SP DIRECT_REQ routing via `dispatch_to_sp()` + `enter_guest()` ERET |
-| `SpContext` | `src/sp_context.rs` | Per-SP state machine (Reset→Idle→Running→Blocked), wraps VcpuContext, global SpStore |
+| `SpmcHandler` | `src/spmc_handler.rs` | S-EL2 SPMC event loop + FF-A dispatch, SP DIRECT_REQ routing via `dispatch_to_sp()` + `enter_guest()` ERET, RXTX registration with SPMD, 24-byte PARTITION_INFO descriptors |
+| `SpContext` | `src/sp_context.rs` | Per-SP state machine (Reset→Idle→Running→Blocked), wraps VcpuContext, global SpStore, `for_each_sp()` iterator |
 | `SecureStage2Config` | `src/secure_stage2.rs` | VSTTBR_EL2/VSTCR_EL2 config for SP isolation, `build_sp_stage2()` identity-maps SP code + UART |
 
 ### Exception Handling Flow
@@ -189,7 +191,7 @@ VirtioMmioTransport<VirtioNet>  @ 0x0a000200 (SPI 17 = INTID 49)
 
 Implements the FF-A (Firmware Framework for Arm) v1.1 hypervisor proxy role (pKVM-compatible). Guest SMC calls trapped via `HCR_EL2.TSC=1` (bit 19) are routed through `handle_smc()` → `ffa::proxy::handle_ffa_call()`.
 
-**Supported calls**: FFA_VERSION, FFA_ID_GET, FFA_SPM_ID_GET, FFA_FEATURES, FFA_RXTX_MAP/UNMAP, FFA_RX_RELEASE, FFA_PARTITION_INFO_GET, FFA_MSG_SEND_DIRECT_REQ, FFA_MSG_SEND2, FFA_MSG_WAIT, FFA_RUN, FFA_MEM_SHARE/LEND/RETRIEVE_REQ/RELINQUISH/RECLAIM, FFA_NOTIFICATION_BITMAP_CREATE/DESTROY/BIND/UNBIND/SET/GET/INFO_GET. FFA_MEM_DONATE is blocked (returns NOT_SUPPORTED). VM-to-VM memory sharing: sender shares pages via MEM_SHARE, receiver maps them via MEM_RETRIEVE_REQ (dynamic Stage-2 page mapping), receiver unmaps via MEM_RELINQUISH, sender reclaims via MEM_RECLAIM.
+**Supported calls**: FFA_VERSION, FFA_ID_GET, FFA_SPM_ID_GET, FFA_FEATURES, FFA_RXTX_MAP/UNMAP, FFA_RX_RELEASE, FFA_PARTITION_INFO_GET, FFA_MSG_SEND_DIRECT_REQ, FFA_MSG_SEND2, FFA_MSG_WAIT, FFA_RUN, FFA_MEM_SHARE/LEND/RETRIEVE_REQ/RELINQUISH/RECLAIM, FFA_NOTIFICATION_BITMAP_CREATE/DESTROY/BIND/UNBIND/SET/GET/INFO_GET. FFA_MEM_DONATE is blocked (returns NOT_SUPPORTED). VM-to-VM memory sharing: sender shares pages via MEM_SHARE, receiver maps them via MEM_RETRIEVE_REQ (dynamic Stage-2 page mapping), receiver unmaps via MEM_RELINQUISH, sender reclaims via MEM_RECLAIM. PARTITION_INFO_GET: when SPMC_PRESENT, forwards to SPMD and copies 24-byte descriptors from proxy RX to guest RX; otherwise uses 8-byte stub descriptors.
 
 **Stub SPMC** (`src/ffa/stub_spmc.rs`): Simulates 2 Secure Partitions (SP1=0x8001, SP2=0x8002) for testing without a real Secure World. Direct messaging echoes x4-x7 back. Memory sharing tracks multi-range records with `MemShareRecord` (up to 4 ranges per share, `ShareInfo`/`ShareInfoFull` for reclaim/retrieve). `mark_retrieved()`/`mark_relinquished()` track retrieve state; `MEM_RECLAIM` blocked while retrieved.
 

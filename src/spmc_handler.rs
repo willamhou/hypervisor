@@ -9,6 +9,44 @@
 use crate::ffa;
 use crate::ffa::smc_forward::SmcResult8;
 
+// ── SPMC RXTX buffers (registered with SPMD for PARTITION_INFO relay) ──
+
+/// 4KB-aligned page for SPMC TX/RX buffers.
+#[cfg(feature = "sel2")]
+#[repr(C, align(4096))]
+struct AlignedPage([u8; 4096]);
+
+#[cfg(feature = "sel2")]
+static mut SPMC_TX_BUF: AlignedPage = AlignedPage([0u8; 4096]);
+#[cfg(feature = "sel2")]
+static mut SPMC_RX_BUF: AlignedPage = AlignedPage([0u8; 4096]);
+
+/// Register SPMC's TX/RX buffers with SPMD via FFA_RXTX_MAP.
+///
+/// Must be called after SP boot completes, before `signal_spmc_ready()`.
+#[cfg(feature = "sel2")]
+pub fn spmc_register_rxtx() {
+    let tx_pa = &raw const SPMC_TX_BUF as u64;
+    let rx_pa = &raw const SPMC_RX_BUF as u64;
+    let result = crate::ffa::smc_forward::forward_smc8(
+        ffa::FFA_RXTX_MAP,
+        tx_pa,
+        rx_pa,
+        1, // 1 page
+        0,
+        0,
+        0,
+        0,
+    );
+    if result.x0 == ffa::FFA_SUCCESS_32 {
+        crate::uart_puts(b"[SPMC] RXTX registered with SPMD\n");
+    } else {
+        crate::uart_puts(b"[SPMC] WARNING: RXTX registration failed, x0=0x");
+        crate::uart_put_hex(result.x0);
+        crate::uart_puts(b"\n");
+    }
+}
+
 /// SPMC event loop — dispatches FF-A requests from SPMD (EL3) forever.
 ///
 /// `first_request` is the SmcResult8 returned by the initial FFA_MSG_WAIT
@@ -144,6 +182,8 @@ pub fn dispatch_ffa(req: &SmcResult8) -> SmcResult8 {
         ffa::FFA_FEATURES => {
             // Check if the queried function ID (in x1) is supported
             let queried_fid = req.x1;
+            // Note: FFA_RXTX_MAP is NOT listed here because SPMD handles
+            // NWd RXTX registration directly — it is never forwarded to SPMC.
             let supported = matches!(
                 queried_fid,
                 ffa::FFA_VERSION
@@ -171,17 +211,7 @@ pub fn dispatch_ffa(req: &SmcResult8) -> SmcResult8 {
         }
 
         ffa::FFA_PARTITION_INFO_GET => {
-            let count = if crate::sp_context::is_registered_sp(0x8001) { 1u64 } else { 0u64 };
-            SmcResult8 {
-                x0: ffa::FFA_SUCCESS_32,
-                x1: 0,
-                x2: count,
-                x3: 0,
-                x4: 0,
-                x5: 0,
-                x6: 0,
-                x7: 0,
-            }
+            handle_partition_info_get()
         }
 
         ffa::FFA_MSG_SEND_DIRECT_REQ_32 => {
@@ -205,6 +235,68 @@ pub fn dispatch_ffa(req: &SmcResult8) -> SmcResult8 {
         }
 
         _ => make_error(ffa::FFA_NOT_SUPPORTED as u64),
+    }
+}
+
+/// Handle PARTITION_INFO_GET — writes 24-byte descriptors to SPMC TX buffer.
+///
+/// FF-A v1.1 partition info descriptor (DEN0077A Table 5.37):
+///   Offset 0:  partition_id    (u16 LE)
+///   Offset 2:  exec_ctx_count  (u16 LE)
+///   Offset 4:  properties      (u32 LE)
+///   Offset 8:  uuid[16]        (128-bit UUID)
+///
+/// Returns SUCCESS + count in x2. SPMD copies TX→NWd RX.
+fn handle_partition_info_get() -> SmcResult8 {
+    let mut count = 0u64;
+
+    // Write descriptors for each registered SP into the TX buffer.
+    // In unit-test mode (no sel2 feature), we can't write to the TX buffer
+    // because it doesn't exist, so we just return the count.
+    #[cfg(feature = "sel2")]
+    {
+        let tx_ptr = &raw mut SPMC_TX_BUF as *mut u8;
+        crate::sp_context::for_each_sp(|sp| {
+            let offset = count as usize * 24;
+            if offset + 24 > 4096 {
+                return; // TX buffer full
+            }
+            unsafe {
+                let ptr = tx_ptr.add(offset);
+                // partition_id (u16 LE)
+                core::ptr::write_unaligned(ptr as *mut u16, sp.sp_id());
+                // exec_ctx_count (u16 LE)
+                core::ptr::write_unaligned(ptr.add(2) as *mut u16, 1);
+                // properties (u32 LE) — bit 0: supports DIRECT_REQ
+                core::ptr::write_unaligned(ptr.add(4) as *mut u32, 0x1);
+                // UUID (16 bytes) — read from SpContext (parsed from SP manifest)
+                core::ptr::copy_nonoverlapping(
+                    sp.uuid().as_ptr() as *const u8,
+                    ptr.add(8),
+                    16,
+                );
+            }
+            count += 1;
+        });
+    }
+
+    // In non-sel2 mode (unit tests), just count registered SPs
+    #[cfg(not(feature = "sel2"))]
+    {
+        crate::sp_context::for_each_sp(|_| {
+            count += 1;
+        });
+    }
+
+    SmcResult8 {
+        x0: ffa::FFA_SUCCESS_32,
+        x1: 0,
+        x2: count,
+        x3: 0,
+        x4: 0,
+        x5: 0,
+        x6: 0,
+        x7: 0,
     }
 }
 

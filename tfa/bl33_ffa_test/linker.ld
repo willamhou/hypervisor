@@ -24,6 +24,15 @@ SECTIONS
         *(.bss*)
     }
 
+    /* 4KB-aligned RXTX buffers for PARTITION_INFO_GET test */
+    . = ALIGN(4096);
+    .rxtx_bufs (NOLOAD) : {
+        _tx_page = .;
+        . += 4096;
+        _rx_page = .;
+        . += 4096;
+    }
+
     /DISCARD/ : {
         *(.comment)
         *(.note*)

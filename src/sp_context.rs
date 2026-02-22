@@ -32,11 +32,13 @@ pub struct SpContext {
     entry: u64,
     /// Secure Stage-2 VSTTBR value for this SP (set after page table creation).
     vsttbr: u64,
+    /// 128-bit UUID from SP manifest (4 x u32 LE words).
+    uuid: [u32; 4],
 }
 
 impl SpContext {
     /// Create a new SP context in Reset state.
-    pub fn new(sp_id: u16, entry_point: u64, stack_top: u64) -> Self {
+    pub fn new(sp_id: u16, entry_point: u64, stack_top: u64, uuid: [u32; 4]) -> Self {
         let mut ctx = VcpuContext::default();
         ctx.pc = entry_point;
         ctx.sp = stack_top;
@@ -49,6 +51,7 @@ impl SpContext {
             state: SpState::Reset,
             entry: entry_point,
             vsttbr: 0,
+            uuid,
         }
     }
 
@@ -66,6 +69,10 @@ impl SpContext {
 
     pub fn vsttbr(&self) -> u64 {
         self.vsttbr
+    }
+
+    pub fn uuid(&self) -> &[u32; 4] {
+        &self.uuid
     }
 
     pub fn set_vsttbr(&mut self, vsttbr: u64) {
@@ -192,5 +199,21 @@ pub fn is_registered_sp(sp_id: u16) -> bool {
             }
         }
         false
+    }
+}
+
+/// Iterate over all registered SPs, calling `f` for each one.
+///
+/// # Safety (internal)
+/// The callback `f` must NOT call `register_sp()`, `get_sp_mut()`, or any
+/// other function that mutates SP_STORE. Doing so is undefined behavior.
+pub fn for_each_sp<F: FnMut(&SpContext)>(mut f: F) {
+    unsafe {
+        let contexts = &*SP_STORE.contexts.get();
+        for slot in contexts.iter() {
+            if let Some(ref sp) = slot {
+                f(sp);
+            }
+        }
     }
 }

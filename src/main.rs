@@ -366,10 +366,13 @@ pub extern "C" fn rust_main_sel2(
     hypervisor::uart_put_hex(sp1_entry);
     uart_puts_local(b"\n");
 
+    // SP1 UUID from sp_manifest.dts (byte-swapped by sp_mk_generator.py)
+    let sp1_uuid: [u32; 4] = [0x12345678, 0x12345678, 0x12345678, 0x12345678];
     let mut sp1 = hypervisor::sp_context::SpContext::new(
         hypervisor::platform::SP1_PARTITION_ID,
         sp1_entry,
         hypervisor::platform::SP1_STACK_TOP,
+        sp1_uuid,
     );
     sp1.set_vsttbr(s2_config.vsttbr);
 
@@ -407,6 +410,9 @@ pub extern "C" fn rust_main_sel2(
 
     // Store SP1 context globally for dispatch
     hypervisor::sp_context::register_sp(sp1);
+
+    // 5.8. Register SPMC RXTX buffers with SPMD (for PARTITION_INFO relay)
+    hypervisor::spmc_handler::spmc_register_rxtx();
 
     // 6. Signal SPMD: init complete, receive first NWd request
     uart_puts_local(b"[SPMC] Init complete, signaling SPMD via FFA_MSG_WAIT\n");

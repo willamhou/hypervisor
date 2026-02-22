@@ -15,15 +15,18 @@
 .equ UARTDR,    0x000
 .equ UARTFR,    0x018
 
-/* FF-A function IDs (SMC32) */
+/* FF-A function IDs (SMC32/SMC64) */
 .equ FFA_ERROR,           0x84000060
 .equ FFA_SUCCESS_32,      0x84000061
 .equ FFA_VERSION,         0x84000063
 .equ FFA_FEATURES,        0x84000064
+.equ FFA_RX_RELEASE,      0x84000065
+.equ FFA_RXTX_UNMAP,      0x84000067
 .equ FFA_PARTITION_INFO,  0x84000068
 .equ FFA_ID_GET,          0x84000069
 .equ FFA_DIRECT_REQ_32,   0x8400006F
 .equ FFA_DIRECT_RESP_32,  0x84000070
+.equ FFA_RXTX_MAP,        0xC4000066
 
 .equ FFA_VERSION_1_1,     0x00010001
 
@@ -244,8 +247,88 @@ _start:
     b.ne    .Lfail_7
     adr     x0, str_pass
     bl      uart_print
-    b       .Ldone
+    b       .Ltest_8
 .Lfail_7:
+    adr     x0, str_fail
+    bl      uart_print
+
+    /* ============ Test 8: RXTX_MAP + PARTITION_INFO_GET descriptors ============ */
+.Ltest_8:
+    adr     x0, str_t8
+    bl      uart_print
+
+    /* Step 1: FFA_RXTX_MAP(tx_page, rx_page, 1) */
+    ldr     x0, =FFA_RXTX_MAP
+    adr     x1, _tx_page           /* TX buffer PA */
+    adr     x2, _rx_page           /* RX buffer PA */
+    mov     x3, #1                 /* 1 page */
+    mov     x4, xzr
+    mov     x5, xzr
+    mov     x6, xzr
+    mov     x7, xzr
+    smc     #0
+
+    ldr     x9, =FFA_SUCCESS_32
+    cmp     x0, x9
+    b.ne    .Lfail_8
+
+    /* Step 2: FFA_PARTITION_INFO_GET(0,0,0,0) — all partitions */
+    ldr     x0, =FFA_PARTITION_INFO
+    mov     x1, xzr                /* UUID = 0 (all) */
+    mov     x2, xzr
+    mov     x3, xzr
+    mov     x4, xzr
+    mov     x5, xzr
+    mov     x6, xzr
+    mov     x7, xzr
+    smc     #0
+
+    ldr     x9, =FFA_SUCCESS_32
+    cmp     x0, x9
+    b.ne    .Lfail_8
+    /* x2 = count, should be >= 1 */
+    cmp     x2, #1
+    b.lt    .Lfail_8
+
+    /* Step 3: Read 24-byte descriptor from RX buffer */
+    /* Offset 0: partition_id (u16) — expect 0x8001 */
+    adr     x10, _rx_page
+    ldrh    w11, [x10, #0]
+    movz    w12, #0x8001
+    cmp     w11, w12
+    b.ne    .Lfail_8
+
+    /* Offset 2: exec_ctx_count (u16) — expect 1 */
+    ldrh    w11, [x10, #2]
+    cmp     w11, #1
+    b.ne    .Lfail_8
+
+    /* Step 4: FFA_RX_RELEASE to clean up */
+    ldr     x0, =FFA_RX_RELEASE
+    mov     x1, xzr
+    mov     x2, xzr
+    mov     x3, xzr
+    mov     x4, xzr
+    mov     x5, xzr
+    mov     x6, xzr
+    mov     x7, xzr
+    smc     #0
+
+    /* Step 5: FFA_RXTX_UNMAP to clean up */
+    ldr     x0, =FFA_RXTX_UNMAP
+    mov     x1, xzr
+    mov     x2, xzr
+    mov     x3, xzr
+    mov     x4, xzr
+    mov     x5, xzr
+    mov     x6, xzr
+    mov     x7, xzr
+    smc     #0
+
+    adr     x0, str_pass
+    bl      uart_print
+    b       .Ldone
+.Lfail_8:
     adr     x0, str_fail
     bl      uart_print
 
@@ -291,6 +374,8 @@ str_t6:
     .asciz "  Test 6: DIRECT_REQ echo .......... "
 str_t7:
     .asciz "  Test 7: DIRECT_REQ real SP ....... "
+str_t8:
+    .asciz "  Test 8: RXTX + PARTITION_INFO .... "
 str_pass:
     .asciz "PASS\r\n"
 str_fail:

@@ -14,6 +14,24 @@ use crate::ffa::*;
 /// Whether a real SPMC was detected at EL3 during init.
 static SPMC_PRESENT: AtomicBool = AtomicBool::new(false);
 
+// ── Proxy RXTX buffers (registered with SPMD for PARTITION_INFO relay) ──
+
+/// 4KB-aligned page for proxy TX/RX buffers (separate from per-VM guest mailboxes).
+/// Used when SPMC is present (tfa_boot feature) for PARTITION_INFO relay.
+#[cfg(feature = "tfa_boot")]
+#[repr(C, align(4096))]
+struct AlignedPage([u8; 4096]);
+
+#[cfg(feature = "tfa_boot")]
+#[allow(dead_code)] // Reserved for future MEM_SHARE descriptor forwarding to SPMC
+static mut PROXY_TX_BUF: AlignedPage = AlignedPage([0u8; 4096]);
+#[cfg(feature = "tfa_boot")]
+static mut PROXY_RX_BUF: AlignedPage = AlignedPage([0u8; 4096]);
+
+/// Whether the proxy's RXTX buffers have been successfully registered with SPMD.
+#[cfg(feature = "tfa_boot")]
+static PROXY_RXTX_REGISTERED: AtomicBool = AtomicBool::new(false);
+
 /// Initialize FF-A proxy. Probes EL3 for a real SPMC.
 ///
 /// Called once at boot before guest entry.
@@ -24,6 +42,27 @@ pub fn init() {
     {
         SPMC_PRESENT.store(true, Ordering::Relaxed);
         crate::uart_puts(b"[FFA] TF-A boot: SPMC present (build-time)\n");
+
+        // Register proxy RXTX buffers with SPMD for PARTITION_INFO relay
+        let tx_pa = &raw const PROXY_TX_BUF as u64;
+        let rx_pa = &raw const PROXY_RX_BUF as u64;
+        let result = smc_forward::forward_smc8(
+            FFA_RXTX_MAP,
+            tx_pa,
+            rx_pa,
+            1, // 1 page
+            0,
+            0,
+            0,
+            0,
+        );
+        if result.x0 == FFA_SUCCESS_32 {
+            PROXY_RXTX_REGISTERED.store(true, Ordering::Relaxed);
+            crate::uart_puts(b"[FFA] Proxy RXTX registered with SPMD\n");
+        } else {
+            crate::uart_puts(b"[FFA] WARNING: Proxy RXTX registration failed\n");
+        }
+
         return;
     }
 
@@ -219,6 +258,18 @@ fn handle_rxtx_map(context: &mut VcpuContext) -> bool {
         return true;
     }
 
+    // Validate IPAs are within guest RAM (prevents guest from targeting hypervisor memory).
+    // Identity mapping means IPA == PA at EL2, so a malicious guest could otherwise
+    // direct the proxy to write descriptors into hypervisor code/heap.
+    #[cfg(feature = "linux_guest")]
+    {
+        let buf_size = page_count as u64 * 4096;
+        if !is_guest_ram(tx_ipa, buf_size) || !is_guest_ram(rx_ipa, buf_size) {
+            ffa_error(context, FFA_INVALID_PARAMETERS);
+            return true;
+        }
+    }
+
     let vm_id = crate::global::current_vm_id();
     let mbox = mailbox::get_mailbox(vm_id);
 
@@ -280,6 +331,9 @@ fn handle_rx_release(context: &mut VcpuContext) -> bool {
 /// Input:  x1-x4 = UUID (or all zero for all partitions)
 /// Output: x0 = FFA_SUCCESS_32, x2 = partition count
 ///         Partition descriptors written to VM's RX buffer.
+///
+/// When SPMC_PRESENT: forwards to SPMD, copies 24-byte descriptors from
+/// proxy RX to guest RX. Otherwise falls back to stub SPMC (8-byte descs).
 fn handle_partition_info_get(context: &mut VcpuContext) -> bool {
     let vm_id = crate::global::current_vm_id();
     let mbox = mailbox::get_mailbox(vm_id);
@@ -294,13 +348,66 @@ fn handle_partition_info_get(context: &mut VcpuContext) -> bool {
         return true;
     }
 
-    // Write partition info structs to RX buffer (identity mapped: IPA == PA)
+    #[cfg(feature = "tfa_boot")]
+    if SPMC_PRESENT.load(Ordering::Relaxed) {
+        // Ensure proxy RXTX buffers are registered before forwarding
+        if !PROXY_RXTX_REGISTERED.load(Ordering::Relaxed) {
+            ffa_error(context, FFA_DENIED);
+            return true;
+        }
+
+        // Forward to real SPMC via SPMD
+        let result = smc_forward::forward_smc8(
+            FFA_PARTITION_INFO_GET,
+            context.gp_regs.x1,
+            context.gp_regs.x2,
+            context.gp_regs.x3,
+            context.gp_regs.x4,
+            0,
+            0,
+            0,
+        );
+        if result.x0 != FFA_SUCCESS_32 {
+            // Forward error to guest
+            context.gp_regs.x0 = result.x0;
+            context.gp_regs.x2 = result.x2;
+            return true;
+        }
+        let count = result.x2 as usize;
+        let bytes = count * 24; // 24 bytes per FF-A v1.1 descriptor
+        let max_bytes = core::cmp::min(4096, mbox.page_count as usize * 4096);
+        if bytes > max_bytes {
+            ffa_error(context, FFA_NO_MEMORY);
+            return true;
+        }
+
+        // Copy descriptors from proxy RX buffer to guest RX buffer.
+        // rx_ipa was validated in handle_rxtx_map() to be within guest RAM.
+        // Both are identity-mapped: VA == PA at EL2, IPA == PA for guest.
+        unsafe {
+            let src = &raw const PROXY_RX_BUF as *const u8;
+            let dst = mbox.rx_ipa as *mut u8;
+            core::ptr::copy_nonoverlapping(src, dst, bytes);
+        }
+
+        // Release proxy RX back to SPMD
+        let release_result = smc_forward::forward_smc8(FFA_RX_RELEASE, 0, 0, 0, 0, 0, 0, 0);
+        if release_result.x0 != FFA_SUCCESS_32 {
+            crate::uart_puts(b"[FFA] WARNING: Proxy RX_RELEASE failed\n");
+        }
+
+        // Transfer guest RX ownership to VM
+        mbox.rx_held_by_proxy = false;
+
+        context.gp_regs.x0 = FFA_SUCCESS_32;
+        context.gp_regs.x2 = count as u64;
+        return true;
+    }
+
+    // Stub path: write 8-byte descriptors from stub partition data
     let rx_ptr = mbox.rx_ipa as *mut u8;
     let count = stub_spmc::partition_count();
 
-    // FF-A v1.1 partition info descriptor: 24 bytes each (DEN0077A Table 5.37)
-    // We use a minimal 8-byte subset for the stub (ID + ctx count + properties).
-    // TODO: Expand to full 24-byte descriptor when integrating real SPMC.
     for (i, sp) in stub_spmc::STUB_PARTITIONS.iter().enumerate() {
         let offset = i * 8;
         unsafe {
@@ -974,6 +1081,17 @@ fn handle_msg_wait(context: &mut VcpuContext) -> bool {
 }
 
 // ── Helper ───────────────────────────────────────────────────────────
+
+/// Check if a guest IPA range falls within the guest RAM region.
+///
+/// Prevents a malicious guest from directing the proxy to write into
+/// hypervisor memory (code, heap, page tables) via RXTX_MAP.
+#[cfg(feature = "linux_guest")]
+fn is_guest_ram(ipa: u64, len: u64) -> bool {
+    let ram_start = crate::platform::GUEST_LOAD_ADDR;
+    let ram_size = crate::platform::LINUX_MEM_SIZE;
+    ipa >= ram_start && len <= ram_size && ipa <= ram_start + ram_size - len
+}
 
 /// Set FFA_ERROR return with error code.
 /// FF-A error codes are 32-bit signed values in w2 (not sign-extended to 64-bit x2).

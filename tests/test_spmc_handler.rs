@@ -38,7 +38,16 @@ pub fn run_tests() {
     assert_eq!(resp.x0, ffa::FFA_SUCCESS_32);
     pass += 1;
 
-    // Test 7-8: FFA_FEATURES with unsupported function -> NOT_SUPPORTED
+    // Test 7-8: FFA_FEATURES(FFA_RXTX_MAP) -> NOT_SUPPORTED
+    // (SPMD handles NWd RXTX, not SPMC)
+    let mut req = zero_req(ffa::FFA_FEATURES);
+    req.x1 = ffa::FFA_RXTX_MAP;
+    let resp = dispatch_ffa(&req);
+    assert_eq!(resp.x0, ffa::FFA_ERROR);
+    assert_eq!(resp.x2, ffa::FFA_NOT_SUPPORTED as u64);
+    pass += 2;
+
+    // Test 9-10: FFA_FEATURES with unsupported function -> NOT_SUPPORTED
     let mut req = zero_req(ffa::FFA_FEATURES);
     req.x1 = 0xDEAD;
     let resp = dispatch_ffa(&req);
@@ -46,13 +55,22 @@ pub fn run_tests() {
     assert_eq!(resp.x2, ffa::FFA_NOT_SUPPORTED as u64);
     pass += 2;
 
-    // Test 9-10: FFA_PARTITION_INFO_GET returns count=0
+    // Test 11-12: FFA_PARTITION_INFO_GET returns count=0 (no SPs registered yet)
     let resp = dispatch_ffa(&zero_req(ffa::FFA_PARTITION_INFO_GET));
     assert_eq!(resp.x0, ffa::FFA_SUCCESS_32);
     assert_eq!(resp.x2, 0); // no SPs
     pass += 2;
 
-    // Test 11-17: DIRECT_REQ echoes payload, swaps source/dest
+    // Test 13-14: Register an SP, PARTITION_INFO_GET returns count=1
+    hypervisor::sp_context::register_sp(
+        hypervisor::sp_context::SpContext::new(0x8001, 0x1000, 0x2000, [0xAA; 4]),
+    );
+    let resp = dispatch_ffa(&zero_req(ffa::FFA_PARTITION_INFO_GET));
+    assert_eq!(resp.x0, ffa::FFA_SUCCESS_32);
+    assert_eq!(resp.x2, 1); // 1 SP registered
+    pass += 2;
+
+    // Test 15-21: DIRECT_REQ echoes payload, swaps source/dest
     let req = SmcResult8 {
         x0: ffa::FFA_MSG_SEND_DIRECT_REQ_32,
         x1: (0x0001 << 16) | 0x8001, // source=1, dest=0x8001
@@ -73,7 +91,7 @@ pub fn run_tests() {
     assert_eq!(resp.x7, 0xEEEE);
     pass += 7;
 
-    // Test 18-22: SPMD framework message (FFA_VERSION_REQ)
+    // Test 22-26: SPMD framework message (FFA_VERSION_REQ)
     // SPMD sends x1 = (SPMD_EP_ID << 16) | SPMC_ID = (0xFFFF << 16) | 0x8000
     let spmd_ep_id: u64 = 0xFFFF;
     let spmc_id: u64 = ffa::FFA_SPMC_ID as u64;
@@ -94,7 +112,7 @@ pub fn run_tests() {
     assert_eq!(resp.x4, 0);
     pass += 5;
 
-    // Test 22-23: Unknown function -> FFA_ERROR(NOT_SUPPORTED)
+    // Test 27-28: Unknown function -> FFA_ERROR(NOT_SUPPORTED)
     let resp = dispatch_ffa(&zero_req(0xDEADBEEF));
     assert_eq!(resp.x0, ffa::FFA_ERROR);
     assert_eq!(resp.x2, ffa::FFA_NOT_SUPPORTED as u64);
