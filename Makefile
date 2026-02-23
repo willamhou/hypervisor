@@ -387,7 +387,7 @@ run-pkvm: build-pkvm-dtb
 	@echo "Starting pKVM + SPMC boot chain..."
 	@echo "Press Ctrl+A then X to exit QEMU"
 	$(QEMU_SEL2) -machine virt,secure=on,virtualization=on,gic-version=3 \
-	    -cpu max,pauth-impdef=on -smp 4 -m 2G -nographic \
+	    -cpu max,pauth-impdef=on,sve=off -smp 4 -m 2G -nographic \
 	    -bios $(TFA_FLASH_PKVM) \
 	    -device loader,file=$(LINUX_IMAGE),addr=0x40200000,force-raw=on \
 	    -device loader,file=$(PKVM_DTB),addr=0x47000000,force-raw=on \
