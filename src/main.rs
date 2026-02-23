@@ -308,6 +308,11 @@ pub extern "C" fn rust_main_sel2(
         uart_puts_local(b"[SPMC] No HW config DTB, using QEMU virt defaults\n");
     }
 
+    // 4.5. Enable S-EL2 Stage-1 MMU (identity map with NS=1 for Non-Secure DRAM)
+    // Must be before GIC init (Device mapping needed) and before any NWd RXTX access.
+    hypervisor::sel2_mmu::init_sel2_stage1();
+    uart_puts_local(b"[SPMC] S-EL2 Stage-1 MMU enabled (NS DRAM mapped)\n");
+
     // 5. Initialize GIC
     hypervisor::arch::aarch64::peripherals::gicv3::init();
     uart_puts_local(b"[SPMC] GIC initialized\n");

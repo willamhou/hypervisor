@@ -11,6 +11,8 @@ pub mod mm;
 pub mod spmc_handler;
 pub mod sp_context;
 pub mod secure_stage2;
+#[cfg(feature = "sel2")]
+pub mod sel2_mmu;
 pub mod percpu;
 pub mod platform;
 pub mod scheduler;

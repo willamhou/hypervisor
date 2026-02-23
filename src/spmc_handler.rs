@@ -619,11 +619,14 @@ fn handle_partition_info_get() -> SmcResult8 {
         });
     }
 
+    // FF-A v1.1: x3 = size of each partition info descriptor (24 bytes).
+    // pKVM reads this to calculate copy_sz = partition_sz * count.
+    // Without this, pKVM copies 0 bytes and the guest sees all zeros.
     SmcResult8 {
         x0: ffa::FFA_SUCCESS_32,
         x1: 0,
         x2: count,
-        x3: 0,
+        x3: 24, // sizeof(ffa_partition_info) = 24 bytes per FF-A v1.1 Table 5.37
         x4: 0,
         x5: 0,
         x6: 0,

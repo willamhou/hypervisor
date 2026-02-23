@@ -82,6 +82,7 @@ make fmt          # Format code
 | `SpmcHandler` | `src/spmc_handler.rs` | S-EL2 SPMC event loop + FF-A dispatch, multi-SP DIRECT_REQ routing via `dispatch_to_sp()` + `enter_guest()` ERET, NS interrupt preemption (SP_IRQ_PREEMPTED flag, CNTHP timer, FFA_INTERRUPT return), `resume_preempted_sp()` via FFA_RUN, secure vIRQ injection via `inject_pending_virq()` (HCR_EL2.VI), vFIQ injection via `inject_pending_vfiq()` (HCR_EL2.VF, `vfiq` feature), cross-SP preemption via `dispatch_interrupt_to_sp()`, NWd RXTX management, PARTITION_INFO_GET writes 24-byte descriptors to NWd RX buffer |
 | `SpContext` | `src/sp_context.rs` | Per-SP state machine (Reset→Idle→Running→Blocked→Preempted), wraps VcpuContext, per-SP `owned_intids[4]` + `pending_irq` + `fiq_intids[4]`/`pending_fiq` (vfiq feature), global SpStore, `for_each_sp()`/`find_sp_for_intid()`/`find_sp_with_pending_irq()`/`is_fiq_delivery_for()` iterators |
 | `SecureStage2Config` | `src/secure_stage2.rs` | VSTTBR_EL2/VSTCR_EL2 config for SP isolation, `build_sp_stage2()` identity-maps SP code + UART |
+| `Sel2Mmu` | `src/sel2_mmu.rs` | S-EL2 Stage-1 identity map: static L0/L1/L2 tables, NS=1 for NWd DRAM, Device for GIC/UART, Normal Secure for SPMC/SPs |
 
 ### Exception Handling Flow
 ```
@@ -379,7 +380,17 @@ Guest GICR writes only update `VirtualGicr` shadow state. `ensure_vtimer_enabled
 TF-A's default `CPTR_EL3.TFP=1` traps ALL FP/SIMD instructions from S-EL2 to EL3. Rust debug-mode `read_volatile` uses NEON SIMD internally (`cnt v0.8b, v0.8b` for popcount alignment check in `is_aligned_to`), causing silent hangs on any memory read. Fix: `CTX_INCLUDE_FPREGS=1` in TF-A build (clears CPTR_EL3.TFP). Requires `ENABLE_SVE_FOR_NS=0` and `ENABLE_SME_FOR_NS=0` to avoid build conflicts.
 
 ### S-EL2 SPMC Boot (`sel2` feature)
-Entry point: `boot_sel2.S` → `rust_main_sel2(manifest_addr, hw_config_addr, core_id)`. SPMD passes x0=TOS_FW_CONFIG (manifest DTB at 0x0e002000), x1=HW_CONFIG, x4=core_id. Init: exception vectors → manifest parse → GIC init (enables PPI 26+29 as Secure Group 1) → CNTHCTL_EL2 timer access → Secure Stage-2 → parse SPKG header (img_offset=0x4000) → clear SCTLR_EL1/VBAR_EL1 → ERET to SP1 → SP calls FFA_MSG_WAIT → detect SP2 at SP2_LOAD_ADDR (0x0e400000) → boot SP2 if present → SPMC event loop. `src/manifest.rs` parses `/attribute` node (spmc_id, maj_ver, min_ver) per FF-A Core Manifest v1.0 (DEN0077A).
+Entry point: `boot_sel2.S` → `rust_main_sel2(manifest_addr, hw_config_addr, core_id)`. SPMD passes x0=TOS_FW_CONFIG (manifest DTB at 0x0e002000), x1=HW_CONFIG, x4=core_id. Init: exception vectors → manifest parse → **S-EL2 Stage-1 MMU** (identity map with NS=1 for NWd DRAM) → GIC init (enables PPI 26+29 as Secure Group 1) → CNTHCTL_EL2 timer access → Secure Stage-2 → parse SPKG header (img_offset=0x4000) → clear SCTLR_EL1/VBAR_EL1 → ERET to SP1 → SP calls FFA_MSG_WAIT → detect SP2 at SP2_LOAD_ADDR (0x0e400000) → boot SP2 if present → SPMC event loop. `src/manifest.rs` parses `/attribute` node (spmc_id, maj_ver, min_ver) per FF-A Core Manifest v1.0 (DEN0077A).
+
+### S-EL2 Stage-1 MMU (`src/sel2_mmu.rs`)
+S-EL2 runs with MMU off by default. All memory accesses target the **Secure** physical address space. NWd RXTX buffer PAs (e.g. 0x42a16000) are in **Non-Secure** DRAM — writing without Stage-1 translation hits the Secure alias, so pKVM reads zeros from the NS alias.
+
+**Fix**: `init_sel2_stage1()` enables a minimal S-EL2 Stage-1 identity map. Static page tables (3 pages in `.bss`, no heap):
+- **L1[1-2]**: 1GB blocks at 0x40000000/0x80000000, **NS=1**, Normal WB, XN → NWd DRAM
+- **L2[64-79]**: 2MB Device blocks, NS=0, XN → GIC (0x08000000) + UART (0x09000000)
+- **L2[112-127]**: 2MB Normal blocks, NS=0 → SPMC code + SPs + secure heap (0x0E000000)
+
+Registers: MAIR_EL2 (Attr0=Device, Attr1=Normal-WB), TCR_EL2 (T0SZ=16, 4KB, 48-bit PA), TTBR0_EL2, SCTLR_EL2.{M,C,I}=1. Independent of Secure Stage-2 (VSTTBR_EL2) used for SP isolation.
 
 ### Secure Virtual Interrupt Injection (Phase D)
 Hafnium-compatible HCR_EL2.VI/VF mechanism for injecting virtual interrupts to SPs at S-EL1:
@@ -422,7 +433,7 @@ NS-EL1: Linux/Android guest
 **Sprint 5.2** (done): RXTX + PARTITION_INFO_GET forwarding + Linux FF-A discovery, SPMC NWd RXTX management (SPMD forwards RXTX_MAP to SPMC), 8/8 BL33 tests pass
 **Phase C** (done): NS interrupt preemption — IRQ during SP → FFA_INTERRUPT → FFA_RUN resume, CNTHP timer, SP_IRQ_PREEMPTED flag, Preempted state, SP Hello slow path, 9/9 BL33 tests pass
 **Phase D** (done): Multi-SP + secure vIRQ/vFIQ injection — SP2 (sp_irq) at S-EL1, per-SP INTID ownership, HCR_EL2.VI + HF_INTERRUPT_GET paravirt, CNTHP poll timer, cross-SP preemption, `vfiq` feature flag for HCR_EL2.VF + HF_FIQ_GET (FIQ delivery), 12/12 BL33 tests pass (11 base + 1 vFIQ)
-**Phase 4.5** (partial): pKVM at NS-EL2 + our SPMC at S-EL2 — `make run-pkvm` boots pKVM to BusyBox shell (`Protected hVHE mode initialized successfully`). Uses AOSP android16-6.12 kernel (`make build-pkvm-kernel`) with Google's pKVM FF-A proxy fixes (`kvm-arm.mode=protected`). SPMC correctly handles FFA_VERSION + FFA_FEATURES from SPMD. Secondary CPUs fail (PSCI CPU_ON timeout). SVE workaround: `sve=off` (ENABLE_SVE_FOR_NS=0 conflicts with CTX_INCLUDE_FPREGS=1)
+**Phase 4.5** (partial): pKVM at NS-EL2 + our SPMC at S-EL2 — `make run-pkvm` boots pKVM to BusyBox shell (`Protected hVHE mode initialized successfully`). Uses AOSP android16-6.12 kernel (`make build-pkvm-kernel`) with Google's pKVM FF-A proxy fixes (`kvm-arm.mode=protected`). FF-A v1.1 discovery works: RXTX_MAP forwarded by SPMD, PARTITION_INFO_GET returns SP1+SP2 descriptors (x3=24 partition_sz). S-EL2 Stage-1 MMU maps NS DRAM with NS=1 bit so writes to pKVM's hyp RX buffer reach Non-Secure memory. Secondary CPUs fail (PSCI CPU_ON timeout). SVE workaround: `sve=off` (ENABLE_SVE_FOR_NS=0 conflicts with CTX_INCLUDE_FPREGS=1)
 **Phase 5**: RME & CCA (Realm Manager)
 
 See `DEVELOPMENT_PLAN.md` for full details.
