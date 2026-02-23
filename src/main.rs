@@ -580,7 +580,10 @@ pub extern "C" fn rust_main_sel2(
 ///
 /// Called from boot_sel2.S:secondary_entry_sel2 after SPMD routes
 /// PSCI CPU_ON to our registered secondary EP.
-/// Must: install VBAR, install MMU, signal FFA_MSG_WAIT, then halt.
+///
+/// SPMD is per-CPU: when NS-EL2 on this CPU issues an FF-A SMC, SPMD
+/// context-switches THIS CPU into S-EL2 and resumes our code here.
+/// We must run an event loop (like the primary) to handle those requests.
 #[cfg(feature = "sel2")]
 #[no_mangle]
 pub extern "C" fn rust_main_sel2_secondary(
@@ -598,10 +601,11 @@ pub extern "C" fn rust_main_sel2_secondary(
     print_digit(core_id as u8);
     uart_puts_local(b" warm-boot, signaling FFA_MSG_WAIT\n");
 
-    // 3. Signal SPMD: secondary init complete
-    // FFA_MSG_WAIT tells SPMD this CPU's S-EL2 init is done,
-    // allowing SPMD to complete the PSCI CPU_ON for NS-EL2.
-    hypervisor::ffa::smc_forward::forward_smc8(
+    // 3. Signal SPMD: secondary init complete, receive first FF-A request.
+    // FFA_MSG_WAIT tells SPMD this CPU's S-EL2 init is done.
+    // When NS-EL2 later issues an FF-A SMC on this CPU, SPMD re-enters
+    // S-EL2 here and the return value contains the FF-A request.
+    let first_request = hypervisor::ffa::smc_forward::forward_smc8(
         hypervisor::ffa::FFA_MSG_WAIT,
         0,
         0,
@@ -612,11 +616,11 @@ pub extern "C" fn rust_main_sel2_secondary(
         0,
     );
 
-    // Should not return from FFA_MSG_WAIT during warm-boot.
-    // SPMD handles the return to NWd. If we get here, halt.
-    loop {
-        unsafe { core::arch::asm!("wfe") };
-    }
+    // 4. Enter per-CPU event loop (same as primary CPU).
+    // SPMD routes FF-A SMCs per-CPU — each physical CPU runs its own
+    // event loop independently. Without this, NS-EL2 callers on this
+    // CPU would never get a response and hang forever.
+    hypervisor::spmc_handler::run_event_loop(first_request);
 }
 
 /// Secondary pCPU entry point (called from boot.S after PSCI CPU_ON start).

@@ -62,6 +62,7 @@ pub fn run_event_loop(first_request: SmcResult8) -> ! {
     let mut request = first_request;
     loop {
         let response = dispatch_request(&request);
+
         // Send response to SPMD and receive the next request
         request = crate::ffa::smc_forward::forward_smc8(
             response.x0,
