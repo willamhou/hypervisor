@@ -28,8 +28,9 @@ make build-spmc   # Build hypervisor as S-EL2 SPMC binary (--features sel2,vfiq)
 make build-sp-hello # Build SP Hello binary (S-EL1 Secure Partition)
 make build-sp-irq  # Build SP IRQ binary (S-EL1, interrupt handling)
 make build-tfa-spmc # Build TF-A with real SPMC as BL32 + SP Hello + SP IRQ
+make build-pkvm-kernel # Build AOSP android16-6.12 kernel for pKVM (Docker, ~15-30min first time)
 make build-tfa-pkvm # Build TF-A flash-pkvm.bin (ARM_LINUX_KERNEL_AS_BL33, Linux as BL33)
-make run-pkvm     # Boot pKVM (NS-EL2) + our SPMC (S-EL2) — Linux as BL33 (requires build-tfa-pkvm)
+make run-pkvm     # Boot pKVM (NS-EL2) + our SPMC (S-EL2) — AOSP kernel as BL33 (requires build-pkvm-kernel + build-tfa-pkvm)
 make debug        # Build + run with GDB server on port 1234
 make clean        # Clean build artifacts
 make check        # Check code without building
@@ -421,7 +422,7 @@ NS-EL1: Linux/Android guest
 **Sprint 5.2** (done): RXTX + PARTITION_INFO_GET forwarding + Linux FF-A discovery, SPMC NWd RXTX management (SPMD forwards RXTX_MAP to SPMC), 8/8 BL33 tests pass
 **Phase C** (done): NS interrupt preemption — IRQ during SP → FFA_INTERRUPT → FFA_RUN resume, CNTHP timer, SP_IRQ_PREEMPTED flag, Preempted state, SP Hello slow path, 9/9 BL33 tests pass
 **Phase D** (done): Multi-SP + secure vIRQ/vFIQ injection — SP2 (sp_irq) at S-EL1, per-SP INTID ownership, HCR_EL2.VI + HF_INTERRUPT_GET paravirt, CNTHP poll timer, cross-SP preemption, `vfiq` feature flag for HCR_EL2.VF + HF_FIQ_GET (FIQ delivery), 12/12 BL33 tests pass (11 base + 1 vFIQ)
-**Phase 4.5** (partial): pKVM at NS-EL2 + our SPMC at S-EL2 — `make run-pkvm` boots pKVM to BusyBox shell (`Protected hVHE mode initialized successfully`). SPMC correctly handles FFA_VERSION + FFA_FEATURES from SPMD. FF-A works end-to-end in nVHE mode but pKVM's FF-A proxy (protected mode) has known kernel bug blocking FF-A discovery. Secondary CPUs fail (PSCI CPU_ON timeout). SVE workaround: `sve=off` (ENABLE_SVE_FOR_NS=0 conflicts with CTX_INCLUDE_FPREGS=1)
+**Phase 4.5** (partial): pKVM at NS-EL2 + our SPMC at S-EL2 — `make run-pkvm` boots pKVM to BusyBox shell (`Protected hVHE mode initialized successfully`). Uses AOSP android16-6.12 kernel (`make build-pkvm-kernel`) with Google's pKVM FF-A proxy fixes (`kvm-arm.mode=protected`). SPMC correctly handles FFA_VERSION + FFA_FEATURES from SPMD. Secondary CPUs fail (PSCI CPU_ON timeout). SVE workaround: `sve=off` (ENABLE_SVE_FOR_NS=0 conflicts with CTX_INCLUDE_FPREGS=1)
 **Phase 5**: RME & CCA (Realm Manager)
 
 See `DEVELOPMENT_PLAN.md` for full details.

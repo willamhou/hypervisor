@@ -21,6 +21,7 @@ Thumbs.db
 
 # Guest kernel images (built via Docker)
 guest/android/Image
+guest/linux/Image-pkvm
 
 # Worktrees
 .worktrees/

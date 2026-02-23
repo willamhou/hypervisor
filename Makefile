@@ -1,4 +1,4 @@
-.PHONY: all build run debug clean build-qemu build-bl32-bl33 build-tfa build-tfa-bl33 build-spmc build-sp-hello build-sp-irq build-tfa-spmc build-tfa-full build-tfa-pkvm run-sel2 run-tfa-linux run-tfa-linux-ffa run-spmc build-pkvm-dtb run-pkvm
+.PHONY: all build run debug clean build-qemu build-bl32-bl33 build-tfa build-tfa-bl33 build-spmc build-sp-hello build-sp-irq build-tfa-spmc build-tfa-full build-tfa-pkvm build-pkvm-kernel run-sel2 run-tfa-linux run-tfa-linux-ffa run-spmc build-pkvm-dtb run-pkvm
 
 # Auto-load Cargo environment
 SHELL := /bin/bash
@@ -355,8 +355,20 @@ run-tfa-linux-ffa:
 # pKVM DTB (kvm-arm.mode=protected, psci method=smc)
 PKVM_DTB ?= guest/linux/guest-pkvm.dtb
 
+# pKVM kernel image (AOSP android16-6.12, built via Docker)
+PKVM_IMAGE ?= guest/linux/Image-pkvm
+
 # TF-A flash with ARM_LINUX_KERNEL_AS_BL33 (passes DTB addr in x0 to Linux)
 TFA_FLASH_PKVM := $(TFA_DIR)/flash-pkvm.bin
+
+# Build AOSP android16-6.12 kernel for pKVM (~15-30min first time)
+build-pkvm-kernel:
+	@echo "Building AOSP android16-6.12 kernel for pKVM (Docker)..."
+	docker run --rm \
+	    -v $(PWD)/guest/linux:/output \
+	    -v $(PWD)/guest/linux/build-pkvm-kernel.sh:/scripts/build-pkvm-kernel.sh:ro \
+	    -v pkvm-kernel-build-cache:/build \
+	    debian:bookworm-slim bash /scripts/build-pkvm-kernel.sh
 
 # Build pKVM DTB from source
 build-pkvm-dtb:
@@ -384,12 +396,13 @@ build-tfa-pkvm: build-bl32-bl33 build-spmc build-sp-hello build-sp-irq
 # BL33 = Linux kernel (not our hypervisor) — pKVM replaces our NS-EL2 code
 run-pkvm: build-pkvm-dtb
 	@test -f $(TFA_FLASH_PKVM) || (echo "ERROR: $(TFA_FLASH_PKVM) not found. Run 'make build-tfa-pkvm' first." && exit 1)
+	@test -f $(PKVM_IMAGE) || (echo "ERROR: $(PKVM_IMAGE) not found. Run 'make build-pkvm-kernel' first." && exit 1)
 	@echo "Starting pKVM + SPMC boot chain..."
 	@echo "Press Ctrl+A then X to exit QEMU"
 	$(QEMU_SEL2) -machine virt,secure=on,virtualization=on,gic-version=3 \
 	    -cpu max,pauth-impdef=on,sve=off -smp 4 -m 2G -nographic \
 	    -bios $(TFA_FLASH_PKVM) \
-	    -device loader,file=$(LINUX_IMAGE),addr=0x40200000,force-raw=on \
+	    -device loader,file=$(PKVM_IMAGE),addr=0x40200000,force-raw=on \
 	    -device loader,file=$(PKVM_DTB),addr=0x47000000,force-raw=on \
 	    -device loader,file=$(LINUX_INITRAMFS),addr=0x54000000,force-raw=on \
 	    -device loader,file=$(LINUX_DISK),addr=0x58000000,force-raw=on \
@@ -425,6 +438,7 @@ help:
 	@echo "  build-sp-irq  - Build SP IRQ binary (S-EL1, interrupt handling)"
 	@echo "  build-tfa-spmc - Build TF-A with real SPMC as BL32"
 	@echo "  run-spmc      - Boot TF-A with real SPMC at S-EL2"
+	@echo "  build-pkvm-kernel - Build AOSP android16-6.12 kernel for pKVM"
 	@echo "  build-tfa-pkvm - Build TF-A with SPMC + Linux as BL33 (Phase 4.5)"
 	@echo "  run-pkvm      - Boot TF-A -> SPMC -> pKVM kernel -> Linux (Phase 4.5)"
 	@echo "  build-tfa     - Build TF-A + flash.bin with SPD=spmd"
