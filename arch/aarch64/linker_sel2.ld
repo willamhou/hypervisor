@@ -25,6 +25,7 @@ SECTIONS
         __bss_start = .;
         *(.bss .bss.*)
         *(.bss.stack)
+        *(.bss.sel2_pcpu_stacks)
         *(COMMON)
         __bss_end = .;
     }

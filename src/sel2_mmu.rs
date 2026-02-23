@@ -109,6 +109,46 @@ const SCTLR_M: u64 = 1 << 0; // MMU enable
 const SCTLR_C: u64 = 1 << 2; // Data cache enable
 const SCTLR_I: u64 = 1 << 12; // Instruction cache enable
 
+/// Install S-EL2 Stage-1 MMU on a secondary CPU.
+///
+/// Page tables were already filled by primary CPU's `init_sel2_stage1()`.
+/// This just programs MAIR/TCR/TTBR0 and enables SCTLR_EL2.
+pub fn install_sel2_stage1_secondary() {
+    unsafe {
+        // TLB invalidate + barriers
+        core::arch::asm!(
+            "tlbi alle2",
+            "dsb ish",
+            "isb",
+            options(nostack),
+        );
+
+        // Configure MMU registers (same values as primary)
+        let ttbr0 = &S1_L0 as *const _ as u64;
+        core::arch::asm!(
+            "msr mair_el2, {mair}",
+            "msr tcr_el2, {tcr}",
+            "msr ttbr0_el2, {ttbr0}",
+            "isb",
+            mair = in(reg) MAIR_VALUE,
+            tcr = in(reg) TCR_VALUE,
+            ttbr0 = in(reg) ttbr0,
+            options(nostack),
+        );
+
+        // Enable MMU + caches
+        let mut sctlr: u64;
+        core::arch::asm!("mrs {}, sctlr_el2", out(reg) sctlr, options(nostack));
+        sctlr |= SCTLR_M | SCTLR_C | SCTLR_I;
+        core::arch::asm!(
+            "msr sctlr_el2, {sctlr}",
+            "isb",
+            sctlr = in(reg) sctlr,
+            options(nostack),
+        );
+    }
+}
+
 /// Enable S-EL2 Stage-1 MMU with a minimal identity map.
 ///
 /// Must be called single-threaded, before any access to Non-Secure DRAM

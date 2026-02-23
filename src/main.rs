@@ -537,6 +537,35 @@ pub extern "C" fn rust_main_sel2(
         }
     }
 
+    // 5.9. Register secondary entry point with SPMD
+    {
+        extern "C" {
+            fn secondary_entry_sel2();
+        }
+        let ep = secondary_entry_sel2 as *const () as usize as u64;
+        uart_puts_local(b"[SPMC] Registering secondary EP at 0x");
+        hypervisor::uart_put_hex(ep);
+        uart_puts_local(b"\n");
+
+        let result = hypervisor::ffa::smc_forward::forward_smc(
+            hypervisor::ffa::FFA_SECONDARY_EP_REGISTER,
+            ep,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+        );
+        if result.x0 == hypervisor::ffa::FFA_SUCCESS_32 {
+            uart_puts_local(b"[SPMC] Secondary EP registered with SPMD\n");
+        } else {
+            uart_puts_local(b"[SPMC] WARNING: FFA_SECONDARY_EP_REGISTER failed, x0=0x");
+            hypervisor::uart_put_hex(result.x0);
+            uart_puts_local(b"\n");
+        }
+    }
+
     // 6. Signal SPMD: init complete, receive first NWd request
     // Note: NWd RXTX is managed by the SPMC event loop (SPMD forwards
     // FFA_RXTX_MAP from NWd to SPMC, not handled by SPMD itself).
@@ -545,6 +574,49 @@ pub extern "C" fn rust_main_sel2(
 
     // 7. Enter SPMC event loop (does not return)
     hypervisor::spmc_handler::run_event_loop(first_req);
+}
+
+/// Secondary CPU S-EL2 entry point (warm-boot via SPMD).
+///
+/// Called from boot_sel2.S:secondary_entry_sel2 after SPMD routes
+/// PSCI CPU_ON to our registered secondary EP.
+/// Must: install VBAR, install MMU, signal FFA_MSG_WAIT, then halt.
+#[cfg(feature = "sel2")]
+#[no_mangle]
+pub extern "C" fn rust_main_sel2_secondary(
+    _manifest_addr: usize,
+    _hw_config_addr: usize,
+    core_id: usize,
+) -> ! {
+    // 1. Install exception vectors (for fault diagnosis)
+    exception::init();
+
+    // 2. Install S-EL2 Stage-1 MMU (reuse primary's page tables)
+    hypervisor::sel2_mmu::install_sel2_stage1_secondary();
+
+    uart_puts_local(b"[SPMC] Secondary CPU ");
+    print_digit(core_id as u8);
+    uart_puts_local(b" warm-boot, signaling FFA_MSG_WAIT\n");
+
+    // 3. Signal SPMD: secondary init complete
+    // FFA_MSG_WAIT tells SPMD this CPU's S-EL2 init is done,
+    // allowing SPMD to complete the PSCI CPU_ON for NS-EL2.
+    hypervisor::ffa::smc_forward::forward_smc8(
+        hypervisor::ffa::FFA_MSG_WAIT,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+    );
+
+    // Should not return from FFA_MSG_WAIT during warm-boot.
+    // SPMD handles the return to NWd. If we get here, halt.
+    loop {
+        unsafe { core::arch::asm!("wfe") };
+    }
 }
 
 /// Secondary pCPU entry point (called from boot.S after PSCI CPU_ON start).

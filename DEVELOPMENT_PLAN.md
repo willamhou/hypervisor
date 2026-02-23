@@ -884,7 +884,7 @@ NS-EL1: Linux/Android guest
 2. **双 Hypervisor 协调**:
    - [x] pKVM (NS-EL2) 和我们的 SPMC (S-EL2) 同时运行
    - [x] EL3 SPMD 世界切换正常 (SPMC 收到 pKVM 转发的 FF-A 请求)
-   - [ ] Secondary CPU boot 失败 (PSCI CPU_ON 5s timeout, 仅 CPU0 在线)
+   - [x] Secondary CPU warm-boot: `FFA_SECONDARY_EP_REGISTER` + `secondary_entry_sel2` + per-CPU stacks + `rust_main_sel2_secondary()` (VBAR→MMU→FFA_MSG_WAIT)
 
 3. **已知限制**:
    - pKVM FF-A proxy (protected/hVHE mode) 将 FFA_VERSION NOT_SUPPORTED 返回给 Linux driver，尽管 SPMC 返回了正确的 v1.1
@@ -1295,7 +1295,7 @@ GitHub Actions配置：
 **Sprint 5.2 完成**: SPMC NWd RXTX management (SPMD forwards RXTX_MAP/UNMAP/RX_RELEASE to SPMC), PARTITION_INFO_GET writes to NWd RX buffer, Linux FF-A discovery, 8/8 BL33 tests PASS, 33 SPMC handler assertions
 **Phase C 完成**: NS interrupt preemption — FFA_INTERRUPT + FFA_RUN resume, CNTHP timer, SP_IRQ_PREEMPTED flag, Preempted state, 9/9 BL33 tests PASS
 **Phase D 完成**: Multi-SP + secure vIRQ/vFIQ injection — SP2 (sp_irq), per-SP INTID ownership, HCR_EL2.VI + HF_INTERRUPT_GET paravirt (Hafnium-compatible), CNTHP poll timer, cross-SP preemption, `vfiq` feature flag for HCR_EL2.VF + HF_FIQ_GET (FIQ delivery, per-SP `fiq_intids[]`), 12/12 BL33 tests PASS (11 base + 1 vFIQ), 42 SPMC handler + 28 SP context assertions (45/40 with vfiq)
-**Phase 4.5 部分完成**: pKVM boot ✅ (`Protected hVHE mode initialized successfully`), SPMC FF-A responses ✅, FF-A nVHE mode ✅ (driver v1.1 registered), FF-A protected mode ❌ (pKVM FF-A proxy kernel bug in Linux 6.12, need 6.13+), secondary CPU boot ❌ (PSCI CPU_ON timeout)
+**Phase 4.5 部分完成**: pKVM boot ✅ (`Protected hVHE mode initialized successfully`), SPMC FF-A responses ✅, FF-A nVHE mode ✅ (driver v1.1 registered), FF-A protected mode ❌ (pKVM FF-A proxy kernel bug in Linux 6.12, need 6.13+), secondary CPU warm-boot ✅ (FFA_SECONDARY_EP_REGISTER + per-CPU stacks + MMU install)
 
 **Phase 8+ 候选方向** (选择一个):
 

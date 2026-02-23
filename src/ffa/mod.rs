@@ -59,6 +59,7 @@ pub const FFA_MEM_LEND_64: u64 = 0xC4000072;
 pub const FFA_MEM_SHARE_64: u64 = 0xC4000073;
 pub const FFA_MEM_RETRIEVE_REQ_64: u64 = 0xC4000074;
 pub const FFA_NOTIFICATION_INFO_GET_64: u64 = 0xC4000083;
+pub const FFA_SECONDARY_EP_REGISTER: u64 = 0xC4000087;
 
 // ── FF-A Version ──────────────────────────────────────────────────
 pub const FFA_VERSION_1_1: u32 = 0x00010001; // Major=1, Minor=1
