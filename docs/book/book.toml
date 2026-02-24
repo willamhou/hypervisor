@@ -1,0 +1,14 @@
+[book]
+title = "Scratch a Rust Hypervisor"
+authors = ["Willam Hou"]
+language = "en"
+src = "en/src"
+
+[build]
+build-dir = "book"
+
+[output.html]
+default-theme = "light"
+preferred-dark-theme = "ayu"
+git-repository-url = "https://github.com/willamhou/hypervisor"
+edit-url-template = "https://github.com/willamhou/hypervisor/edit/main/docs/book/{path}"
