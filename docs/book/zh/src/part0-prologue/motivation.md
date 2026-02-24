@@ -1,4 +1,29 @@
-# Project Motivation
+# 项目初衷
 
-<!-- TODO: Author first draft -->
-<!-- Key points: Mid-2025 idea → Rust alone won't work → Claude Code update → idea reignited -->
+## 一个挥之不去的想法
+
+2025 年年中。我一直在想用 Rust 重写一个 hypervisor。我之前做的那个是 C 写的——这个领域的行业标准。但 C 在这个层级简直是雷区：未定义行为、手动内存管理、寄存器宽度的值没有类型安全。Rust 的 `no_std` 生态已经足够成熟，技术上可行了。
+
+然后我搁置了。一个人用 Rust 写裸机 hypervisor——加上所有的内联汇编、自定义链接脚本和架构特定的寄存器操作——感觉需要好几个月。我还有创业公司要经营。
+
+## Claude Code 改变了等式
+
+2025 年底，Anthropic 对 Claude Code 做了一次大更新。我之前一直在用它做应用层的工作，但系统编程能力的提升引起了我的注意。它能推理 ARM 架构寄存器。它能写出连贯的 `no_std` Rust。它能区分 EL1 和 EL2。
+
+想法重新点燃了。
+
+不是"AI 能不能写一个 hypervisor？"——这不是正确的问题。正确的问题是：**AI 能不能把一个 10 个月的开发周期压缩到一个人几周内可以完成的程度？**
+
+## 实验
+
+我设了一个简单的目标：从零重建核心的 hypervisor 旅程，用 Rust，用 Claude Code 做结对编程搭档。不是玩具——一个真正的 Type-1 hypervisor，能启动 Linux，处理 SMP，做 virtio I/O，实现 ARM FF-A 固件框架。
+
+规则：
+- **只用 Rust**（加上启动和异常向量必需的 ARM64 汇编）
+- **不用现有的 hypervisor 代码**——不 fork Hafnium，不从 C 版本抄
+- **AI 作为结对编程搭档**——Claude Code 负责规划、实现、测试、调试
+- **全程记录**——每个 commit，每个设计决策，每个 bug
+
+2026 年 1 月 26 日：第一个 commit。2026 年 2 月 24 日：pKVM 带着我们的 SPMC 在 S-EL2 启动，FF-A v1.1 完全可用。
+
+30 天。193 个 commit。让我们看看这是怎么发生的。

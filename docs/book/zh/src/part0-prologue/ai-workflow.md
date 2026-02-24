@@ -1,4 +1,69 @@
-# AI Workflow — Vibe Coding with Claude Code
+# AI 工作流 — 用 Claude Code 做 Vibe Coding
 
-<!-- TODO -->
-<!-- Claude Code setup, CLAUDE.md as project knowledge base, agent orchestration, planning → TDD → review → commit loop -->
+## 什么是 Vibe Coding？
+
+Vibe coding 是按意图编程，而不是按键编程。你在高层描述你想要什么——"给每个 vCPU 的 Redistributor 状态加上 GICR trap-and-emulate"——AI 把它翻译成可以工作的代码。你留在架构和设计空间。AI 处理实现细节。
+
+对应用代码来说，这已经是常规操作。对裸机系统编程来说，这是完全不同的事。AI 需要理解 ARM 架构寄存器、异常级别语义、内存映射 I/O 惯例，以及 `no_std` Rust 的微妙之处。要把这做好需要一套特定的工作流。
+
+## 开发循环
+
+每个特性都遵循这个循环：
+
+```
+1. 规划    → 写设计文档，包含架构约束
+2. 测试    → 先写测试用例（TDD）
+3. 实现    → AI 生成代码，人类审查
+4. 调试    → AI 提出修复方案，人类对照 ARM 手册验证
+5. 审查    → 代码审查，检查正确性和风格
+6. 提交    → 规范化 commit message
+```
+
+这在 git 历史中是可见的。大多数特性都有一个 `docs:` commit（设计），然后是 `feat:` commit（实现），然后是 `fix:` commit（调试），然后又是 `docs:`（更新 CLAUDE.md）。
+
+## CLAUDE.md — 项目大脑
+
+项目中最重要的文件是 [`CLAUDE.md`](https://github.com/willamhou/hypervisor/blob/main/CLAUDE.md)。它是一个活文档，Claude Code 在每次会话开始时读取。它包含：
+
+- **架构概览**：特权模型、核心抽象、异常处理流程
+- **构建命令**：每个 `make` 目标及其 feature flag 文档
+- **内存布局**：hypervisor、guest、设备的地址映射
+- **关键实现细节**：用血的教训换来的知识，比如"用 HPFAR_EL2，不要用 FAR_EL2"和"永远不要修改 guest 的 SPSR_EL2"
+- **测试清单**：全部 33 个测试套件及其断言数
+
+这个文件是有机生长的。每次我们踩到一个因为缺少上下文导致的 bug，修复中都包括更新 CLAUDE.md，这样 AI 就不会犯同样的错误。到最后，它超过了 500 行——本质上是一份压缩的架构参考手册。
+
+## Agent 编排
+
+Claude Code 支持针对不同任务的专用 agent。项目中使用的：
+
+| Agent | 角色 | 何时使用 |
+|-------|------|---------|
+| **planner** | 设计架构，分解特性 | 任何实现之前 |
+| **tdd-guide** | 先写测试，再实现 | 每个新特性 |
+| **code-reviewer** | 审查正确性、安全性、风格 | 每次实现之后 |
+| **build-error-resolver** | 修复编译错误 | `make` 失败时 |
+| **architect** | 评估设计权衡 | 重大架构决策 |
+
+这些 agent 作为子进程运行，有聚焦的上下文。planner 看不到测试代码。code-reviewer 看不到设计文档。这种分离让每个 agent 的上下文窗口保持聚焦。
+
+## AI 擅长什么
+
+- **模板和结构**：寄存器定义、match 分支、测试框架
+- **交叉引用规范**："实现 FF-A v1.1 Table 5.19 描述符解析" → 可工作的代码
+- **模式应用**：一旦一个 virtio 设备跑通了，加第二个几乎是自动的
+- **调试假设**：给定一个 ESR_EL2 值和症状，AI 能缩小可能的原因范围
+
+## AI 不擅长什么
+
+- **微妙的架构 bug**：HPFAR_EL2 vs FAR_EL2 的 bug 花了整整一天。AI 一直在建议修复错误的层。
+- **并发推理**：multi-pCPU 上 `inject_spi()` 的死锁需要人类理解锁获取顺序。
+- **TF-A 集成**：构建系统（Makefile、Docker 卷、FIP 打包）有太多活动部件，AI 无法整体推理。
+- **"能跑但我不知道为什么"**：有时候 AI 生成的代码通过了测试，但人类需要验证它是因为正确的原因才正确，而不只是碰巧正确。
+
+## 数字
+
+- **193 个 commit**，30 天（约 6.4 commit/天）
+- **约 282 个测试断言**，覆盖 33 个测试套件
+- **人类:AI 比例估计**：30% 人类（架构决策、查 ARM 手册、调试）/ 70% AI（代码生成、写测试、模板代码）
+- **CLAUDE.md**：从 0 行增长到 500+ 行——累积的上下文
