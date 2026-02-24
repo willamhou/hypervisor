@@ -14,11 +14,11 @@ I shelved it.
 
 Late 2025, I was using Claude Code for day-to-day application work — API endpoints, frontend, nothing exotic. Then one evening, on a whim, I asked it to write a `boot.S` for an ARM64 EL2 entry point. Stack setup, BSS zeroing, jump to Rust.
 
-It got it right. Not approximately right — actually right. Correct use of `adr` vs `ldr`, proper `.section .text.boot` placement, `wfe` halt loop. I'd spent years working with engineers who got this wrong on their first try.
+It got the architecture right. Correct use of `adr` vs `ldr`, proper `.section .text.boot` placement, `wfe` halt loop. I'd spent years working with engineers who got this wrong on their first try. (The platform details — load address, UART initialization — it would get wrong. But the ARM architecture concepts were solid. More on that in [Part 1](../part1-first-boot/debug.md).)
 
 So I pushed harder. "Write me a Stage-2 identity map with 2MB blocks." Correct. "Trap WFI via HCR_EL2.TWI and handle it in the exception vector." Correct, including the PC advance.
 
-It understood the difference between EL1 and EL2. It could reason about `VTTBR_EL2` bits. It knew that `HPFAR_EL2` gives you the IPA while `FAR_EL2` gives you the VA. (Though it would later get confused about exactly when this matters — more on that in Part 4.)
+It understood the difference between EL1 and EL2. It could reason about `VTTBR_EL2` bits. It could explain why Stage-2 translation needs a separate register for the IPA. Not perfectly — there were gaps that would cost us days later — but the foundation was there.
 
 The idea came back. Not "can AI write a hypervisor?" — that's the wrong question. The right question was: **can AI compress what took a team of 3–4 engineers 10 months into something a solo developer can do in weeks?**
 

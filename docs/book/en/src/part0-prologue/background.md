@@ -1,8 +1,6 @@
 # Personal Background
 
-I live at the intersection of AI and systems software.
-
-I'm currently co-founder of an AI startup. Before that, I worked at both big tech companies and startups, always gravitating toward the lowest layers of the stack — kernels, hypervisors, firmware.
+I'm currently co-founder of an AI startup. Before that, I worked at both big tech companies and startups, always gravitating toward the lowest layers of the stack — kernels, hypervisors, firmware. The kind of code where a wrong bit in a register means a silent hang, and "printf debugging" means writing bytes to a UART by hand.
 
 ## The First Hypervisor
 
@@ -10,7 +8,7 @@ At one of the big tech companies, I led a team of 3–4 engineers to build a bar
 
 That experience left a mark. A few things I still carry:
 
-The complexity is never where you expect it. The trap-emulate-resume loop? That's the easy part. You write it in a weekend. Then you spend the next 9 months on everything around it — getting GICv3 list register injection right, handling 14 different ESR_EL2 exception classes, debugging a Stage-2 page table corruption that only manifests on the 4th vCPU under SMP stress. The core loop is maybe 5% of the work.
+The complexity is never where you expect it. The trap-emulate-resume loop? That's the easy part. You write it in a weekend. Then you spend the next 9 months on everything around it — getting GICv3 list register injection right, handling dozens of ESR_EL2 exception classes, debugging a Stage-2 page table corruption that only manifests on the 4th vCPU under SMP stress. The core loop is maybe 5% of the work.
 
 The ARM architecture manual is 12,000 pages, and you will need about 3,000 of them. When something goes wrong at EL2, there's no debugger, no stack trace, no helpful error message. Just a silent hang. Or worse, a hang that happens once every 200 boots. You learn to read ESR_EL2 syndrome values the way a doctor reads an EKG.
 

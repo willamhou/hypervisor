@@ -29,7 +29,7 @@ git 历史诚实地反映了这一点。早期的 commit 是杂乱的 `feat:` �
 
 ## CLAUDE.md — 项目大脑
 
-项目里最重要的文件是 [`CLAUDE.md`](https://github.com/willamhou/hypervisor/blob/main/CLAUDE.md)。Claude Code 每次开会话都会读它。这是一个活文档——一半是架构指南，一半是机构记忆，一半是"别再犯这个错"清单。
+项目里最重要的文件是 [`CLAUDE.md`](https://github.com/willamhou/hypervisor/blob/main/CLAUDE.md)。Claude Code 每次开会话都会读它。这是一个活文档——既是架构指南，也是机构记忆，更是一份"别再犯这个错"的清单。
 
 里面有什么：
 - **架构概览**：特权模型、核心抽象、异常处理流
