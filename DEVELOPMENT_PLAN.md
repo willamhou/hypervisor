@@ -19,6 +19,7 @@ M3: FF-A              ██████████████████░�
 M4: S-EL2 SPMC        ████████████████████ 100% ✅ (Sprint 4.1/4.2/4.3/4.4A/4.4B ✅)
 M4→5 Bridge           ████████████████████ 100% ✅ (Sprint 5.1/5.2 ✅, Phase C/D ✅)
 M4.5: pKVM 集成       ████████████░░░░░░░░  60% 🔧 (pKVM boot ✅, FF-A nVHE ✅, FF-A protected ❌)
+M4.6: SPMC 功能补全   ░░░░░░░░░░░░░░░░░░░░   0% ⏸️ (内存管理 + 通知 + 间接消息)
 M5: RME & CCA         ░░░░░░░░░░░░░░░░░░░░   0% ⏸️
 Android Boot          ██████████░░░░░░░░░░  50% ✅ (Phase 2 完成)
 ```
@@ -908,7 +909,167 @@ NS-EL1: Linux/Android guest
 
 ---
 
-### Milestone 5: 安全扩展 - RME & CCA（Week 43-58+）⏸️ **未开始**
+### Milestone 4.6: SPMC 功能补全（Week 43-48）⏸️ **未开始**
+**目标**: 将 NS-proxy 侧的 FF-A 内存管理、通知、间接消息功能移植到 SPMC 侧，使真实 SP（如 OP-TEE TA）能端到端工作
+
+**背景**: 当前 SPMC (`spmc_handler.rs`) 已完成发现 (VERSION/ID_GET/FEATURES)、消息传递 (DIRECT_REQ/RESP)、中断 (preemption/vIRQ/vFIQ)、NWd RXTX 管理。但内存共享、通知、间接消息仅在 NS-proxy 侧 (`src/ffa/proxy.rs`) 实现，SPMC 侧缺失。
+
+**架构约束**:
+- **并发安全**: 多 CPU event loop（每个物理 CPU 独立进入 S-EL2 处理 FF-A 请求）→ 共享状态需 SpinLock 保护
+- **Secure Stage-2 动态修改**: 当前 `secure_stage2.rs` 仅在 boot 时构建静态映射，需支持运行时 map/unmap
+- **NS PA 访问**: NWd share 的页面是 NS DRAM PA，SPMC 通过 S-EL2 Stage-1（NS=1 bit）访问
+
+#### Sprint S1: SPMC 侧内存管理（最关键）⏸️ **未开始**
+
+**优先级**: P0 — pKVM FF-A proxy 会代理 host kernel 的 MEM_SHARE 到 SPMC，无此功能则真实 TEE 用例不可能
+
+**前置: 并发安全改造**:
+- [ ] `NWD_RXTX` 从 `static mut` 改为 `SpinLock<NwdRxtxState>`
+- [ ] `SpStore` (sp_context.rs) 从 `UnsafeCell` 改为 `SpinLock` 保护（或 per-CPU 分片）
+- [ ] 新增 `SpinLock<ShareRecordStore>` 全局 share 记录管理
+
+**可复用的 NS-proxy 代码**:
+| NS-proxy 文件 | 复用方式 | 说明 |
+|---------------|----------|------|
+| `src/ffa/descriptors.rs` | 直接复用 | FF-A v1.1 composite descriptor 解析，无状态 |
+| `src/ffa/memory.rs` | 适配 | PTE SW bits 逻辑可复用，但操作 VSTTBR 而非 VTTBR |
+| `src/ffa/stage2_walker.rs` | 新写 `secure_stage2_walker.rs` | 操作 Secure Stage-2 (VSTTBR_EL2)，API 类似 |
+| `src/ffa/stub_spmc.rs` MemShareRecord | 适配 | share record 数据结构可复用，去掉 stub 部分 |
+
+**实现任务**:
+1. **Secure Stage-2 Walker** (`src/ffa/secure_stage2_walker.rs`):
+   - `SecureStage2Walker::new(vsttbr)` — 从 SP 的 VSTTBR_EL2 构造 walker
+   - `map_page_secure(ipa, pa, perm)` — 在 SP 的 Secure Stage-2 中映射 4KB 页
+   - `unmap_page_secure(ipa)` — 清除 L3 PTE
+   - 需要 secure heap 分配 L2/L3 table pages
+
+2. **SPMC 端 MEM_SHARE/LEND 接收**:
+   - NWd 通过 SPMD → SPMC 发送 MEM_SHARE（descriptor 在 NWd TX buffer）
+   - SPMC 读取 NWd TX buffer（通过 S-EL2 Stage-1 NS=1 访问 NS PA）
+   - 解析 descriptor → 分配全局 handle → 记录 ShareRecord
+   - 不立即映射 SP Stage-2（等 SP retrieve）
+
+3. **SP 端 MEM_RETRIEVE_REQ**:
+   - SP 通过 HVC/SMC 请求 retrieve（handle in x1/x2）
+   - SPMC 查找 ShareRecord → 验证 SP 是 receiver
+   - 调用 `map_page_secure()` 将页映射到 SP 的 Secure Stage-2
+   - 标记 `retrieved = true`
+
+4. **SP 端 MEM_RELINQUISH**:
+   - SP 归还共享内存 → `unmap_page_secure()` → `retrieved = false`
+
+5. **NWd 端 MEM_RECLAIM**:
+   - NWd 通过 SPMD → SPMC 回收 → 验证未 retrieve → 删除 ShareRecord
+
+**dispatch_ffa 新增匹配**:
+```
+FFA_MEM_SHARE_32/64 → handle_mem_share()
+FFA_MEM_LEND_32/64  → handle_mem_lend()
+FFA_MEM_RETRIEVE_REQ_32/64 → handle_mem_retrieve()
+FFA_MEM_RELINQUISH → handle_mem_relinquish()
+FFA_MEM_RECLAIM → handle_mem_reclaim()
+```
+
+**测试**:
+- [ ] NWd MEM_SHARE → SPMC 记录 ShareRecord
+- [ ] SP MEM_RETRIEVE → Secure Stage-2 映射验证
+- [ ] SP MEM_RELINQUISH → Secure Stage-2 unmap 验证
+- [ ] NWd MEM_RECLAIM → ShareRecord 删除
+- [ ] MEM_RECLAIM while retrieved → DENIED
+- [ ] 并发: 两个 CPU 同时 MEM_SHARE 不死锁
+
+**验收**:
+- [ ] `dispatch_ffa()` 处理 MEM_SHARE/LEND/RETRIEVE/RELINQUISH/RECLAIM
+- [ ] Secure Stage-2 动态 map/unmap 工作
+- [ ] ShareRecord 全局管理（SpinLock 保护）
+- [ ] 单元测试全部通过
+
+**预估**: 2-3 周
+
+---
+
+#### Sprint S2: SPMC 侧通知 ⏸️ **未开始**
+
+**优先级**: P1 — pKVM FF-A proxy 会转发 NOTIFICATION_SET/GET
+
+**可复用**: `src/ffa/notifications.rs` 的 `NotificationState` 结构体和 bitmap 逻辑可直接移植
+
+**实现任务**:
+1. **Per-SP 通知 bitmap**:
+   - 每个 SP 拥有 64-bit pending + 64-bit bound bitmap
+   - 存储在 `SpContext` 或独立 `SpinLock<SpNotifications>` 全局
+
+2. **dispatch_ffa 新增**:
+   - `FFA_NOTIFICATION_BITMAP_CREATE/DESTROY` — 为 SP 创建/销毁 bitmap
+   - `FFA_NOTIFICATION_BIND/UNBIND` — SP 绑定通知到 sender
+   - `FFA_NOTIFICATION_SET` — NWd/SP 设置目标 SP 的 pending bit
+   - `FFA_NOTIFICATION_GET` — SP 读取并清除 pending bits
+   - `FFA_NOTIFICATION_INFO_GET` — 查询哪些 SP 有 pending 通知
+
+3. **通知→中断联动**（可选增强）:
+   - SET 后触发 vIRQ 唤醒目标 SP（通过现有 `inject_pending_virq()` 机制）
+
+**测试**:
+- [ ] BITMAP_CREATE/DESTROY 生命周期
+- [ ] BIND + SET + GET 端到端
+- [ ] INFO_GET 返回正确的 SP ID 列表
+- [ ] 未 BIND 的 SET → DENIED
+
+**验收**:
+- [ ] 6 个通知 FF-A 调用在 SPMC 侧全部实现
+- [ ] 单元测试通过
+
+**预估**: 1-2 周
+
+---
+
+#### Sprint S3: SPMC 侧间接消息 ⏸️ **未开始**
+
+**优先级**: P2 — 大多数 SP 使用 DIRECT_REQ/RESP，间接消息是补充
+
+**实现任务**:
+1. **Per-SP RXTX buffer 管理**:
+   - SP 通过 HVC 调用 FFA_RXTX_MAP 注册自己的 TX/RX buffer
+   - SPMC 记录每个 SP 的 RXTX PA（存储在 `SpContext` 或独立结构）
+
+2. **MSG_SEND2 路由**:
+   - NWd→SP: SPMC 读 NWd TX buffer → 写目标 SP 的 RX buffer → 设 msg_pending
+   - SP→NWd: SPMC 读 SP TX buffer → 写 NWd RX buffer
+   - SP→SP: SPMC 读源 SP TX → 写目标 SP RX
+
+3. **MSG_WAIT 增强**:
+   - 当前 MSG_WAIT 仅用于 boot/preemption 握手
+   - 需增加: SP 调用 MSG_WAIT 时检查 msg_pending → 如果有 pending 消息，立即返回
+
+**测试**:
+- [ ] SP RXTX_MAP 注册
+- [ ] NWd→SP MSG_SEND2 端到端
+- [ ] MSG_WAIT 返回 pending 消息
+- [ ] SP→SP MSG_SEND2（跨 SP 路由）
+
+**验收**:
+- [ ] Per-SP RXTX 管理
+- [ ] MSG_SEND2 路由 (NWd↔SP, SP↔SP)
+- [ ] 单元测试通过
+
+**预估**: 1-2 周
+
+---
+
+#### Milestone 4.6 总验收:
+- [ ] SPMC 侧 FF-A 内存管理完整（MEM_SHARE/LEND/RETRIEVE/RELINQUISH/RECLAIM）
+- [ ] SPMC 侧通知完整（NOTIFICATION_BIND/SET/GET/INFO_GET）
+- [ ] SPMC 侧间接消息完整（MSG_SEND2 + per-SP RXTX）
+- [ ] 并发安全（SpinLock 保护共享状态，多 CPU event loop 安全）
+- [ ] Secure Stage-2 动态 map/unmap 工作
+- [ ] 所有新增单元测试通过
+- [ ] pKVM + 真实 SP 端到端内存共享验证（stretch goal）
+
+**状态**: ⏸️ 未开始
+
+---
+
+### Milestone 5: 安全扩展 - RME & CCA（Week 49-64+）⏸️ **未开始**
 **目标**: 实现Realm Manager (RMM)，支持Realm VM启动Guest OS
 
 #### Sprint 5.1: GPT和内存隔离（Week 37-40）⏸️ **未开始**
@@ -1249,11 +1410,12 @@ GitHub Actions配置：
 | Android | Android Boot (4 phases) | 4-8周 | — | ✅ Phase 2 完成 (PL031 RTC + Init) |
 | M4 | S-EL2 SPMC (QEMU secure=on + TF-A) | 6-8周 | 36周 | 🔧 Sprint 4.1/4.2/4.3 ✅ (75%) |
 | M4.5 | pKVM 集成 (NS-EL2=pKVM, S-EL2=us) | 4-6周 | 42周 | 🔧 60% (boot ✅, FF-A protected ❌ kernel bug) |
-| M5 | RME & CCA | 16-20周 | 58-62周 | ⏸️ 未开始 |
+| M4.6 | SPMC 功能补全 (内存管理+通知+间接消息) | 4-7周 | 49周 | ⏸️ 未开始 |
+| M5 | RME & CCA | 16-20周 | 65-69周 | ⏸️ 未开始 |
 
-**总计**: 约12-14个月（灵活调整）
-**当前进度**: 20周 / 52-56周 = **约37%** (按预估周数)
-**实际开发时长**: ~4周 (2026-01-25 至 2026-02-21)
+**总计**: 约14-16个月（灵活调整）
+**当前进度**: 20周 / 59-63周 = **约33%** (按预估周数)
+**实际开发时长**: ~4周 (2026-01-25 至 2026-02-24)
 
 ---
 
@@ -1268,6 +1430,7 @@ GitHub Actions配置：
 - [x] **Android Phase 2**: PL031 RTC + Android init + 1GB RAM + binderfs ✅ **已完成 2026-02-19**
 - [x] **M4 S-EL2**: 我们的 hypervisor 作为 SPMC 在 S-EL2 运行 (TF-A boot chain) ✅ **Sprint 4.1/4.2/4.3/4.4 + 5.1 完成** (SPMC + SP + DIRECT_REQ E2E, 7/7 BL33 tests)
 - [x] **M4.5 pKVM (partial)**: pKVM boot ✅ (`Protected hVHE mode initialized`), SPMC FF-A responses ✅, FF-A nVHE ✅, FF-A protected ❌ (pKVM kernel bug in Linux 6.12) 🔧 **部分完成 2026-02-23**
+- [ ] **M4.6 SPMC 补全**: SPMC 侧内存管理 + 通知 + 间接消息 ⏸️ **未开始**
 - [ ] **M5 CCA**: Realm VM 启动 Guest OS ⏸️ **未开始**
 
 ### 8.2 工程成功标准
@@ -1288,7 +1451,7 @@ GitHub Actions配置：
 
 ## 9. 下一步行动
 
-### 🎯 当前位置：Phase 4.5 🔧 → Phase 5 (RME & CCA)
+### 🎯 当前位置：Phase 4.5 🔧 → M4.6 (SPMC 补全) → Phase 5 (RME & CCA)
 **可行性研究**: `docs/research/2026-02-20-phase4-feasibility.md` — FEASIBLE with moderate effort
 **Sprint 4.1/4.2/4.3/4.4A/4.4B 完成**: TF-A boot chain + hypervisor as BL33 (NS-EL2) + hypervisor as SPMC (S-EL2) + SPMC event loop + FF-A dispatch + SP boot at S-EL1
 **Sprint 5.1 完成**: DIRECT_REQ end-to-end (NS proxy → SPMD → SPMC → SP1), `tfa_boot` feature flag, 8-register SMC forwarding, SP1 x4+=0x1000 proof, 7/7 BL33 tests PASS
@@ -1296,6 +1459,7 @@ GitHub Actions配置：
 **Phase C 完成**: NS interrupt preemption — FFA_INTERRUPT + FFA_RUN resume, CNTHP timer, SP_IRQ_PREEMPTED flag, Preempted state, 9/9 BL33 tests PASS
 **Phase D 完成**: Multi-SP + secure vIRQ/vFIQ injection — SP2 (sp_irq), per-SP INTID ownership, HCR_EL2.VI + HF_INTERRUPT_GET paravirt (Hafnium-compatible), CNTHP poll timer, cross-SP preemption, `vfiq` feature flag for HCR_EL2.VF + HF_FIQ_GET (FIQ delivery, per-SP `fiq_intids[]`), 12/12 BL33 tests PASS (11 base + 1 vFIQ), 42 SPMC handler + 28 SP context assertions (45/40 with vfiq)
 **Phase 4.5 部分完成**: pKVM boot ✅ (`Protected hVHE mode initialized successfully`), SPMC FF-A responses ✅, FF-A nVHE mode ✅ (driver v1.1 registered), FF-A protected mode ❌ (pKVM FF-A proxy kernel bug in Linux 6.12, need 6.13+), secondary CPU warm-boot ✅ (FFA_SECONDARY_EP_REGISTER + per-CPU stacks + MMU install)
+**M4.6 SPMC 补全**: ⏸️ 未开始 — 将 NS-proxy 侧 FF-A 内存管理/通知/间接消息移植到 SPMC 侧 (Sprint S1: 内存管理 P0, Sprint S2: 通知 P1, Sprint S3: 间接消息 P2)
 
 **Phase 8+ 候选方向** (选择一个):
 
