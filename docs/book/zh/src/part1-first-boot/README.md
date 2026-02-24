@@ -1,7 +1,26 @@
-# Part 1: First Boot — From Zero to EL2
+# Part 1: 第一次启动 — 从零到 EL2
 
-> <!-- TODO: one-sentence summary -->
+> 从空目录到在 QEMU 上打印 "Hello from EL2!" —— 前 4 个 commit 证明了裸机 Rust 可以在 hypervisor 特权级运行。
 
 **Commits**: `#1-4 (9b72719..b2ff49f)`
 
-<!-- TODO: overview content -->
+## 我们要做什么
+
+这个里程碑的目标看似简单：从 EL2 打印一条消息。但要实现它，需要解决几个在普通应用开发中不存在的问题：
+
+1. **没有 OS，没有运行时** —— 二进制直接在硬件上运行（好吧，是 QEMU）。没有 `main()` 签名，没有 `libc`，没有堆。
+2. **自定义入口点** —— ARM64 汇编设置栈、清零 BSS、跳转到 Rust。
+3. **自定义链接脚本** —— 我们选择二进制在物理内存中的位置。
+4. **自定义 target** —— Rust 的标准 `aarch64-unknown-none` target 需要针对 hypervisor 做调整。
+5. **交叉编译工具链** —— 宿主机是 x86_64，目标是 ARM64。
+
+这部分结束时，`make run` 在 QEMU 串口控制台打印一个横幅然后干净地停机。就这些。但它证明了整个工具链端到端可以工作。
+
+## 章节
+
+| 章节 | 内容 |
+|------|------|
+| [架构](arch.md) | ARM64 异常等级，为什么是 EL2，QEMU 如何把我们送到那里 |
+| [实现](impl.md) | `boot.S`、`linker.ld`、`rust_main()`、UART 输出 |
+| [测试](test.md) | QEMU 串口输出作为第一个"测试" |
+| [调试笔记](debug.md) | 加载地址错误、EL2 入口条件、那个修复 commit |
