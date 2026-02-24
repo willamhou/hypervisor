@@ -9,7 +9,7 @@
 
 ## 📊 当前进度概览
 
-**整体完成度**: 🟢 **94%** (Milestone 0-2 + Options A-G + M3 Sprint 3.1/3.1b/3.1c/3.2 + M4 Sprint 4.1/4.2/4.3/4.4A/4.4B + Sprint 5.1/5.2 + Phase C/D + M4.5 partial)
+**整体完成度**: 🟢 **96%** (Milestone 0-2 + Options A-G + M3 Sprint 3.1/3.1b/3.1c/3.2 + M4 Sprint 4.1/4.2/4.3/4.4A/4.4B + Sprint 5.1/5.2 + Phase C/D + M4.5 ✅)
 
 ```
 M0: 项目启动          ████████████████████ 100% ✅
@@ -18,7 +18,7 @@ M2: 增强功能          ██████████████████
 M3: FF-A              ██████████████████░░  90% 🔧 (Sprint 3.2 ✅, Sprint 3.3 推迟到 M4)
 M4: S-EL2 SPMC        ████████████████████ 100% ✅ (Sprint 4.1/4.2/4.3/4.4A/4.4B ✅)
 M4→5 Bridge           ████████████████████ 100% ✅ (Sprint 5.1/5.2 ✅, Phase C/D ✅)
-M4.5: pKVM 集成       ████████████░░░░░░░░  60% 🔧 (pKVM boot ✅, FF-A nVHE ✅, FF-A protected ❌)
+M4.5: pKVM 集成       ████████████████████ 100% ✅ (pKVM boot ✅, FF-A nVHE ✅, FF-A protected ✅)
 M4.6: SPMC 功能补全   ░░░░░░░░░░░░░░░░░░░░   0% ⏸️ (内存管理 + 通知 + 间接消息)
 M5: RME & CCA         ░░░░░░░░░░░░░░░░░░░░   0% ⏸️
 Android Boot          ██████████░░░░░░░░░░  50% ✅ (Phase 2 完成)
@@ -887,25 +887,25 @@ NS-EL1: Linux/Android guest
    - [x] EL3 SPMD 世界切换正常 (SPMC 收到 pKVM 转发的 FF-A 请求)
    - [x] Secondary CPU warm-boot: `FFA_SECONDARY_EP_REGISTER` + `secondary_entry_sel2` + per-CPU stacks + `rust_main_sel2_secondary()` (VBAR→MMU→FFA_MSG_WAIT)
 
-3. **已知限制**:
-   - pKVM FF-A proxy (protected/hVHE mode) 将 FFA_VERSION NOT_SUPPORTED 返回给 Linux driver，尽管 SPMC 返回了正确的 v1.1
-   - 根因: Linux 6.12 pKVM `hyp_ffa_post_init()` 中的 FFA_VERSION 错误检查 bug (32-bit vs 64-bit comparison)
-   - 解决方案: 升级到包含修复的 Linux 内核版本 (6.13+)
+3. **已知限制** (非阻塞):
+   - Notifications 未实现: `ARM FF-A: Notification setup failed -95` (SPMC 不支持 NOTIFICATION_BITMAP_CREATE)
+   - Sched callback 未实现: `ARM FF-A: Failed to register driver sched callback -95`
+   - ~~pKVM FF-A proxy kernel bug~~ — AOSP android16-6.12 已修复，FF-A driver v1.2 在 protected mode 下正常注册
 
 **验收**:
 - [x] SPMC 正确响应所有 FF-A 请求 (FFA_VERSION, FFA_FEATURES, PARTITION_INFO_GET)
 - [x] nVHE 模式下 FF-A driver 注册成功 (`arm_ffa: Driver version 1.1`)
-- [ ] protected 模式下 FF-A driver 注册成功 (blocked by kernel bug)
+- [x] protected 模式下 FF-A driver 注册成功 (`ARM FF-A: Driver version 1.2`, `Firmware version 1.1 found`)
 
 ---
 
 **Milestone 4.5 总验收**:
 - [x] pKVM 在 NS-EL2 运行，我们的 hypervisor 在 S-EL2 运行
 - [x] SPMC 正确处理 pKVM 通过 SPMD 转发的 FF-A 请求
-- [ ] 完整 FF-A 路径 in protected mode (blocked by pKVM FF-A proxy kernel bug)
+- [x] 完整 FF-A 路径 in protected mode (`ARM FF-A: Driver version 1.2`, `Firmware version 1.1 found`)
 - [x] `make run-pkvm` boots to shell — 重要里程碑
 
-**状态**: 🔧 部分完成 — pKVM boot ✅, SPMC responses ✅, FF-A nVHE ✅, FF-A protected ❌ (kernel bug)
+**状态**: ✅ **完成** — pKVM boot ✅, SPMC responses ✅, FF-A nVHE ✅, FF-A protected ✅ (AOSP android16-6.12 已修复)
 
 ---
 
@@ -1409,7 +1409,7 @@ GitHub Actions配置：
 | M3 | FF-A 实现 + NS-EL2 完善 | 10周 | 28周 | ✅ 核心完成 (Sprint 3.1/3.1b/3.1c/3.2 ✅, ~90%) |
 | Android | Android Boot (4 phases) | 4-8周 | — | ✅ Phase 2 完成 (PL031 RTC + Init) |
 | M4 | S-EL2 SPMC (QEMU secure=on + TF-A) | 6-8周 | 36周 | 🔧 Sprint 4.1/4.2/4.3 ✅ (75%) |
-| M4.5 | pKVM 集成 (NS-EL2=pKVM, S-EL2=us) | 4-6周 | 42周 | 🔧 60% (boot ✅, FF-A protected ❌ kernel bug) |
+| M4.5 | pKVM 集成 (NS-EL2=pKVM, S-EL2=us) | 4-6周 | 42周 | ✅ 已完成 (boot ✅, FF-A protected ✅) |
 | M4.6 | SPMC 功能补全 (内存管理+通知+间接消息) | 4-7周 | 49周 | ⏸️ 未开始 |
 | M5 | RME & CCA | 16-20周 | 65-69周 | ⏸️ 未开始 |
 
@@ -1429,7 +1429,7 @@ GitHub Actions配置：
 - [x] **Android Phase 1**: Linux 6.6.126 + Android config boots to BusyBox shell ✅ **已完成 2026-02-19**
 - [x] **Android Phase 2**: PL031 RTC + Android init + 1GB RAM + binderfs ✅ **已完成 2026-02-19**
 - [x] **M4 S-EL2**: 我们的 hypervisor 作为 SPMC 在 S-EL2 运行 (TF-A boot chain) ✅ **Sprint 4.1/4.2/4.3/4.4 + 5.1 完成** (SPMC + SP + DIRECT_REQ E2E, 7/7 BL33 tests)
-- [x] **M4.5 pKVM (partial)**: pKVM boot ✅ (`Protected hVHE mode initialized`), SPMC FF-A responses ✅, FF-A nVHE ✅, FF-A protected ❌ (pKVM kernel bug in Linux 6.12) 🔧 **部分完成 2026-02-23**
+- [x] **M4.5 pKVM**: pKVM boot ✅ (`Protected hVHE mode initialized`), SPMC FF-A responses ✅, FF-A nVHE ✅, FF-A protected ✅ (`Driver version 1.2`, `Firmware version 1.1`) ✅ **已完成 2026-02-24**
 - [ ] **M4.6 SPMC 补全**: SPMC 侧内存管理 + 通知 + 间接消息 ⏸️ **未开始**
 - [ ] **M5 CCA**: Realm VM 启动 Guest OS ⏸️ **未开始**
 
@@ -1458,7 +1458,7 @@ GitHub Actions配置：
 **Sprint 5.2 完成**: SPMC NWd RXTX management (SPMD forwards RXTX_MAP/UNMAP/RX_RELEASE to SPMC), PARTITION_INFO_GET writes to NWd RX buffer, Linux FF-A discovery, 8/8 BL33 tests PASS, 33 SPMC handler assertions
 **Phase C 完成**: NS interrupt preemption — FFA_INTERRUPT + FFA_RUN resume, CNTHP timer, SP_IRQ_PREEMPTED flag, Preempted state, 9/9 BL33 tests PASS
 **Phase D 完成**: Multi-SP + secure vIRQ/vFIQ injection — SP2 (sp_irq), per-SP INTID ownership, HCR_EL2.VI + HF_INTERRUPT_GET paravirt (Hafnium-compatible), CNTHP poll timer, cross-SP preemption, `vfiq` feature flag for HCR_EL2.VF + HF_FIQ_GET (FIQ delivery, per-SP `fiq_intids[]`), 12/12 BL33 tests PASS (11 base + 1 vFIQ), 42 SPMC handler + 28 SP context assertions (45/40 with vfiq)
-**Phase 4.5 部分完成**: pKVM boot ✅ (`Protected hVHE mode initialized successfully`), SPMC FF-A responses ✅, FF-A nVHE mode ✅ (driver v1.1 registered), FF-A protected mode ❌ (pKVM FF-A proxy kernel bug in Linux 6.12, need 6.13+), secondary CPU warm-boot ✅ (FFA_SECONDARY_EP_REGISTER + per-CPU stacks + MMU install)
+**Phase 4.5 完成**: pKVM boot ✅ (`Protected hVHE mode initialized successfully`), SPMC FF-A responses ✅, FF-A nVHE mode ✅ (driver v1.1), FF-A protected mode ✅ (driver v1.2, firmware v1.1, AOSP android16-6.12 已修复之前的 kernel bug), secondary CPU warm-boot ✅ (FFA_SECONDARY_EP_REGISTER + per-CPU stacks + MMU install)
 **M4.6 SPMC 补全**: ⏸️ 未开始 — 将 NS-proxy 侧 FF-A 内存管理/通知/间接消息移植到 SPMC 侧 (Sprint S1: 内存管理 P0, Sprint S2: 通知 P1, Sprint S3: 间接消息 P2)
 
 **Phase 8+ 候选方向** (选择一个):
