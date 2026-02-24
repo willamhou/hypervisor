@@ -2,9 +2,9 @@
 
 ## The Idea That Wouldn't Die
 
-Mid-2025. I'd been thinking about rewriting a hypervisor in Rust. The original one I built was in C — the industry default for this kind of work. But C at this level is a minefield: undefined behavior, manual memory management, no type safety for register-width values. Rust's `no_std` ecosystem had matured enough that the idea was technically feasible.
+Mid-2025. I'd been thinking about rebuilding a hypervisor from scratch. The [original one](background.md) I led was also in Rust — a 3–4 person team, 10 months, the world's first CCRC-certified Rust SPMC. We'd proven Rust was viable for production hypervisors. But we'd also learned how much raw effort it takes: the ARM architecture surface area is enormous, and every corner case must be handled correctly.
 
-I shelved it. Writing a bare-metal hypervisor solo in Rust — with all the inline assembly, custom linker scripts, and architecture-specific register manipulation — felt like a multi-month commitment. I had a startup to run.
+Could one person, working alone, replicate the core of that journey? Maybe. But writing a bare-metal hypervisor solo — with all the inline assembly, custom linker scripts, and architecture-specific register manipulation — felt like a multi-month commitment. I had a startup to run.
 
 ## Claude Code Changed the Equation
 
@@ -12,7 +12,7 @@ Late 2025, Anthropic shipped a major update to Claude Code. I'd been using it fo
 
 The idea reignited.
 
-Not "can AI write a hypervisor?" — that's the wrong question. The right question was: **can AI compress a 10-month development cycle into something a solo developer can do in weeks?**
+Not "can AI write a hypervisor?" — that's the wrong question. The right question was: **can AI compress what took a team of 3–4 engineers 10 months into something a solo developer can do in weeks?**
 
 ## The Experiment
 
