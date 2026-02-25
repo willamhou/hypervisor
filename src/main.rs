@@ -440,6 +440,9 @@ pub extern "C" fn rust_main_sel2(
         let _exit = unsafe { enter_guest(sp1.vcpu_ctx_mut() as *mut VcpuContext) };
     }
 
+    // Save SP1's EL1 sysregs after initial boot (VBAR_EL1 set by SP during startup)
+    sp1.save_el1_state();
+
     // SP trapped back — verify it called FFA_MSG_WAIT
     let (x0, _, _, _, _, _, _, _) = sp1.get_args();
     if x0 == hypervisor::ffa::FFA_MSG_WAIT {
@@ -519,6 +522,9 @@ pub extern "C" fn rust_main_sel2(
                 let _exit = unsafe { enter_guest(sp2.vcpu_ctx_mut() as *mut VcpuContext) };
             }
 
+            // Save SP2's EL1 sysregs after initial boot
+            sp2.save_el1_state();
+
             // Verify SP2 called FFA_MSG_WAIT
             let (x0, _, _, _, _, _, _, _) = sp2.get_args();
             if x0 == hypervisor::ffa::FFA_MSG_WAIT {
@@ -557,7 +563,9 @@ pub extern "C" fn rust_main_sel2(
             0,
             0,
         );
-        if result.x0 == hypervisor::ffa::FFA_SUCCESS_32 {
+        if result.x0 == hypervisor::ffa::FFA_SUCCESS_32
+            || result.x0 == hypervisor::ffa::FFA_SUCCESS_64
+        {
             uart_puts_local(b"[SPMC] Secondary EP registered with SPMD\n");
         } else {
             uart_puts_local(b"[SPMC] WARNING: FFA_SECONDARY_EP_REGISTER failed, x0=0x");
@@ -594,8 +602,69 @@ pub extern "C" fn rust_main_sel2_secondary(
     // 1. Install exception vectors (for fault diagnosis)
     exception::init();
 
+    // 1b. Enable Secure Stage-2 (HCR_EL2.VM) — exception::init() doesn't set VM.
+    // Primary CPU sets this during SP Stage-2 setup, but secondaries need it too
+    // for dispatch_to_sp() to work (ERET to S-EL1 requires Stage-2 enabled).
+    unsafe {
+        let hcr: u64;
+        core::arch::asm!("mrs {}, hcr_el2", out(reg) hcr);
+        core::arch::asm!(
+            "msr hcr_el2, {hcr}",
+            "isb",
+            hcr = in(reg) hcr | hypervisor::arch::aarch64::defs::HCR_VM,
+        );
+    }
+
+    // 1c. Don't trap FP/SIMD/debug from S-EL1 to S-EL2.
+    // TF-A warm-boot path may leave CPTR_EL2/MDCR_EL2 in a different state
+    // than the primary CPU. Clear trap bits to match primary CPU behavior.
+    unsafe {
+        use hypervisor::arch::aarch64::defs::*;
+        core::arch::asm!(
+            "mrs x0, cptr_el2",
+            "bic x0, x0, {cptr_tz}",
+            "bic x0, x0, {cptr_tfp}",
+            "bic x0, x0, {cptr_tsm}",
+            "bic x0, x0, {cptr_tcpac}",
+            "msr cptr_el2, x0",
+            "msr mdcr_el2, xzr",
+            "isb",
+            cptr_tz = const CPTR_TZ,
+            cptr_tfp = const CPTR_TFP,
+            cptr_tsm = const CPTR_TSM,
+            cptr_tcpac = const CPTR_TCPAC,
+            out("x0") _,
+            options(nostack),
+        );
+    }
+
     // 2. Install S-EL2 Stage-1 MMU (reuse primary's page tables)
     hypervisor::sel2_mmu::install_sel2_stage1_secondary();
+
+    // 2b. Enable per-CPU GIC PPIs for this secondary CPU.
+    // Primary CPU enables PPIs 26+29 on GICR0 during init, but each CPU
+    // has its own GICR. Without this, CNTHP timer (PPI 26) never fires on
+    // secondary CPUs, so dispatch_to_sp() hangs if the SP gets stuck.
+    {
+        let gicr_sgi_base = hypervisor::dtb::gicr_sgi_base(core_id);
+        unsafe {
+            let ppi_mask: u32 = (1 << 26) | (1 << 29);
+
+            // GICR_IGROUPR0: clear bits → NOT Non-secure Group 1
+            let igroupr0 = (gicr_sgi_base + 0x0080) as *mut u32;
+            let val = core::ptr::read_volatile(igroupr0);
+            core::ptr::write_volatile(igroupr0, val & !ppi_mask);
+
+            // GICR_IGRPMODR0: set bits → Secure Group 1
+            let igrpmodr0 = (gicr_sgi_base + 0x0D00) as *mut u32;
+            let val = core::ptr::read_volatile(igrpmodr0);
+            core::ptr::write_volatile(igrpmodr0, val | ppi_mask);
+
+            // GICR_ISENABLER0: enable both PPIs
+            let isenabler0 = (gicr_sgi_base + 0x0100) as *mut u32;
+            core::ptr::write_volatile(isenabler0, ppi_mask);
+        }
+    }
 
     uart_puts_local(b"[SPMC] Secondary CPU ");
     print_digit(core_id as u8);

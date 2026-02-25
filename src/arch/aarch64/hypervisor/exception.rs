@@ -52,9 +52,14 @@ pub fn init() {
         // NOTE: Do NOT set bit 12 (DC = Default Cacheability).
         // DC=1 changes cache attributes when guest MMU is off, which can
         // cause stale page table data during the MMU-on transition.
-        let hcr: u64 = HCR_RW         // EL1 is AArch64
+        //
+        // NOTE: FMO is NOT set in S-EL2 (sel2) mode. Physical FIQs must
+        // trap to EL3 (TF-A/SPMD), not to S-EL2. In the Secure world,
+        // NS Group 1 interrupts route to EL3 as FIQ — setting FMO would
+        // intercept them at S-EL2 instead of letting SPMD handle them.
+        #[allow(unused_mut)]
+        let mut hcr: u64 = HCR_RW         // EL1 is AArch64
                       | HCR_SWIO       // Set/Way Invalidation Override
-                      | HCR_FMO        // Route physical FIQ to EL2
                       | HCR_IMO        // Route physical IRQ to EL2
                       | HCR_AMO        // Route physical SError to EL2
                       | HCR_FB         // Force Broadcast TLB/cache maintenance
@@ -66,6 +71,13 @@ pub fn init() {
                       | HCR_TEA        // Trap External Aborts to EL2
                       | HCR_APK        // Don't trap PAC key register accesses
                       | HCR_API; // Don't trap PAC instructions
+
+        // FMO: Route physical FIQ to EL2.
+        // Only for NS-EL2 — in S-EL2 (sel2), FIQs trap to EL3 (SPMD).
+        #[cfg(not(feature = "sel2"))]
+        {
+            hcr |= HCR_FMO;
+        }
 
         core::arch::asm!(
             "msr hcr_el2, {hcr}",

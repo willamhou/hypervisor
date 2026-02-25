@@ -269,11 +269,17 @@ fn dispatch_to_sp(req: &SmcResult8, sp_id: u16) -> SmcResult8 {
     // Track which SP is running so the IRQ handler can inject via LR directly
     CURRENT_RUNNING_SP.store(sp_id, Ordering::Release);
 
-    let _exit = unsafe {
+    // Restore SP's EL1 sysregs before ERET (pKVM world switches corrupt S-EL1 state)
+    sp.restore_el1_state();
+
+    let _exit_code = unsafe {
         crate::arch::aarch64::enter_guest(
             sp.vcpu_ctx_mut() as *mut crate::arch::aarch64::regs::VcpuContext,
         )
     };
+
+    // Save SP's EL1 sysregs after trap back to S-EL2
+    sp.save_el1_state();
 
     CURRENT_RUNNING_SP.store(0, Ordering::Release);
     crate::arch::aarch64::peripherals::timer::disarm_preemption_timer();
@@ -365,11 +371,17 @@ fn handle_sp_exit(
         s2.install();
         CURRENT_RUNNING_SP.store(sp_id, Ordering::Release);
 
+        // Restore SP's EL1 sysregs before re-entry
+        sp.restore_el1_state();
+
         let _exit = unsafe {
             crate::arch::aarch64::enter_guest(
                 sp.vcpu_ctx_mut() as *mut crate::arch::aarch64::regs::VcpuContext,
             )
         };
+
+        // Save SP's EL1 sysregs after trap back
+        sp.save_el1_state();
 
         CURRENT_RUNNING_SP.store(0, Ordering::Release);
         crate::arch::aarch64::peripherals::timer::disarm_preemption_timer();
@@ -410,11 +422,17 @@ fn resume_preempted_sp(sp_id: u16) -> SmcResult8 {
     // Track which SP is running so the IRQ handler can inject via LR directly
     CURRENT_RUNNING_SP.store(sp_id, Ordering::Release);
 
+    // Restore SP's EL1 sysregs before resume
+    sp.restore_el1_state();
+
     let _exit = unsafe {
         crate::arch::aarch64::enter_guest(
             sp.vcpu_ctx_mut() as *mut crate::arch::aarch64::regs::VcpuContext,
         )
     };
+
+    // Save SP's EL1 sysregs after trap back
+    sp.save_el1_state();
 
     CURRENT_RUNNING_SP.store(0, Ordering::Release);
     crate::arch::aarch64::peripherals::timer::disarm_preemption_timer();
@@ -494,11 +512,17 @@ fn dispatch_interrupt_to_sp(sp_id: u16) {
     let s2 = crate::secure_stage2::SecureStage2Config::new_from_vsttbr(sp.vsttbr());
     s2.install();
 
+    // Restore SP's EL1 sysregs before interrupt dispatch
+    sp.restore_el1_state();
+
     let _exit = unsafe {
         crate::arch::aarch64::enter_guest(
             sp.vcpu_ctx_mut() as *mut crate::arch::aarch64::regs::VcpuContext,
         )
     };
+
+    // Save SP's EL1 sysregs after trap back
+    sp.save_el1_state();
 
     // SP trapped back — transition to Idle
     // (SP's IRQ handler ran, then SP returned via SMC/FFA_MSG_WAIT)

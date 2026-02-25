@@ -66,13 +66,13 @@ exception_vector_table:
     // Current EL with SP_ELx
     vector_entry sync_current_el_spx
     vector_entry irq_current_el_spx
-    vector_entry fiq_current_el_spx
+    vector_entry_irq fiq_current_el_spx
     vector_entry serror_current_el_spx
 
     // Lower EL (AArch64) - This is where guest exceptions come from
     vector_entry sync_lower_el_aarch64
     vector_entry_irq irq_lower_el_aarch64
-    vector_entry fiq_lower_el_aarch64
+    vector_entry_irq fiq_lower_el_aarch64
     vector_entry serror_lower_el_aarch64
 
     // Lower EL (AArch32) - Not supported

@@ -5,7 +5,109 @@
 
 use crate::arch::aarch64::defs::SPSR_EL1H_DAIF_MASKED;
 use crate::arch::aarch64::regs::VcpuContext;
+use core::arch::asm;
 use core::cell::UnsafeCell;
+
+/// Lightweight EL1 system register state for Secure Partitions.
+///
+/// Unlike `VcpuArchState` (designed for NS-EL2 managing full Linux guests),
+/// this only saves/restores the EL1 sysregs that SPs need. It does NOT touch
+/// GIC virtual interface (ICH_LR/VMCR/HCR), timers, VMPIDR, or PAC keys,
+/// which are managed by the SPMC itself at S-EL2.
+pub struct SpEl1State {
+    pub sctlr_el1: u64,
+    pub ttbr0_el1: u64,
+    pub ttbr1_el1: u64,
+    pub tcr_el1: u64,
+    pub mair_el1: u64,
+    pub vbar_el1: u64,
+    pub cpacr_el1: u64,
+    pub contextidr_el1: u64,
+    pub tpidr_el1: u64,
+    pub tpidrro_el0: u64,
+    pub tpidr_el0: u64,
+    pub par_el1: u64,
+    pub cntkctl_el1: u64,
+    pub sp_el0: u64,
+    pub afsr0_el1: u64,
+    pub afsr1_el1: u64,
+    pub amair_el1: u64,
+    pub mdscr_el1: u64,
+}
+
+impl SpEl1State {
+    pub const fn new() -> Self {
+        Self {
+            sctlr_el1: 0,
+            ttbr0_el1: 0,
+            ttbr1_el1: 0,
+            tcr_el1: 0,
+            mair_el1: 0,
+            vbar_el1: 0,
+            cpacr_el1: 0,
+            contextidr_el1: 0,
+            tpidr_el1: 0,
+            tpidrro_el0: 0,
+            tpidr_el0: 0,
+            par_el1: 0,
+            cntkctl_el1: 0,
+            sp_el0: 0,
+            afsr0_el1: 0,
+            afsr1_el1: 0,
+            amair_el1: 0,
+            mdscr_el1: 0,
+        }
+    }
+
+    /// Save EL1 system registers from hardware.
+    pub fn save(&mut self) {
+        unsafe {
+            asm!("mrs {}, sctlr_el1", out(reg) self.sctlr_el1, options(nostack, nomem));
+            asm!("mrs {}, ttbr0_el1", out(reg) self.ttbr0_el1, options(nostack, nomem));
+            asm!("mrs {}, ttbr1_el1", out(reg) self.ttbr1_el1, options(nostack, nomem));
+            asm!("mrs {}, tcr_el1", out(reg) self.tcr_el1, options(nostack, nomem));
+            asm!("mrs {}, mair_el1", out(reg) self.mair_el1, options(nostack, nomem));
+            asm!("mrs {}, vbar_el1", out(reg) self.vbar_el1, options(nostack, nomem));
+            asm!("mrs {}, cpacr_el1", out(reg) self.cpacr_el1, options(nostack, nomem));
+            asm!("mrs {}, contextidr_el1", out(reg) self.contextidr_el1, options(nostack, nomem));
+            asm!("mrs {}, tpidr_el1", out(reg) self.tpidr_el1, options(nostack, nomem));
+            asm!("mrs {}, tpidrro_el0", out(reg) self.tpidrro_el0, options(nostack, nomem));
+            asm!("mrs {}, tpidr_el0", out(reg) self.tpidr_el0, options(nostack, nomem));
+            asm!("mrs {}, par_el1", out(reg) self.par_el1, options(nostack, nomem));
+            asm!("mrs {}, cntkctl_el1", out(reg) self.cntkctl_el1, options(nostack, nomem));
+            asm!("mrs {}, sp_el0", out(reg) self.sp_el0, options(nostack, nomem));
+            asm!("mrs {}, afsr0_el1", out(reg) self.afsr0_el1, options(nostack, nomem));
+            asm!("mrs {}, afsr1_el1", out(reg) self.afsr1_el1, options(nostack, nomem));
+            asm!("mrs {}, amair_el1", out(reg) self.amair_el1, options(nostack, nomem));
+            asm!("mrs {}, mdscr_el1", out(reg) self.mdscr_el1, options(nostack, nomem));
+        }
+    }
+
+    /// Restore EL1 system registers to hardware.
+    pub fn restore(&self) {
+        unsafe {
+            asm!("msr sctlr_el1, {}", in(reg) self.sctlr_el1, options(nostack, nomem));
+            asm!("msr ttbr0_el1, {}", in(reg) self.ttbr0_el1, options(nostack, nomem));
+            asm!("msr ttbr1_el1, {}", in(reg) self.ttbr1_el1, options(nostack, nomem));
+            asm!("msr tcr_el1, {}", in(reg) self.tcr_el1, options(nostack, nomem));
+            asm!("msr mair_el1, {}", in(reg) self.mair_el1, options(nostack, nomem));
+            asm!("msr vbar_el1, {}", in(reg) self.vbar_el1, options(nostack, nomem));
+            asm!("msr cpacr_el1, {}", in(reg) self.cpacr_el1, options(nostack, nomem));
+            asm!("msr contextidr_el1, {}", in(reg) self.contextidr_el1, options(nostack, nomem));
+            asm!("msr tpidr_el1, {}", in(reg) self.tpidr_el1, options(nostack, nomem));
+            asm!("msr tpidrro_el0, {}", in(reg) self.tpidrro_el0, options(nostack, nomem));
+            asm!("msr tpidr_el0, {}", in(reg) self.tpidr_el0, options(nostack, nomem));
+            asm!("msr par_el1, {}", in(reg) self.par_el1, options(nostack, nomem));
+            asm!("msr cntkctl_el1, {}", in(reg) self.cntkctl_el1, options(nostack, nomem));
+            asm!("msr sp_el0, {}", in(reg) self.sp_el0, options(nostack, nomem));
+            asm!("msr afsr0_el1, {}", in(reg) self.afsr0_el1, options(nostack, nomem));
+            asm!("msr afsr1_el1, {}", in(reg) self.afsr1_el1, options(nostack, nomem));
+            asm!("msr amair_el1, {}", in(reg) self.amair_el1, options(nostack, nomem));
+            asm!("msr mdscr_el1, {}", in(reg) self.mdscr_el1, options(nostack, nomem));
+            asm!("isb", options(nostack, nomem));
+        }
+    }
+}
 
 /// SP lifecycle states.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -26,6 +128,9 @@ pub enum SpState {
 pub struct SpContext {
     /// Register context passed to enter_guest() for ERET.
     ctx: VcpuContext,
+    /// EL1 system registers saved/restored around enter_guest() calls.
+    /// Without this, world switches (e.g. pKVM at NS-EL2) corrupt S-EL1 state.
+    el1_state: SpEl1State,
     /// FF-A partition ID (e.g. 0x8001).
     id: u16,
     /// Current lifecycle state.
@@ -59,6 +164,7 @@ impl SpContext {
 
         Self {
             ctx,
+            el1_state: SpEl1State::new(),
             id: sp_id,
             state: SpState::Reset,
             entry: entry_point,
@@ -105,6 +211,18 @@ impl SpContext {
     /// Get mutable reference to the VcpuContext (for enter_guest).
     pub fn vcpu_ctx_mut(&mut self) -> &mut VcpuContext {
         &mut self.ctx
+    }
+
+    /// Save EL1 system registers from hardware into this SP's state.
+    /// Must be called after enter_guest() returns (SP trapped back to S-EL2).
+    pub fn save_el1_state(&mut self) {
+        self.el1_state.save();
+    }
+
+    /// Restore EL1 system registers from this SP's state to hardware.
+    /// Must be called before enter_guest() so the SP runs with correct sysregs.
+    pub fn restore_el1_state(&self) {
+        self.el1_state.restore();
     }
 
     /// Validate and perform a state transition.

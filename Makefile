@@ -409,7 +409,9 @@ build-pkvm-ffa-initramfs: build-ffa-test
 	@mkdir -p /tmp/pkvm-ffa-initramfs
 	@cd /tmp/pkvm-ffa-initramfs && \
 	    zcat $(PWD)/guest/linux/initramfs.cpio.gz | cpio -idm 2>/dev/null && \
-	    mkdir -p proc sys dev mnt lib/modules && \
+	    mkdir -p proc sys dev mnt lib/modules sbin && \
+	    ln -sf ../bin/busybox sbin/insmod 2>/dev/null || true && \
+	    ln -sf ../bin/busybox sbin/rmmod 2>/dev/null || true && \
 	    cp $(PWD)/guest/linux/ffa_test.ko lib/modules/ && \
 	    cp $(PWD)/guest/linux/ffa-test/init-ffa-test init && \
 	    chmod +x init && \
