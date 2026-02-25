@@ -31,6 +31,8 @@
 .equ FFA_RXTX_MAP,        0xC4000066
 .equ FFA_MEM_SHARE_32,    0x84000073
 .equ FFA_MEM_RECLAIM,     0x84000077
+.equ MEM_TEST_MAGIC,      0xABCD0001
+.equ SHARED_PAGE_MAGIC,   0xCAFEFACE
 
 .equ FFA_VERSION_1_1,     0x00010001
 .equ SP1_ID,              0x8001
@@ -644,8 +646,108 @@ _start:
 
     adr     x0, str_pass
     bl      uart_print
-    b       .Ldone
+    b       .Ltest_14
 .Lfail_13:
+    adr     x0, str_fail
+    bl      uart_print
+
+    /* ============ Test 14: MEM_SHARE lifecycle E2E ============ */
+.Ltest_14:
+    adr     x0, str_t14
+    bl      uart_print
+
+    /* Step 1: MEM_SHARE _tx_page with SP1 — get handle */
+    ldr     x0, =FFA_MEM_SHARE_32
+    movz    x1, #0x0000
+    movk    x1, #0x0001, lsl #16   /* sender = 0x0001 */
+    mov     x2, xzr
+    adr     x3, _tx_page           /* IPA of shared page */
+    mov     x4, #1                 /* 1 page */
+    movz    x5, #SP1_ID            /* receiver = SP1 */
+    mov     x6, xzr
+    mov     x7, xzr
+    smc     #0
+
+    /* Verify: x0 == FFA_SUCCESS_32 (MEM_SHARE) */
+    ldr     x9, =FFA_SUCCESS_32
+    cmp     x0, x9
+    b.ne    .Lfail_14e
+
+    /* Save handle in callee-saved registers (x18+ preserved across SMC) */
+    mov     x24, x2                /* handle_lo */
+    mov     x25, x3                /* handle_hi */
+
+    /* Step 2: DIRECT_REQ to SP1 with memory test command.
+     * x3 = MEM_TEST_MAGIC, x4 = handle_lo, x5 = handle_hi, x6 = shared_page_ipa */
+    ldr     x0, =FFA_DIRECT_REQ_32
+    movz    x1, #SP1_ID
+    movk    x1, #0x0001, lsl #16  /* source = 0x0001, dest = SP1 */
+    mov     x2, xzr
+    ldr     x3, =MEM_TEST_MAGIC
+    mov     x4, x24               /* handle_lo */
+    mov     x5, x25               /* handle_hi */
+    adr     x6, _tx_page          /* shared page IPA */
+    mov     x7, xzr
+    smc     #0
+
+    /* Verify: x0 == FFA_DIRECT_RESP_32 */
+    ldr     x9, =FFA_DIRECT_RESP_32
+    cmp     x0, x9
+    b.ne    .Lfail_14a
+
+    /* Verify: x4 == handle_lo + 0x4000 (memory test signature from SP) */
+    add     x9, x24, #0x4000
+    cmp     x4, x9
+    b.ne    .Lfail_14b
+
+    /* Verify: x5 == SHARED_PAGE_MAGIC (SP echoes what it wrote) */
+    ldr     x9, =SHARED_PAGE_MAGIC
+    cmp     x5, x9
+    b.ne    .Lfail_14c
+
+    /* Step 3: Verify shared page — SP wrote SHARED_PAGE_MAGIC to _tx_page */
+    adr     x8, _tx_page
+    ldr     w9, [x8]
+    ldr     w10, =SHARED_PAGE_MAGIC
+    cmp     w9, w10
+    b.ne    .Lfail_14d
+
+    /* Step 4: MEM_RECLAIM to clean up */
+    ldr     x0, =FFA_MEM_RECLAIM
+    mov     x1, x24               /* handle_lo */
+    mov     x2, x25               /* handle_hi */
+    mov     x3, xzr
+    mov     x4, xzr
+    mov     x5, xzr
+    mov     x6, xzr
+    mov     x7, xzr
+    smc     #0
+
+    /* Verify: x0 == FFA_SUCCESS_32 (MEM_RECLAIM) */
+    ldr     x9, =FFA_SUCCESS_32
+    cmp     x0, x9
+    b.ne    .Lfail_14e
+
+    adr     x0, str_pass
+    bl      uart_print
+    b       .Ldone
+.Lfail_14a:
+    adr     x0, str_f14a
+    bl      uart_print
+    b       .Ldone
+.Lfail_14b:
+    adr     x0, str_f14b
+    bl      uart_print
+    b       .Ldone
+.Lfail_14c:
+    adr     x0, str_f14c
+    bl      uart_print
+    b       .Ldone
+.Lfail_14d:
+    adr     x0, str_f14d
+    bl      uart_print
+    b       .Ldone
+.Lfail_14e:
     adr     x0, str_fail
     bl      uart_print
 
@@ -703,6 +805,16 @@ str_t12:
     .asciz "  Test 12: Secure vFIQ injection ... "
 str_t13:
     .asciz "  Test 13: MEM_SHARE + RECLAIM ..... "
+str_t14:
+    .asciz "  Test 14: MEM_SHARE lifecycle E2E . "
+str_f14a:
+    .asciz "FAIL(x0!=RESP)\r\n"
+str_f14b:
+    .asciz "FAIL(x4!=sig)\r\n"
+str_f14c:
+    .asciz "FAIL(x5!=magic)\r\n"
+str_f14d:
+    .asciz "FAIL(page!=magic)\r\n"
 str_pass:
     .asciz "PASS\r\n"
 str_fail:

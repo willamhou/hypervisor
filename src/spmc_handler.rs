@@ -278,47 +278,101 @@ fn dispatch_to_sp(req: &SmcResult8, sp_id: u16) -> SmcResult8 {
     CURRENT_RUNNING_SP.store(0, Ordering::Release);
     crate::arch::aarch64::peripherals::timer::disarm_preemption_timer();
 
-    // Check if SP was preempted by a physical IRQ (unowned interrupt → NS preemption).
-    // NOTE: When the IRQ handler injects a virtual interrupt via LR for the current
-    // SP's owned INTID, it returns true (continue guest) and does NOT set this flag.
-    // SP_IRQ_PREEMPTED is only set for unowned interrupts or cross-SP preemption.
-    if SP_IRQ_PREEMPTED.swap(false, Ordering::Acquire) {
-        sp.transition_to(crate::sp_context::SpState::Preempted)
-            .expect("SP Preempted transition failed");
+    // Handle SP exit — may loop if SP calls FF-A memory operations
+    handle_sp_exit(sp, sp_id)
+}
 
-        // Check if another SP has a pending interrupt (cross-SP preemption)
-        if let Some(target_id) = crate::sp_context::find_sp_with_pending_irq() {
-            if target_id != sp_id {
-                dispatch_interrupt_to_sp(target_id);
+/// Handle SP exit after enter_guest() returns.
+///
+/// If the SP called an FF-A memory operation (MEM_RETRIEVE_REQ, MEM_RELINQUISH),
+/// handle it locally and re-enter the SP. Otherwise, return the SP's response
+/// (DIRECT_RESP, FFA_MSG_WAIT, etc.) to the caller.
+///
+/// Used by both `dispatch_to_sp()` and `resume_preempted_sp()` to avoid duplication.
+#[cfg(feature = "sel2")]
+fn handle_sp_exit(
+    sp: &mut crate::sp_context::SpContext,
+    sp_id: u16,
+) -> SmcResult8 {
+    loop {
+        // Check if SP was preempted by a physical IRQ
+        if SP_IRQ_PREEMPTED.swap(false, Ordering::Acquire) {
+            sp.transition_to(crate::sp_context::SpState::Preempted)
+                .expect("SP Preempted transition failed");
+
+            // Check if another SP has a pending interrupt (cross-SP preemption)
+            if let Some(target_id) = crate::sp_context::find_sp_with_pending_irq() {
+                if target_id != sp_id {
+                    dispatch_interrupt_to_sp(target_id);
+                }
+            }
+
+            return SmcResult8 {
+                x0: ffa::FFA_INTERRUPT,
+                x1: 0,
+                x2: 0,
+                x3: 0,
+                x4: 0,
+                x5: 0,
+                x6: 0,
+                x7: 0,
+            };
+        }
+
+        // SP exited normally — check what it called
+        let (x0, x1, x2, x3, x4, x5, x6, x7) = sp.get_args();
+
+        match x0 {
+            ffa::FFA_MEM_RETRIEVE_REQ_32 | ffa::FFA_MEM_RETRIEVE_REQ_64 => {
+                // SP-initiated MEM_RETRIEVE: build request, call handler, re-enter SP
+                let sp_req = SmcResult8 { x0, x1, x2, x3, x4, x5, x6, x7 };
+                let result = handle_spmc_mem_retrieve(&sp_req);
+                sp.set_args(
+                    result.x0, result.x1, result.x2, result.x3,
+                    result.x4, result.x5, result.x6, result.x7,
+                );
+            }
+            ffa::FFA_MEM_RELINQUISH => {
+                // SP-initiated MEM_RELINQUISH: build request, call handler, re-enter SP
+                let sp_req = SmcResult8 { x0, x1, x2, x3, x4, x5, x6, x7 };
+                let result = handle_spmc_mem_relinquish(&sp_req);
+                sp.set_args(
+                    result.x0, result.x1, result.x2, result.x3,
+                    result.x4, result.x5, result.x6, result.x7,
+                );
+            }
+            _ => {
+                // Normal exit (FFA_DIRECT_RESP, FFA_MSG_WAIT, etc.)
+                sp.transition_to(crate::sp_context::SpState::Idle)
+                    .expect("SP Idle transition failed");
+                return SmcResult8 { x0, x1, x2, x3, x4, x5, x6, x7 };
             }
         }
 
-        return SmcResult8 {
-            x0: ffa::FFA_INTERRUPT,
-            x1: 0,
-            x2: 0,
-            x3: 0,
-            x4: 0,
-            x5: 0,
-            x6: 0,
-            x7: 0,
+        // Re-enter SP with the handler's result (Running→Idle→Running)
+        sp.transition_to(crate::sp_context::SpState::Idle)
+            .expect("SP Idle transition failed (re-enter)");
+        sp.transition_to(crate::sp_context::SpState::Running)
+            .expect("SP Running transition failed (re-enter)");
+
+        SP_IRQ_PREEMPTED.store(false, Ordering::Release);
+        crate::arch::aarch64::peripherals::timer::arm_preemption_timer();
+        inject_pending_virq(sp);
+        #[cfg(feature = "vfiq")]
+        inject_pending_vfiq(sp);
+
+        let s2 = crate::secure_stage2::SecureStage2Config::new_from_vsttbr(sp.vsttbr());
+        s2.install();
+        CURRENT_RUNNING_SP.store(sp_id, Ordering::Release);
+
+        let _exit = unsafe {
+            crate::arch::aarch64::enter_guest(
+                sp.vcpu_ctx_mut() as *mut crate::arch::aarch64::regs::VcpuContext,
+            )
         };
-    }
 
-    // SP completed normally — transition to Idle, return DIRECT_RESP
-    sp.transition_to(crate::sp_context::SpState::Idle)
-        .expect("SP Idle transition failed");
-
-    let (x0, x1, x2, x3, x4, x5, x6, x7) = sp.get_args();
-    SmcResult8 {
-        x0,
-        x1,
-        x2,
-        x3,
-        x4,
-        x5,
-        x6,
-        x7,
+        CURRENT_RUNNING_SP.store(0, Ordering::Release);
+        crate::arch::aarch64::peripherals::timer::disarm_preemption_timer();
     }
 }
 
@@ -365,45 +419,8 @@ fn resume_preempted_sp(sp_id: u16) -> SmcResult8 {
     CURRENT_RUNNING_SP.store(0, Ordering::Release);
     crate::arch::aarch64::peripherals::timer::disarm_preemption_timer();
 
-    // Check if SP was preempted again (unowned interrupt only)
-    if SP_IRQ_PREEMPTED.swap(false, Ordering::Acquire) {
-        sp.transition_to(crate::sp_context::SpState::Preempted)
-            .expect("SP Preempted transition failed");
-
-        // Cross-SP preemption check
-        if let Some(target_id) = crate::sp_context::find_sp_with_pending_irq() {
-            if target_id != sp_id {
-                dispatch_interrupt_to_sp(target_id);
-            }
-        }
-
-        return SmcResult8 {
-            x0: ffa::FFA_INTERRUPT,
-            x1: 0,
-            x2: 0,
-            x3: 0,
-            x4: 0,
-            x5: 0,
-            x6: 0,
-            x7: 0,
-        };
-    }
-
-    // SP completed — transition to Idle, return DIRECT_RESP
-    sp.transition_to(crate::sp_context::SpState::Idle)
-        .expect("SP Idle transition failed");
-
-    let (x0, x1, x2, x3, x4, x5, x6, x7) = sp.get_args();
-    SmcResult8 {
-        x0,
-        x1,
-        x2,
-        x3,
-        x4,
-        x5,
-        x6,
-        x7,
-    }
+    // Handle SP exit — may loop if SP calls FF-A memory operations
+    handle_sp_exit(sp, sp_id)
 }
 
 /// Set HCR_EL2.VI if the SP has a pending virtual interrupt.

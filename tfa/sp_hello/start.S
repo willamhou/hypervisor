@@ -18,9 +18,14 @@
 .equ UARTDR,             0x000
 .equ UARTFR,             0x018
 
-.equ FFA_MSG_WAIT,       0x8400006B
-.equ FFA_DIRECT_REQ_32,  0x8400006F
-.equ FFA_DIRECT_RESP_32, 0x84000070
+.equ FFA_MSG_WAIT,              0x8400006B
+.equ FFA_DIRECT_REQ_32,         0x8400006F
+.equ FFA_DIRECT_RESP_32,        0x84000070
+.equ FFA_MEM_RETRIEVE_REQ_32,   0x84000074
+.equ FFA_MEM_RETRIEVE_RESP,     0x84000075
+.equ FFA_MEM_RELINQUISH,        0x84000076
+.equ MEM_TEST_MAGIC,            0xABCD0001
+.equ SHARED_PAGE_MAGIC,         0xCAFEFACE
 
 .equ SP_STACK_TOP,       0x0e400000
 
@@ -59,6 +64,11 @@ _start:
     and     x9, x1, #0xFFFF     /* x9 = dest (our SP ID) */
     orr     x1, x8, x9, lsl #16 /* x1 = (dest << 16) | source */
 
+    /* Check for memory test trigger: x3 == MEM_TEST_MAGIC */
+    ldr     x8, =MEM_TEST_MAGIC
+    cmp     x3, x8
+    b.eq    .Lmem_test
+
     /* Check for slow-path trigger: x3 == 0xDEADBEEF */
     ldr     x8, =0xDEADBEEF
     cmp     x3, x8
@@ -87,6 +97,89 @@ _start:
     smc     #0
 
     /* After ERET from SPMC with next request */
+    b       .Lmsg_loop
+
+.Lmem_test:
+    /* Memory test: DIRECT_REQ with x3=MEM_TEST_MAGIC, x4=handle_lo, x5=handle_hi, x6=shared_page_ipa.
+     *
+     * 1. Call FFA_MEM_RETRIEVE_REQ_32 with handle from x4/x5
+     * 2. Write SHARED_PAGE_MAGIC to shared page at IPA from x6
+     * 3. Call FFA_MEM_RELINQUISH with handle
+     * 4. Respond with DIRECT_RESP: x4 += 0x4000 (memory test signature)
+     */
+    /* Save response x1 (swapped src/dest) and handle + IPA across SMC calls */
+    mov     x19, x1                 /* response x1 (already swapped above) */
+    mov     x20, x4                 /* handle_lo */
+    mov     x21, x5                 /* handle_hi */
+    mov     x22, x6                 /* shared page IPA */
+
+    /* Debug: print "[SP] MEM_TEST\r\n" */
+    adr     x0, str_memtest
+    bl      uart_print
+
+    /* Step 1: FFA_MEM_RETRIEVE_REQ_32(handle_lo, handle_hi) */
+    ldr     x0, =FFA_MEM_RETRIEVE_REQ_32
+    mov     x1, x20                 /* handle_lo */
+    mov     x2, x21                 /* handle_hi */
+    mov     x3, xzr
+    mov     x4, xzr
+    mov     x5, xzr
+    mov     x6, xzr
+    mov     x7, xzr
+    smc     #0
+
+    /* Check x0 == FFA_MEM_RETRIEVE_RESP */
+    ldr     x8, =FFA_MEM_RETRIEVE_RESP
+    cmp     x0, x8
+    b.ne    .Lmem_test_error
+
+    /* Debug: print "[SP] RETRIEVE OK\r\n" */
+    adr     x0, str_retrieve_ok
+    bl      uart_print
+
+    /* Step 2: Write magic to shared page */
+    ldr     w8, =SHARED_PAGE_MAGIC
+    str     w8, [x22]
+
+    /* Debug: print "[SP] WRITE OK\r\n" */
+    adr     x0, str_write_ok
+    bl      uart_print
+
+    /* Step 3: FFA_MEM_RELINQUISH(handle_lo, handle_hi) */
+    ldr     x0, =FFA_MEM_RELINQUISH
+    mov     x1, x20                 /* handle_lo */
+    mov     x2, x21                 /* handle_hi */
+    mov     x3, xzr
+    mov     x4, xzr
+    mov     x5, xzr
+    mov     x6, xzr
+    mov     x7, xzr
+    smc     #0
+
+    /* Step 4: Respond with DIRECT_RESP, x4 += 0x4000 as memory test signature */
+    ldr     x0, =FFA_DIRECT_RESP_32
+    mov     x1, x19                 /* response x1 */
+    mov     x2, xzr
+    ldr     x3, =MEM_TEST_MAGIC    /* echo magic back */
+    add     x4, x20, #0x4000       /* handle_lo + 0x4000 as signature */
+    ldr     x5, =SHARED_PAGE_MAGIC /* echo what we wrote */
+    mov     x6, xzr
+    mov     x7, xzr
+    smc     #0
+    b       .Lmsg_loop
+
+.Lmem_test_error:
+    /* RETRIEVE failed — respond with error in x4 */
+    ldr     x8, =FFA_DIRECT_RESP_32
+    mov     x0, x8
+    mov     x1, x19                 /* response x1 */
+    mov     x2, xzr
+    mov     x3, xzr
+    mov     x4, xzr                 /* x4 = 0 signals error */
+    mov     x5, xzr
+    mov     x6, xzr
+    mov     x7, xzr
+    smc     #0
     b       .Lmsg_loop
 
 .Lunknown_msg:
@@ -121,3 +214,9 @@ uart_print:
 .section .rodata
 str_banner:
     .asciz "[SP] Hello from S-EL1!\r\n"
+str_memtest:
+    .asciz "[SP] MEM_TEST\r\n"
+str_retrieve_ok:
+    .asciz "[SP] RETRIEVE OK\r\n"
+str_write_ok:
+    .asciz "[SP] WRITE OK\r\n"

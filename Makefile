@@ -392,6 +392,46 @@ build-tfa-pkvm: build-bl32-bl33 build-spmc build-sp-hello build-sp-irq
 	    debian:bookworm-slim bash /src/scripts/build-tfa.sh
 	mv $(TFA_DIR)/flash.bin $(TFA_FLASH_PKVM)
 
+# Build FF-A DIRECT_REQ test kernel module (requires build-pkvm-kernel first)
+build-ffa-test:
+	@echo "Building FF-A test kernel module (Docker)..."
+	docker run --rm \
+	    -v $(PWD)/guest/linux:/output \
+	    -v $(PWD)/guest/linux/ffa-test:/module \
+	    -v $(PWD)/guest/linux/ffa-test/build-ffa-test.sh:/scripts/build-ffa-test.sh:ro \
+	    -v pkvm-kernel-build-cache:/build \
+	    debian:bookworm-slim bash /scripts/build-ffa-test.sh
+
+# Build pKVM initramfs with FF-A test module
+build-pkvm-ffa-initramfs: build-ffa-test
+	@echo "Building pKVM FF-A test initramfs..."
+	@rm -rf /tmp/pkvm-ffa-initramfs
+	@mkdir -p /tmp/pkvm-ffa-initramfs
+	@cd /tmp/pkvm-ffa-initramfs && \
+	    zcat $(PWD)/guest/linux/initramfs.cpio.gz | cpio -idm 2>/dev/null && \
+	    mkdir -p proc sys dev mnt lib/modules && \
+	    cp $(PWD)/guest/linux/ffa_test.ko lib/modules/ && \
+	    cp $(PWD)/guest/linux/ffa-test/init-ffa-test init && \
+	    chmod +x init && \
+	    find . | cpio -o -H newc 2>/dev/null | gzip > $(PWD)/guest/linux/initramfs-ffa-test.cpio.gz
+	@echo "Built: guest/linux/initramfs-ffa-test.cpio.gz"
+
+# Boot pKVM with FF-A DIRECT_REQ test
+run-pkvm-ffa-test: build-pkvm-dtb
+	@test -f $(TFA_FLASH_PKVM) || (echo "ERROR: $(TFA_FLASH_PKVM) not found. Run 'make build-tfa-pkvm' first." && exit 1)
+	@test -f $(PKVM_IMAGE) || (echo "ERROR: $(PKVM_IMAGE) not found. Run 'make build-pkvm-kernel' first." && exit 1)
+	@test -f guest/linux/initramfs-ffa-test.cpio.gz || (echo "ERROR: initramfs-ffa-test.cpio.gz not found. Run 'make build-pkvm-ffa-initramfs' first." && exit 1)
+	@echo "Starting pKVM FF-A DIRECT_REQ test..."
+	@echo "Press Ctrl+A then X to exit QEMU"
+	$(QEMU_SEL2) -machine virt,secure=on,virtualization=on,gic-version=3 \
+	    -cpu max,pauth-impdef=on,sve=off -smp 4 -m 2G -nographic \
+	    -bios $(TFA_FLASH_PKVM) \
+	    -device loader,file=$(PKVM_IMAGE),addr=0x40200000,force-raw=on \
+	    -device loader,file=$(PKVM_DTB),addr=0x47000000,force-raw=on \
+	    -device loader,file=guest/linux/initramfs-ffa-test.cpio.gz,addr=0x54000000,force-raw=on \
+	    -device loader,file=$(LINUX_DISK),addr=0x58000000,force-raw=on \
+	    -nic none
+
 # Boot: TF-A → SPMC (S-EL2) → pKVM kernel (NS-EL2) → Linux host (NS-EL1)
 # BL33 = Linux kernel (not our hypervisor) — pKVM replaces our NS-EL2 code
 run-pkvm: build-pkvm-dtb
