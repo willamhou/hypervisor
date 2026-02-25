@@ -79,7 +79,7 @@ make fmt          # Format code
 | `NetRxRing` | `src/vswitch.rs` | Per-port SPSC ring buffer for async RX frame delivery |
 | `VirtualPl031` | `src/devices/pl031.rs` | PL031 RTC emulation: counter-based time, PrimeCell ID |
 | `SpMcManifest` | `src/manifest.rs` | SPMC manifest parser: TOS_FW_CONFIG DTB (spmc_id, version) |
-| `SpmcHandler` | `src/spmc_handler.rs` | S-EL2 SPMC event loop + FF-A dispatch, multi-SP DIRECT_REQ routing via `dispatch_to_sp()` + `enter_guest()` ERET, NS interrupt preemption (SP_IRQ_PREEMPTED flag, CNTHP timer, FFA_INTERRUPT return), `resume_preempted_sp()` via FFA_RUN, secure vIRQ injection via `inject_pending_virq()` (HCR_EL2.VI), vFIQ injection via `inject_pending_vfiq()` (HCR_EL2.VF, `vfiq` feature), cross-SP preemption via `dispatch_interrupt_to_sp()`, NWd RXTX management, PARTITION_INFO_GET writes 24-byte descriptors to NWd RX buffer |
+| `SpmcHandler` | `src/spmc_handler.rs` | S-EL2 SPMC event loop + FF-A dispatch, multi-SP DIRECT_REQ routing via `dispatch_to_sp()` + `enter_guest()` ERET, NS interrupt preemption (SP_IRQ_PREEMPTED flag, CNTHP timer, FFA_INTERRUPT return), `resume_preempted_sp()` via FFA_RUN, secure vIRQ injection via `inject_pending_virq()` (HCR_EL2.VI), vFIQ injection via `inject_pending_vfiq()` (HCR_EL2.VF, `vfiq` feature), cross-SP preemption via `dispatch_interrupt_to_sp()`, NWd RXTX management, PARTITION_INFO_GET writes 24-byte descriptors to NWd RX buffer, SPMC-side memory sharing (MEM_SHARE/LEND/RETRIEVE/RELINQUISH/RECLAIM with SpmcShareRecord storage, dynamic Secure Stage-2 mapping via Stage2Walker) |
 | `SpContext` | `src/sp_context.rs` | Per-SP state machine (Reset→Idle→Running→Blocked→Preempted), wraps VcpuContext, per-SP `owned_intids[4]` + `pending_irq` + `fiq_intids[4]`/`pending_fiq` (vfiq feature), global SpStore, `for_each_sp()`/`find_sp_for_intid()`/`find_sp_with_pending_irq()`/`is_fiq_delivery_for()` iterators |
 | `SecureStage2Config` | `src/secure_stage2.rs` | VSTTBR_EL2/VSTCR_EL2 config for SP isolation, `build_sp_stage2()` identity-maps SP code + UART |
 | `Sel2Mmu` | `src/sel2_mmu.rs` | S-EL2 Stage-1 identity map: static L0/L1/L2 tables, NS=1 for NWd DRAM, Device for GIC/UART, Normal Secure for SPMC/SPs; `install_sel2_stage1_secondary()` for secondary CPU warm-boot |
@@ -301,7 +301,7 @@ Array-based routing: `devices: [Option<Device>; 8]`, scan for `dev.contains(addr
 
 ## Tests
 
-~282 assertions across 33 test suites run automatically on `make run` (no feature flags). With `vfiq` feature: ~297 assertions (adds 15 FIQ-specific tests in test_sp_context and test_spmc_handler). Orchestrated sequentially in `src/main.rs`. Located in `tests/`:
+~294 assertions across 33 test suites run automatically on `make run` (no feature flags). With `vfiq` feature: ~309 assertions (adds 15 FIQ-specific tests in test_sp_context and test_spmc_handler). Orchestrated sequentially in `src/main.rs`. Located in `tests/`:
 
 | Test | Coverage | Assertions |
 |------|----------|------------|
@@ -334,7 +334,7 @@ Array-based routing: `devices: [Option<Device>; 8]`, scan for `dev.contains(addr
 | `test_page_ownership` | Stage-2 PTE SW bits: read/write OWNED/SHARED_OWNED, unmapped IPA, 2MB block→4KB split | 9 |
 | `test_pl031` | PL031 RTC: RTCDR readable, RTCLR write+readback, PeriphID/PrimeCellID, unknown offset | 4 |
 | `test_ffa` | FF-A proxy: VERSION/ID_GET/FEATURES/RXTX/messaging/MEM_SHARE/RECLAIM/descriptors/SMC forward/VM-to-VM RETRIEVE/RELINQUISH/SPM_ID_GET/RUN/notifications/MSG_SEND2/MSG_WAIT | 44 |
-| `test_spmc_handler` | SPMC dispatch: VERSION/ID_GET/SPM_ID_GET/FEATURES/PARTITION_INFO/DIRECT_REQ echo/framework msg/RXTX/FFA_RUN/multi-SP/find_sp_for_intid (+3 vFIQ tests with `vfiq`) | 42 (45 with `vfiq`) |
+| `test_spmc_handler` | SPMC dispatch: VERSION/ID_GET/SPM_ID_GET/FEATURES/PARTITION_INFO/DIRECT_REQ echo/framework msg/RXTX/FFA_RUN/multi-SP/find_sp_for_intid/MEM_SHARE/LEND/RETRIEVE/RELINQUISH/RECLAIM/DONATE (+3 vFIQ tests with `vfiq`) | 54 (57 with `vfiq`) |
 | `test_sp_context` | SpContext: state machine transitions (incl. Preempted), VcpuContext fields, set/get args (x0-x7), owned_intids, pending_irq lifecycle (+12 FIQ tests with `vfiq`) | 28 (40 with `vfiq`) |
 | `test_secure_stage2` | SecureStage2Config: VSTTBR address, VSTCR T0SZ, new_from_vsttbr | 4 |
 | `test_guest_interrupt` | Guest interrupt injection + exception vector (blocks) | 1 |
@@ -436,6 +436,7 @@ NS-EL1: Linux/Android guest
 **Phase C** (done): NS interrupt preemption — IRQ during SP → FFA_INTERRUPT → FFA_RUN resume, CNTHP timer, SP_IRQ_PREEMPTED flag, Preempted state, SP Hello slow path, 9/9 BL33 tests pass
 **Phase D** (done): Multi-SP + secure vIRQ/vFIQ injection — SP2 (sp_irq) at S-EL1, per-SP INTID ownership, HCR_EL2.VI + HF_INTERRUPT_GET paravirt, CNTHP poll timer, cross-SP preemption, `vfiq` feature flag for HCR_EL2.VF + HF_FIQ_GET (FIQ delivery), 12/12 BL33 tests pass (11 base + 1 vFIQ)
 **Phase 4.5** (done): pKVM at NS-EL2 + our SPMC at S-EL2 — `make run-pkvm` boots pKVM to BusyBox shell (`Protected hVHE mode initialized successfully`). Uses AOSP android16-6.12 kernel (`make build-pkvm-kernel`) with Google's pKVM FF-A proxy (`kvm-arm.mode=protected`). FF-A v1.1 discovery works in both nVHE and protected mode: `ARM FF-A: Driver version 1.2`, `Firmware version 1.1 found`. RXTX_MAP forwarded by SPMD, PARTITION_INFO_GET returns SP1+SP2 descriptors (x3=24 partition_sz). S-EL2 Stage-1 MMU maps NS DRAM with NS=1 bit so writes to pKVM's hyp RX buffer reach Non-Secure memory. Secondary CPU warm-boot: `FFA_SECONDARY_EP_REGISTER` (0xC4000087) + `secondary_entry_sel2` in `boot_sel2.S` + per-CPU stacks (3 × 16KB) + `rust_main_sel2_secondary()` (VBAR → MMU → FFA_MSG_WAIT). SVE workaround: `sve=off` (ENABLE_SVE_FOR_NS=0 conflicts with CTX_INCLUDE_FPREGS=1). Non-blocking gaps: Notifications (`-95 EOPNOTSUPP`), sched callback (`-95`)
+**M4.6 Sprint S1** (done): SPMC-side memory sharing — MEM_SHARE/LEND/RETRIEVE/RELINQUISH/RECLAIM handlers in spmc_handler.rs with SpmcShareRecord storage, dynamic Secure Stage-2 mapping via Stage2Walker, register-based + descriptor-based protocols, 12 new unit test assertions (54 total), BL33 Test 13 (MEM_SHARE + RECLAIM)
 **Phase 5**: RME & CCA (Realm Manager)
 
 See `DEVELOPMENT_PLAN.md` for full details.

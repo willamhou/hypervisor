@@ -242,6 +242,151 @@ pub fn run_tests() {
         pass += 1;
     }
 
+    // ── SPMC memory sharing tests ───────────────────────────────────
+
+    // Test: FFA_FEATURES(FFA_MEM_SHARE_32) -> SUCCESS
+    {
+        let mut req = zero_req(ffa::FFA_FEATURES);
+        req.x1 = ffa::FFA_MEM_SHARE_32;
+        let resp = dispatch_ffa(&req);
+        assert_eq!(resp.x0, ffa::FFA_SUCCESS_32);
+        pass += 1;
+    }
+
+    // Test: FFA_FEATURES(FFA_MEM_RECLAIM) -> SUCCESS
+    {
+        let mut req = zero_req(ffa::FFA_FEATURES);
+        req.x1 = ffa::FFA_MEM_RECLAIM;
+        let resp = dispatch_ffa(&req);
+        assert_eq!(resp.x0, ffa::FFA_SUCCESS_32);
+        pass += 1;
+    }
+
+    // Test: MEM_SHARE register-based (x3=IPA, x4=1, x5=SP1) -> SUCCESS + handle
+    let share_handle: u64;
+    {
+        let req = SmcResult8 {
+            x0: ffa::FFA_MEM_SHARE_32,
+            x1: 0x0001 << 16, // sender=1
+            x2: 0,
+            x3: 0x8000_0000, // IPA
+            x4: 1,           // 1 page
+            x5: 0x8001,      // receiver=SP1
+            x6: 0, x7: 0,
+        };
+        let resp = dispatch_ffa(&req);
+        assert_eq!(resp.x0, ffa::FFA_SUCCESS_32);
+        share_handle = resp.x2 | (resp.x3 << 32);
+        assert!(share_handle > 0);
+        pass += 2;
+    }
+
+    // Test: MEM_SHARE with unregistered receiver -> INVALID_PARAMETERS
+    {
+        let req = SmcResult8 {
+            x0: ffa::FFA_MEM_SHARE_32,
+            x1: 0x0001 << 16,
+            x2: 0,
+            x3: 0x9000_0000,
+            x4: 1,
+            x5: 0x9999, // non-existent SP
+            x6: 0, x7: 0,
+        };
+        let resp = dispatch_ffa(&req);
+        assert_eq!(resp.x0, ffa::FFA_ERROR);
+        assert_eq!(resp.x2, ffa::FFA_INVALID_PARAMETERS as u64);
+        pass += 1;
+    }
+
+    // Test: MEM_RETRIEVE -> RETRIEVE_RESP
+    {
+        let req = SmcResult8 {
+            x0: ffa::FFA_MEM_RETRIEVE_REQ_32,
+            x1: share_handle & 0xFFFF_FFFF,
+            x2: share_handle >> 32,
+            x3: 0, x4: 0, x5: 0, x6: 0, x7: 0,
+        };
+        let resp = dispatch_ffa(&req);
+        assert_eq!(resp.x0, ffa::FFA_MEM_RETRIEVE_RESP);
+        pass += 1;
+    }
+
+    // Test: MEM_RETRIEVE again (already retrieved) -> DENIED
+    {
+        let req = SmcResult8 {
+            x0: ffa::FFA_MEM_RETRIEVE_REQ_32,
+            x1: share_handle & 0xFFFF_FFFF,
+            x2: share_handle >> 32,
+            x3: 0, x4: 0, x5: 0, x6: 0, x7: 0,
+        };
+        let resp = dispatch_ffa(&req);
+        assert_eq!(resp.x0, ffa::FFA_ERROR);
+        assert_eq!(resp.x2, ffa::FFA_DENIED as u64);
+        pass += 1;
+    }
+
+    // Test: MEM_RECLAIM while retrieved -> DENIED
+    {
+        let req = SmcResult8 {
+            x0: ffa::FFA_MEM_RECLAIM,
+            x1: share_handle & 0xFFFF_FFFF,
+            x2: share_handle >> 32,
+            x3: 0, x4: 0, x5: 0, x6: 0, x7: 0,
+        };
+        let resp = dispatch_ffa(&req);
+        assert_eq!(resp.x0, ffa::FFA_ERROR);
+        assert_eq!(resp.x2, ffa::FFA_DENIED as u64);
+        pass += 1;
+    }
+
+    // Test: MEM_RELINQUISH -> SUCCESS
+    {
+        let req = SmcResult8 {
+            x0: ffa::FFA_MEM_RELINQUISH,
+            x1: share_handle & 0xFFFF_FFFF,
+            x2: share_handle >> 32,
+            x3: 0, x4: 0, x5: 0, x6: 0, x7: 0,
+        };
+        let resp = dispatch_ffa(&req);
+        assert_eq!(resp.x0, ffa::FFA_SUCCESS_32);
+        pass += 1;
+    }
+
+    // Test: MEM_RECLAIM after relinquish -> SUCCESS
+    {
+        let req = SmcResult8 {
+            x0: ffa::FFA_MEM_RECLAIM,
+            x1: share_handle & 0xFFFF_FFFF,
+            x2: share_handle >> 32,
+            x3: 0, x4: 0, x5: 0, x6: 0, x7: 0,
+        };
+        let resp = dispatch_ffa(&req);
+        assert_eq!(resp.x0, ffa::FFA_SUCCESS_32);
+        pass += 1;
+    }
+
+    // Test: MEM_RECLAIM invalid handle -> INVALID_PARAMETERS
+    {
+        let req = SmcResult8 {
+            x0: ffa::FFA_MEM_RECLAIM,
+            x1: 0xDEAD,
+            x2: 0,
+            x3: 0, x4: 0, x5: 0, x6: 0, x7: 0,
+        };
+        let resp = dispatch_ffa(&req);
+        assert_eq!(resp.x0, ffa::FFA_ERROR);
+        assert_eq!(resp.x2, ffa::FFA_INVALID_PARAMETERS as u64);
+        pass += 1;
+    }
+
+    // Test: FFA_MEM_DONATE -> NOT_SUPPORTED
+    {
+        let resp = dispatch_ffa(&zero_req(ffa::FFA_MEM_DONATE_32));
+        assert_eq!(resp.x0, ffa::FFA_ERROR);
+        assert_eq!(resp.x2, ffa::FFA_NOT_SUPPORTED as u64);
+        pass += 1;
+    }
+
     crate::uart_puts(b"    ");
     crate::print_u32(pass);
     crate::uart_puts(b" assertions passed\n");

@@ -29,8 +29,11 @@
 .equ FFA_INTERRUPT,        0x84000062
 .equ FFA_RUN,              0x8400006D
 .equ FFA_RXTX_MAP,        0xC4000066
+.equ FFA_MEM_SHARE_32,    0x84000073
+.equ FFA_MEM_RECLAIM,     0x84000077
 
 .equ FFA_VERSION_1_1,     0x00010001
+.equ SP1_ID,              0x8001
 
 _start:
     /* Save BL31-provided registers */
@@ -587,8 +590,62 @@ _start:
     b.ne    .Lfail_12
     adr     x0, str_pass
     bl      uart_print
-    b       .Ldone
+    b       .Ltest_13
 .Lfail_12:
+    adr     x0, str_fail
+    bl      uart_print
+
+    /* ============ Test 13: MEM_SHARE + MEM_RECLAIM ============ */
+.Ltest_13:
+    adr     x0, str_t13
+    bl      uart_print
+
+    /* FFA_MEM_SHARE_32: register-based protocol
+     * x1[31:16] = sender (NWd VM 0x0001)
+     * x3 = IPA of test page
+     * x4 = page count (1)
+     * x5 = receiver SP ID (0x8001)
+     */
+    ldr     x0, =FFA_MEM_SHARE_32
+    movz    x1, #0x0000
+    movk    x1, #0x0001, lsl #16   /* sender = 0x0001 */
+    mov     x2, xzr
+    adr     x3, _tx_page           /* reuse TX page as test IPA */
+    mov     x4, #1                 /* 1 page */
+    movz    x5, #SP1_ID            /* receiver = SP1 */
+    mov     x6, xzr
+    mov     x7, xzr
+    smc     #0
+
+    /* x0 should be FFA_SUCCESS_32 */
+    ldr     x9, =FFA_SUCCESS_32
+    cmp     x0, x9
+    b.ne    .Lfail_13
+
+    /* Save handle: x2 = low 32 bits, x3 = high 32 bits */
+    mov     x16, x2                /* handle_lo */
+    mov     x17, x3                /* handle_hi */
+
+    /* FFA_MEM_RECLAIM with handle */
+    ldr     x0, =FFA_MEM_RECLAIM
+    mov     x1, x16                /* handle_lo */
+    mov     x2, x17                /* handle_hi */
+    mov     x3, xzr
+    mov     x4, xzr
+    mov     x5, xzr
+    mov     x6, xzr
+    mov     x7, xzr
+    smc     #0
+
+    /* x0 should be FFA_SUCCESS_32 */
+    ldr     x9, =FFA_SUCCESS_32
+    cmp     x0, x9
+    b.ne    .Lfail_13
+
+    adr     x0, str_pass
+    bl      uart_print
+    b       .Ldone
+.Lfail_13:
     adr     x0, str_fail
     bl      uart_print
 
@@ -644,6 +701,8 @@ str_t11:
     .asciz "  Test 11: Secure vIRQ injection ... "
 str_t12:
     .asciz "  Test 12: Secure vFIQ injection ... "
+str_t13:
+    .asciz "  Test 13: MEM_SHARE + RECLAIM ..... "
 str_pass:
     .asciz "PASS\r\n"
 str_fail:

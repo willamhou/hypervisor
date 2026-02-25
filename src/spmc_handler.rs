@@ -12,7 +12,8 @@
 
 use crate::ffa;
 use crate::ffa::smc_forward::SmcResult8;
-use core::sync::atomic::AtomicBool;
+use core::cell::UnsafeCell;
+use core::sync::atomic::{AtomicBool, AtomicU64};
 #[cfg(feature = "sel2")]
 use core::sync::atomic::Ordering;
 
@@ -50,6 +51,138 @@ static mut NWD_RXTX: NwdRxtxState = NwdRxtxState {
     page_count: 0,
     mapped: false,
 };
+
+// ── SPMC-side memory share records ──────────────────────────────────
+
+const MAX_SHARE_RANGES: usize = 4;
+const MAX_SPMC_SHARES: usize = 16;
+
+/// SPMC memory share record (mirrors stub_spmc::MemShareRecord).
+struct SpmcShareRecord {
+    handle: u64,
+    sender_id: u16,
+    receiver_id: u16,
+    ranges: [(u64, u32); MAX_SHARE_RANGES],
+    range_count: usize,
+    active: bool,
+    is_lend: bool,
+    retrieved: bool,
+}
+
+struct SpmcShareArray(UnsafeCell<[SpmcShareRecord; MAX_SPMC_SHARES]>);
+unsafe impl Sync for SpmcShareArray {}
+
+static SPMC_SHARES: SpmcShareArray = SpmcShareArray(UnsafeCell::new({
+    const EMPTY: SpmcShareRecord = SpmcShareRecord {
+        handle: 0,
+        sender_id: 0,
+        receiver_id: 0,
+        ranges: [(0, 0); MAX_SHARE_RANGES],
+        range_count: 0,
+        active: false,
+        is_lend: false,
+        retrieved: false,
+    };
+    [
+        EMPTY, EMPTY, EMPTY, EMPTY, EMPTY, EMPTY, EMPTY, EMPTY,
+        EMPTY, EMPTY, EMPTY, EMPTY, EMPTY, EMPTY, EMPTY, EMPTY,
+    ]
+}));
+
+static SPMC_NEXT_HANDLE: AtomicU64 = AtomicU64::new(1);
+
+fn spmc_alloc_handle() -> u64 {
+    SPMC_NEXT_HANDLE.fetch_add(1, core::sync::atomic::Ordering::Relaxed)
+}
+
+/// Record a memory share. Returns the handle on success.
+fn record_spmc_share(
+    sender_id: u16,
+    receiver_id: u16,
+    ranges: &[(u64, u32)],
+    is_lend: bool,
+) -> Option<u64> {
+    let handle = spmc_alloc_handle();
+    let records = unsafe { &mut *SPMC_SHARES.0.get() };
+    for record in records.iter_mut() {
+        if !record.active {
+            let mut stored = [(0u64, 0u32); MAX_SHARE_RANGES];
+            let count = ranges.len().min(MAX_SHARE_RANGES);
+            for (i, &r) in ranges.iter().take(count).enumerate() {
+                stored[i] = r;
+            }
+            *record = SpmcShareRecord {
+                handle,
+                sender_id,
+                receiver_id,
+                ranges: stored,
+                range_count: count,
+                active: true,
+                is_lend,
+                retrieved: false,
+            };
+            return Some(handle);
+        }
+    }
+    None
+}
+
+/// Look up a share record by handle (immutable).
+fn lookup_spmc_share(handle: u64) -> Option<(u16, u16, [(u64, u32); MAX_SHARE_RANGES], usize, bool, bool)> {
+    let records = unsafe { &*SPMC_SHARES.0.get() };
+    for record in records.iter() {
+        if record.active && record.handle == handle {
+            return Some((
+                record.sender_id,
+                record.receiver_id,
+                record.ranges,
+                record.range_count,
+                record.is_lend,
+                record.retrieved,
+            ));
+        }
+    }
+    None
+}
+
+/// Mark a share as retrieved. Returns true if successful.
+fn mark_spmc_retrieved(handle: u64) -> bool {
+    let records = unsafe { &mut *SPMC_SHARES.0.get() };
+    for record in records.iter_mut() {
+        if record.active && record.handle == handle && !record.retrieved {
+            record.retrieved = true;
+            return true;
+        }
+    }
+    false
+}
+
+/// Mark a share as relinquished. Returns true if successful.
+fn mark_spmc_relinquished(handle: u64) -> bool {
+    let records = unsafe { &mut *SPMC_SHARES.0.get() };
+    for record in records.iter_mut() {
+        if record.active && record.handle == handle && record.retrieved {
+            record.retrieved = false;
+            return true;
+        }
+    }
+    false
+}
+
+/// Reclaim (delete) a share record. Fails if still retrieved.
+fn reclaim_spmc_share(handle: u64) -> Result<(), i32> {
+    let records = unsafe { &mut *SPMC_SHARES.0.get() };
+    for record in records.iter_mut() {
+        if record.active && record.handle == handle {
+            if record.retrieved {
+                return Err(ffa::FFA_DENIED);
+            }
+            record.active = false;
+            return Ok(());
+        }
+    }
+    Err(ffa::FFA_INVALID_PARAMETERS)
+}
 
 /// SPMC event loop — dispatches FF-A requests from SPMD (EL3) forever.
 ///
@@ -421,6 +554,11 @@ pub fn dispatch_ffa(req: &SmcResult8) -> SmcResult8 {
                     | ffa::FFA_RXTX_MAP
                     | ffa::FFA_RX_RELEASE
                     | ffa::FFA_RUN
+                    | ffa::FFA_MEM_SHARE_32
+                    | ffa::FFA_MEM_LEND_32
+                    | ffa::FFA_MEM_RETRIEVE_REQ_32
+                    | ffa::FFA_MEM_RELINQUISH
+                    | ffa::FFA_MEM_RECLAIM
             );
             if supported {
                 SmcResult8 {
@@ -480,6 +618,13 @@ pub fn dispatch_ffa(req: &SmcResult8) -> SmcResult8 {
                 x7: req.x7,
             }
         }
+
+        ffa::FFA_MEM_SHARE_32 | ffa::FFA_MEM_SHARE_64 => handle_spmc_mem_share(req, false),
+        ffa::FFA_MEM_LEND_32 | ffa::FFA_MEM_LEND_64 => handle_spmc_mem_share(req, true),
+        ffa::FFA_MEM_RETRIEVE_REQ_32 | ffa::FFA_MEM_RETRIEVE_REQ_64 => handle_spmc_mem_retrieve(req),
+        ffa::FFA_MEM_RELINQUISH => handle_spmc_mem_relinquish(req),
+        ffa::FFA_MEM_RECLAIM => handle_spmc_mem_reclaim(req),
+        ffa::FFA_MEM_DONATE_32 | ffa::FFA_MEM_DONATE_64 => make_error(ffa::FFA_NOT_SUPPORTED as u64),
 
         _ => make_error(ffa::FFA_NOT_SUPPORTED as u64),
     }
@@ -679,6 +824,186 @@ fn handle_direct_req_32(req: &SmcResult8) -> SmcResult8 {
         x5: req.x5,
         x6: req.x6,
         x7: req.x7,
+    }
+}
+
+/// Handle FFA_MEM_SHARE / FFA_MEM_LEND from NWd.
+///
+/// In sel2 mode: reads FF-A v1.1 composite memory region descriptor from NWd TX buffer.
+/// In unit tests (no sel2): uses register-based protocol (x3=IPA, x4=count, x5=receiver).
+fn handle_spmc_mem_share(req: &SmcResult8, is_lend: bool) -> SmcResult8 {
+    let sender_id: u16;
+    let receiver_id: u16;
+    let ranges: [(u64, u32); 1];
+
+    #[cfg(feature = "sel2")]
+    {
+        let mapped = unsafe { NWD_RXTX.mapped };
+        if mapped {
+            let tx_pa = unsafe { NWD_RXTX.tx_pa };
+            let total_length = req.x1 as usize;
+            let parsed = unsafe {
+                crate::ffa::descriptors::parse_mem_region(tx_pa as *const u8, total_length as u32)
+            };
+            match parsed {
+                Ok(desc) => {
+                    sender_id = desc.sender_id;
+                    receiver_id = desc.receiver_id;
+                    if desc.range_count == 0 {
+                        return make_error(ffa::FFA_INVALID_PARAMETERS as u64);
+                    }
+                    ranges = [(desc.ranges[0].0, desc.ranges[0].1)];
+                }
+                Err(_) => {
+                    return make_error(ffa::FFA_INVALID_PARAMETERS as u64);
+                }
+            }
+        } else {
+            // Fallback: register-based protocol
+            sender_id = ((req.x1 >> 16) & 0xFFFF) as u16;
+            receiver_id = (req.x5 & 0xFFFF) as u16;
+            let ipa = req.x3;
+            let count = req.x4 as u32;
+            ranges = [(ipa, count)];
+        }
+    }
+
+    #[cfg(not(feature = "sel2"))]
+    {
+        // Register-based protocol for unit tests
+        sender_id = ((req.x1 >> 16) & 0xFFFF) as u16;
+        receiver_id = (req.x5 & 0xFFFF) as u16;
+        let ipa = req.x3;
+        let count = req.x4 as u32;
+        ranges = [(ipa, count)];
+    }
+
+    // Validate receiver is a registered SP
+    if !crate::sp_context::is_registered_sp(receiver_id) {
+        return make_error(ffa::FFA_INVALID_PARAMETERS as u64);
+    }
+
+    match record_spmc_share(sender_id, receiver_id, &ranges, is_lend) {
+        Some(handle) => SmcResult8 {
+            x0: ffa::FFA_SUCCESS_32,
+            x1: 0,
+            x2: handle & 0xFFFF_FFFF,
+            x3: handle >> 32,
+            x4: 0,
+            x5: 0,
+            x6: 0,
+            x7: 0,
+        },
+        None => make_error(ffa::FFA_NO_MEMORY as u64),
+    }
+}
+
+/// Handle FFA_MEM_RETRIEVE_REQ — maps pages into receiver SP's Secure Stage-2.
+fn handle_spmc_mem_retrieve(req: &SmcResult8) -> SmcResult8 {
+    let handle = (req.x1 & 0xFFFF_FFFF) | (req.x2 << 32);
+
+    let (_sender, receiver_id, ranges, range_count, _, retrieved) = match lookup_spmc_share(handle) {
+        Some(info) => info,
+        None => return make_error(ffa::FFA_INVALID_PARAMETERS as u64),
+    };
+
+    if retrieved {
+        return make_error(ffa::FFA_DENIED as u64);
+    }
+
+    // In sel2 mode, map pages into the receiver SP's Secure Stage-2
+    #[cfg(feature = "sel2")]
+    {
+        if let Some(sp) = crate::sp_context::get_sp_mut(receiver_id) {
+            let vsttbr = sp.vsttbr();
+            let l0_addr = vsttbr & 0x0000_FFFF_FFFF_F000;
+            let walker = crate::ffa::stage2_walker::Stage2Walker::new(l0_addr);
+            for i in 0..range_count {
+                let (base_ipa, page_count) = ranges[i];
+                for p in 0..page_count as u64 {
+                    let ipa = base_ipa + p * 4096;
+                    walker.map_page(ipa, 0b11, 0b10); // S2AP_RW, SW=SHARED_BORROWED
+                }
+            }
+        }
+    }
+    let _ = (receiver_id, &ranges, range_count);
+
+    mark_spmc_retrieved(handle);
+
+    SmcResult8 {
+        x0: ffa::FFA_MEM_RETRIEVE_RESP,
+        x1: 0,
+        x2: handle & 0xFFFF_FFFF,
+        x3: handle >> 32,
+        x4: 0,
+        x5: 0,
+        x6: 0,
+        x7: 0,
+    }
+}
+
+/// Handle FFA_MEM_RELINQUISH — unmaps pages from receiver SP's Secure Stage-2.
+fn handle_spmc_mem_relinquish(req: &SmcResult8) -> SmcResult8 {
+    let handle = (req.x1 & 0xFFFF_FFFF) | (req.x2 << 32);
+
+    let (_sender, receiver_id, ranges, range_count, _, retrieved) = match lookup_spmc_share(handle) {
+        Some(info) => info,
+        None => return make_error(ffa::FFA_INVALID_PARAMETERS as u64),
+    };
+
+    if !retrieved {
+        return make_error(ffa::FFA_DENIED as u64);
+    }
+
+    // In sel2 mode, unmap pages from the receiver SP's Secure Stage-2
+    #[cfg(feature = "sel2")]
+    {
+        if let Some(sp) = crate::sp_context::get_sp_mut(receiver_id) {
+            let vsttbr = sp.vsttbr();
+            let l0_addr = vsttbr & 0x0000_FFFF_FFFF_F000;
+            let walker = crate::ffa::stage2_walker::Stage2Walker::new(l0_addr);
+            for i in 0..range_count {
+                let (base_ipa, page_count) = ranges[i];
+                for p in 0..page_count as u64 {
+                    let ipa = base_ipa + p * 4096;
+                    walker.unmap_page(ipa);
+                }
+            }
+        }
+    }
+    let _ = (receiver_id, &ranges, range_count);
+
+    mark_spmc_relinquished(handle);
+
+    SmcResult8 {
+        x0: ffa::FFA_SUCCESS_32,
+        x1: 0,
+        x2: 0,
+        x3: 0,
+        x4: 0,
+        x5: 0,
+        x6: 0,
+        x7: 0,
+    }
+}
+
+/// Handle FFA_MEM_RECLAIM — delete share record (must not be retrieved).
+fn handle_spmc_mem_reclaim(req: &SmcResult8) -> SmcResult8 {
+    let handle = (req.x1 & 0xFFFF_FFFF) | (req.x2 << 32);
+
+    match reclaim_spmc_share(handle) {
+        Ok(()) => SmcResult8 {
+            x0: ffa::FFA_SUCCESS_32,
+            x1: 0,
+            x2: 0,
+            x3: 0,
+            x4: 0,
+            x5: 0,
+            x6: 0,
+            x7: 0,
+        },
+        Err(code) => make_error(code as u64),
     }
 }
 
