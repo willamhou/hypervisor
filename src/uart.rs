@@ -84,38 +84,4 @@ impl fmt::Write for Uart {
     }
 }
 
-/// Print macro (without newline)
-#[macro_export]
-macro_rules! print {
-    ($($arg:tt)*) => {{
-        use core::fmt::Write;
-        let _ = write!($crate::uart::writer(), $($arg)*);
-    }};
-}
-
-/// Println macro (with newline)
-#[macro_export]
-macro_rules! println {
-    () => {
-        $crate::print!("\n")
-    };
-    ($($arg:tt)*) => {{
-        use core::fmt::Write;
-        let _ = writeln!($crate::uart::writer(), $($arg)*);
-    }};
-}
-
-/// Get a writer for the UART
-pub fn writer() -> UartWriter {
-    UartWriter
-}
-
-/// Writer wrapper for formatting
-pub struct UartWriter;
-
-impl fmt::Write for UartWriter {
-    fn write_str(&mut self, s: &str) -> fmt::Result {
-        UART.puts(s);
-        Ok(())
-    }
-}
+// print!/println! macros are now in src/log.rs (route through LogWriter)

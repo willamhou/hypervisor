@@ -6,6 +6,7 @@ pub mod dtb;
 pub mod ffa;
 pub mod global;
 pub mod guest_loader;
+pub mod log;
 pub mod manifest;
 pub mod mm;
 pub mod spmc_handler;
@@ -23,8 +24,7 @@ pub mod vcpu_interrupt;
 pub mod vm;
 pub mod vswitch;
 
-// Note: println! macro is exported at the crate root via #[macro_export]
-// It can be used as: use hypervisor::println;
+// Note: print!/println!/log_*! macros are exported at the crate root via #[macro_export] in log.rs
 
 /// Simple function to write a byte slice to UART
 #[inline]

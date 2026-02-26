@@ -52,6 +52,9 @@ pub extern "C" fn rust_main(dtb_addr: usize) -> ! {
         uart_puts_local(b"[INIT] DTB: parse failed, using defaults\n");
     }
 
+    // Initialize log module
+    hypervisor::log::init();
+
     // Initialize exception handling
     uart_puts_local(b"[INIT] Setting up exception vector table...\n");
     exception::init();
@@ -180,6 +183,9 @@ pub extern "C" fn rust_main(dtb_addr: usize) -> ! {
     // Run the Secure Stage-2 config test
     tests::run_secure_stage2_test();
 
+    // Run the log module test
+    tests::run_log_test();
+
     // Run the guest interrupt injection test (LAST before guest boot — blocks forever)
     // Skip when booting guests since it never returns.
     #[cfg(not(any(feature = "linux_guest", feature = "guest")))]
@@ -307,6 +313,9 @@ pub extern "C" fn rust_main_sel2(
     } else {
         uart_puts_local(b"[SPMC] No HW config DTB, using QEMU virt defaults\n");
     }
+
+    // Initialize log module
+    hypervisor::log::init();
 
     // 4.5. Enable S-EL2 Stage-1 MMU (identity map with NS=1 for Non-Secure DRAM)
     // Must be before GIC init (Device mapping needed) and before any NWd RXTX access.
