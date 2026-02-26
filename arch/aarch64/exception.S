@@ -51,6 +51,21 @@
 .endm
 
 /*
+ * Macro for FIQ vector entry (branches to fiq_exception_handler)
+ *
+ * In S-EL2 (sel2) mode with FMO=1, physical FIQs from NS Group 1
+ * arrive here. The handler cannot ACK them (ICC_IAR1_EL1 only returns
+ * Secure Group 1 from Secure state), so it preempts the SP and returns
+ * FFA_INTERRUPT to NWd via SPMD.
+ */
+.macro vector_entry_fiq label
+.align 7
+\label:
+    b       fiq_exception_handler
+    .skip   (. - \label - 4), 0
+.endm
+
+/*
  * Exception Vector Table
  * This must be 2KB aligned (0x800 alignment)
  */
@@ -65,14 +80,14 @@ exception_vector_table:
 
     // Current EL with SP_ELx
     vector_entry sync_current_el_spx
-    vector_entry irq_current_el_spx
-    vector_entry_irq fiq_current_el_spx
+    vector_entry_irq irq_current_el_spx
+    vector_entry_fiq fiq_current_el_spx
     vector_entry serror_current_el_spx
 
     // Lower EL (AArch64) - This is where guest exceptions come from
     vector_entry sync_lower_el_aarch64
     vector_entry_irq irq_lower_el_aarch64
-    vector_entry_irq fiq_lower_el_aarch64
+    vector_entry_fiq fiq_lower_el_aarch64
     vector_entry serror_lower_el_aarch64
 
     // Lower EL (AArch32) - Not supported
@@ -382,6 +397,134 @@ irq_exception_handler:
     ldp     x0, x1, [x0, #0]
 
     // Return to guest
+    eret
+
+/*
+ * FIQ Exception Handler
+ *
+ * Handles physical FIQs that trap to EL2 via HCR_EL2.FMO=1.
+ * In S-EL2 (sel2) mode, NS Group 1 interrupts arrive as FIQ in Secure world.
+ * These cannot be acknowledged from Secure state (ICC_IAR1_EL1 only returns
+ * Secure Group 1 interrupts). The handler preempts the SP and returns
+ * FFA_INTERRUPT to NWd so it can handle the NS interrupt.
+ *
+ * Structure is identical to irq_exception_handler but calls handle_fiq_exception.
+ */
+fiq_exception_handler:
+    // Save guest registers to stack temporarily
+    stp     x0, x1, [sp, #-16]!
+    stp     x2, x3, [sp, #-16]!
+
+    // Load the context pointer from per-CPU TPIDR_EL2
+    mrs     x0, tpidr_el2
+
+    // Check if context pointer is valid
+    // If TPIDR_EL2=0, we're in SPMC host code (no SP running).
+    // FIQ during host code: mask FIQ in saved PSTATE to prevent re-entry loop,
+    // then return. The NS interrupt stays pending until NWd runs.
+    cbz     x0, fiq_no_context
+
+    // Save general purpose registers to VcpuContext
+    ldp     x2, x3, [sp], #16
+    stp     x2, x3, [x0, #16]   // x2, x3
+
+    ldp     x2, x3, [sp], #16
+    stp     x2, x3, [x0, #0]    // x0, x1
+
+    stp     x4, x5, [x0, #32]
+    stp     x6, x7, [x0, #48]
+    stp     x8, x9, [x0, #64]
+    stp     x10, x11, [x0, #80]
+    stp     x12, x13, [x0, #96]
+    stp     x14, x15, [x0, #112]
+    stp     x16, x17, [x0, #128]
+    stp     x18, x19, [x0, #144]
+    stp     x20, x21, [x0, #160]
+    stp     x22, x23, [x0, #176]
+    stp     x24, x25, [x0, #192]
+    stp     x26, x27, [x0, #208]
+    stp     x28, x29, [x0, #224]
+    str     x30, [x0, #240]      // x30 (LR)
+
+    // Save system registers
+    mrs     x2, sp_el1
+    str     x2, [x0, #248]       // sp_el1
+
+    mrs     x2, elr_el1
+    str     x2, [x0, #256]       // elr_el1
+
+    mrs     x2, spsr_el1
+    str     x2, [x0, #264]       // spsr_el1
+
+    // Save SP and PC
+    mov     x2, sp
+    str     x2, [x0, #384]       // sp
+
+    mrs     x2, elr_el2
+    str     x2, [x0, #392]       // pc
+
+    // Save SPSR_EL2 (guest PSTATE) to context
+    mrs     x2, spsr_el2
+    str     x2, [x0, #400]       // spsr_el2
+
+    // Call Rust FIQ handler
+    bl      handle_fiq_exception
+
+    // Check return value: true (1) = continue, false (0) = exit
+    cbz     w0, guest_exit_irq
+
+    // Restore context and re-enter guest
+    mrs     x0, tpidr_el2
+
+    ldp     x2, x3, [x0, #16]
+    ldp     x4, x5, [x0, #32]
+    ldp     x6, x7, [x0, #48]
+    ldp     x8, x9, [x0, #64]
+    ldp     x10, x11, [x0, #80]
+    ldp     x12, x13, [x0, #96]
+    ldp     x14, x15, [x0, #112]
+    ldp     x16, x17, [x0, #128]
+    ldp     x18, x19, [x0, #144]
+    ldp     x20, x21, [x0, #160]
+    ldp     x22, x23, [x0, #176]
+    ldp     x24, x25, [x0, #192]
+    ldp     x26, x27, [x0, #208]
+    ldp     x28, x29, [x0, #224]
+    ldr     x30, [x0, #240]
+
+    // Restore system registers
+    ldr     x1, [x0, #248]       // sp_el1
+    msr     sp_el1, x1
+
+    ldr     x1, [x0, #256]       // elr_el1
+    msr     elr_el1, x1
+
+    ldr     x1, [x0, #264]       // spsr_el1
+    msr     spsr_el1, x1
+
+    // Restore PC
+    ldr     x1, [x0, #392]       // pc
+    msr     elr_el2, x1
+
+    // Restore SPSR_EL2 from context
+    ldr     x1, [x0, #400]       // spsr_el2
+    msr     spsr_el2, x1
+
+    // Restore x0, x1 last
+    ldp     x0, x1, [x0, #0]
+
+    // Return to guest
+    eret
+
+fiq_no_context:
+    // FIQ arrived while no SP is running (TPIDR_EL2=0, SPMC host code).
+    // Mask FIQ in SPSR_EL2 to prevent re-entry loop on ERET.
+    // The NS interrupt stays pending until NWd eventually runs.
+    ldp     x2, x3, [sp], #16
+    ldp     x0, x1, [sp], #16
+    mrs     x0, spsr_el2
+    orr     x0, x0, #(1 << 6)   // SPSR_EL2.F = 1 (mask FIQ)
+    msr     spsr_el2, x0
     eret
 
 /*

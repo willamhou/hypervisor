@@ -53,13 +53,18 @@ pub fn init() {
         // DC=1 changes cache attributes when guest MMU is off, which can
         // cause stale page table data during the MMU-on transition.
         //
-        // NOTE: FMO is NOT set in S-EL2 (sel2) mode. Physical FIQs must
-        // trap to EL3 (TF-A/SPMD), not to S-EL2. In the Secure world,
-        // NS Group 1 interrupts route to EL3 as FIQ — setting FMO would
-        // intercept them at S-EL2 instead of letting SPMD handle them.
-        #[allow(unused_mut)]
-        let mut hcr: u64 = HCR_RW         // EL1 is AArch64
+        // FMO is required in both NS-EL2 and S-EL2 modes:
+        //   - NS-EL2: traps physical FIQ from guests
+        //   - S-EL2: required for HCR_EL2.VF (virtual FIQ) to work —
+        //     ARM spec: "VF is enabled only when {TGE, FMO} = {0, 1}"
+        //
+        // In S-EL2 (sel2) mode, SPMD configures SCR_EL3.FIQ=0 for Secure
+        // world execution, so NS Group 1 interrupts (FIQ signal) arrive at
+        // S-EL2's FIQ handler. The FIQ handler forwards them back to NWd
+        // via FFA_INTERRUPT (cannot ACK NS interrupts from Secure state).
+        let hcr: u64 = HCR_RW         // EL1 is AArch64
                       | HCR_SWIO       // Set/Way Invalidation Override
+                      | HCR_FMO        // Route physical FIQ to EL2
                       | HCR_IMO        // Route physical IRQ to EL2
                       | HCR_AMO        // Route physical SError to EL2
                       | HCR_FB         // Force Broadcast TLB/cache maintenance
@@ -71,13 +76,6 @@ pub fn init() {
                       | HCR_TEA        // Trap External Aborts to EL2
                       | HCR_APK        // Don't trap PAC key register accesses
                       | HCR_API; // Don't trap PAC instructions
-
-        // FMO: Route physical FIQ to EL2.
-        // Only for NS-EL2 — in S-EL2 (sel2), FIQs trap to EL3 (SPMD).
-        #[cfg(not(feature = "sel2"))]
-        {
-            hcr |= HCR_FMO;
-        }
 
         core::arch::asm!(
             "msr hcr_el2, {hcr}",
@@ -632,6 +630,45 @@ const HF_INTERRUPT_GET: u64 = 0xFF04;
 /// a pending FIQ INTID. SPMC returns the INTID and clears HCR_EL2.VF.
 #[cfg(feature = "vfiq")]
 const HF_FIQ_GET: u64 = 0xFF05;
+
+/// FIQ exception handler called from assembly (fiq_exception_handler)
+///
+/// Handles physical FIQs that trap to EL2 via HCR_EL2.FMO=1.
+///
+/// In S-EL2 (sel2) mode, NS Group 1 interrupts arrive as FIQ in the Secure
+/// world. These cannot be acknowledged from Secure state — ICC_IAR1_EL1 only
+/// returns Secure Group 1 interrupts. The handler preempts the current SP
+/// and returns false to exit to the SPMC event loop, which returns
+/// FFA_INTERRUPT to SPMD → NWd. NWd handles the NS interrupt, then calls
+/// FFA_RUN to resume the preempted SP.
+///
+/// # Returns
+/// * `true` - Continue running guest (spurious FIQ in non-sel2)
+/// * `false` - Exit to host (NS interrupt preemption in sel2)
+#[no_mangle]
+pub extern "C" fn handle_fiq_exception(_context: &mut VcpuContext) -> bool {
+    #[cfg(feature = "sel2")]
+    {
+        // NS Group 1 FIQ at S-EL2: preempt current SP.
+        //
+        // Do NOT read ICC_IAR1_EL1 — it would return spurious (Secure Group 1
+        // only from Secure state) and wouldn't acknowledge the NS interrupt.
+        // Do NOT read ICC_IAR0_EL1 — Group 0 interrupts route directly to EL3
+        // via GICv3 hardware, they never arrive here.
+        //
+        // The NS interrupt stays pending in the GIC. When NWd runs (after
+        // FFA_INTERRUPT → SPMD → NWd), it will acknowledge and handle it.
+        crate::spmc_handler::SP_IRQ_PREEMPTED.store(true, core::sync::atomic::Ordering::Release);
+        return false;
+    }
+
+    #[cfg(not(feature = "sel2"))]
+    {
+        // NS-EL2: physical FIQ shouldn't normally arrive (QEMU's EL3 firmware
+        // routes Group 0 to EL3 via SCR_EL3.FIQ=1). Treat as spurious.
+        true
+    }
+}
 
 #[no_mangle]
 pub extern "C" fn handle_irq_exception(_context: &mut VcpuContext) -> bool {
