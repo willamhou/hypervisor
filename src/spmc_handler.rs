@@ -22,6 +22,10 @@ use core::sync::atomic::Ordering;
 /// whether to return FFA_INTERRUPT (preempted) or DIRECT_RESP (completed).
 pub static SP_IRQ_PREEMPTED: AtomicBool = AtomicBool::new(false);
 
+/// Debug: count FIQ preemptions to detect infinite loops.
+#[cfg(feature = "sel2")]
+pub static FIQ_PREEMPT_COUNT: core::sync::atomic::AtomicU32 = core::sync::atomic::AtomicU32::new(0);
+
 /// Tracks which SP is currently executing at S-EL1. Set before enter_guest(),
 /// cleared after return. Used by the IRQ handler to inject virtual interrupts
 /// directly via LR without going through SPMD.
@@ -224,6 +228,7 @@ fn dispatch_request(req: &SmcResult8) -> SmcResult8 {
     // FFA_RUN: resume a preempted SP
     if req.x0 == ffa::FFA_RUN {
         let sp_id = ((req.x1 >> 16) & 0xFFFF) as u16;
+        crate::log_debug!("[SPMC] FFA_RUN sp={:#06x}\n", sp_id);
         return resume_preempted_sp(sp_id);
     }
     dispatch_ffa(req)
@@ -253,9 +258,11 @@ fn dispatch_to_sp(req: &SmcResult8, sp_id: u16) -> SmcResult8 {
     sp.transition_to(crate::sp_context::SpState::Running)
         .expect("SP Running transition failed");
 
-    // Clear preemption flag and arm timer before SP entry
+    // Clear preemption flag before SP entry
     SP_IRQ_PREEMPTED.store(false, Ordering::Release);
-    crate::arch::aarch64::peripherals::timer::arm_preemption_timer();
+    // NOTE: Do NOT arm preemption timer in pKVM SPMC mode.
+    // CNTHP fires as FIQ at S-EL2 which causes NS FIQ preemption.
+    // crate::arch::aarch64::peripherals::timer::arm_preemption_timer();
 
     // Inject any pending virtual interrupt before ERET (VI for IRQ, VF for FIQ)
     inject_pending_virq(sp);
@@ -272,11 +279,17 @@ fn dispatch_to_sp(req: &SmcResult8, sp_id: u16) -> SmcResult8 {
     // Restore SP's EL1 sysregs before ERET (pKVM world switches corrupt S-EL1 state)
     sp.restore_el1_state();
 
-    let _exit_code = unsafe {
+    let _exit = unsafe {
         crate::arch::aarch64::enter_guest(
             sp.vcpu_ctx_mut() as *mut crate::arch::aarch64::regs::VcpuContext,
         )
     };
+
+    // Clear TPIDR_EL2 immediately after SP exit to prevent FIQ handler
+    // from using stale SP context during SPMC host code
+    unsafe {
+        core::arch::asm!("msr tpidr_el2, xzr", options(nostack, nomem));
+    }
 
     // Save SP's EL1 sysregs after trap back to S-EL2
     sp.save_el1_state();
@@ -285,7 +298,52 @@ fn dispatch_to_sp(req: &SmcResult8, sp_id: u16) -> SmcResult8 {
     crate::arch::aarch64::peripherals::timer::disarm_preemption_timer();
 
     // Handle SP exit — may loop if SP calls FF-A memory operations
-    handle_sp_exit(sp, sp_id)
+    let result = handle_sp_exit(sp, sp_id);
+
+    // Clear Secure Stage-2 and HCR_EL2 bits before returning to SPMD.
+    // enter_guest() leaves VSTTBR_EL2/HCR_EL2.VM set; SPMD saves this as
+    // S-EL2 context which prevents proper world-switch back to NWd.
+    clear_secure_stage2();
+
+    result
+}
+
+/// Clear Secure Stage-2 state after SP execution.
+///
+/// Zeroes VSTTBR_EL2 and clears HCR_EL2.{VM,VI,VF} so SPMC runs without
+/// Clear Secure Stage-2 state after SP execution.
+///
+/// Aggressively resets S-EL2 register state to prevent SPMD world-switch
+/// issues. SPMD saves/restores all EL2 sysregs; stale values from SP
+/// execution (FMO/IMO/AMO in HCR, non-zero VSTCR) can confuse SPMD.
+#[cfg(feature = "sel2")]
+fn clear_secure_stage2() {
+    unsafe {
+        // Clear Secure Stage-2 translation registers
+        core::arch::asm!(
+            "msr s3_4_c2_c6_0, xzr", // VSTTBR_EL2 = 0
+            "msr s3_4_c2_c6_2, xzr", // VSTCR_EL2 = 0
+            "isb",
+            options(nostack, nomem),
+        );
+
+        // Reset HCR_EL2 to minimal: only RW (EL1 is AArch64)
+        // Clear all trap/routing bits (FMO, IMO, AMO, VM, VI, VF, TSC, etc.)
+        // SPMD will restore the correct HCR when it switches back to S-EL2.
+        let hcr: u64 = 1u64 << 31; // RW only
+        core::arch::asm!("msr hcr_el2, {}", "isb", in(reg) hcr, options(nostack, nomem));
+
+        // Clear stale SP values from ELR_EL2/SPSR_EL2/SP_EL1
+        let spsr: u64 = 0x3c9; // DAIF masked + EL2h
+        core::arch::asm!(
+            "msr spsr_el2, {spsr}",
+            "msr elr_el2, xzr",
+            "msr sp_el1, xzr",
+            "isb",
+            spsr = in(reg) spsr,
+            options(nostack, nomem),
+        );
+    }
 }
 
 /// Handle SP exit after enter_guest() returns.
@@ -301,8 +359,10 @@ fn handle_sp_exit(
     sp_id: u16,
 ) -> SmcResult8 {
     loop {
-        // Check if SP was preempted by a physical IRQ
+        // Check if SP was preempted by a physical IRQ (NS FIQ at S-EL2)
         if SP_IRQ_PREEMPTED.swap(false, Ordering::Acquire) {
+            crate::log_debug!("[SPMC] preempted sp={:#06x} fiq_count={}\n",
+                sp_id, FIQ_PREEMPT_COUNT.load(Ordering::Relaxed));
             sp.transition_to(crate::sp_context::SpState::Preempted)
                 .expect("SP Preempted transition failed");
 
@@ -315,7 +375,7 @@ fn handle_sp_exit(
 
             return SmcResult8 {
                 x0: ffa::FFA_INTERRUPT,
-                x1: 0,
+                x1: (sp_id as u64) << 16, // target SP ID for FFA_RUN resume
                 x2: 0,
                 x3: 0,
                 x4: 0,
@@ -362,7 +422,7 @@ fn handle_sp_exit(
             .expect("SP Running transition failed (re-enter)");
 
         SP_IRQ_PREEMPTED.store(false, Ordering::Release);
-        crate::arch::aarch64::peripherals::timer::arm_preemption_timer();
+        // crate::arch::aarch64::peripherals::timer::arm_preemption_timer();
         inject_pending_virq(sp);
         #[cfg(feature = "vfiq")]
         inject_pending_vfiq(sp);
@@ -394,6 +454,7 @@ fn handle_sp_exit(
 /// Injects any pending virtual interrupt via GIC LR before resuming.
 #[cfg(feature = "sel2")]
 fn resume_preempted_sp(sp_id: u16) -> SmcResult8 {
+    crate::log_debug!("[SPMC] resume sp={:#06x}\n", sp_id);
     let sp = match crate::sp_context::get_sp_mut(sp_id) {
         Some(sp) => sp,
         None => return make_error(ffa::FFA_INVALID_PARAMETERS as u64),
@@ -408,7 +469,7 @@ fn resume_preempted_sp(sp_id: u16) -> SmcResult8 {
 
     // Clear preemption flag and arm timer before resume
     SP_IRQ_PREEMPTED.store(false, Ordering::Release);
-    crate::arch::aarch64::peripherals::timer::arm_preemption_timer();
+    // crate::arch::aarch64::peripherals::timer::arm_preemption_timer();
 
     // Inject any pending virtual interrupt before resume (VI for IRQ, VF for FIQ)
     inject_pending_virq(sp);
@@ -438,7 +499,9 @@ fn resume_preempted_sp(sp_id: u16) -> SmcResult8 {
     crate::arch::aarch64::peripherals::timer::disarm_preemption_timer();
 
     // Handle SP exit — may loop if SP calls FF-A memory operations
-    handle_sp_exit(sp, sp_id)
+    let result = handle_sp_exit(sp, sp_id);
+    clear_secure_stage2();
+    result
 }
 
 /// Set HCR_EL2.VI if the SP has a pending virtual interrupt.
