@@ -24,7 +24,7 @@ M5: RME & CCA         ░░░░░░░░░░░░░░░░░░░�
 Android Boot          ██████████░░░░░░░░░░  50% ✅ (Phase 2 完成)
 ```
 
-**测试覆盖**: ~282 assertions / 33 test suites (100% pass); with `vfiq` feature: ~297 assertions
+**测试覆盖**: ~282 assertions / 33 test suites (100% pass)
 **代码量**: ~18000 行
 **Linux启动**: 4 vCPU, BusyBox shell, virtio-blk, virtio-net, multi-VM, FF-A proxy
 **Android启动**: 4 vCPU, PL031 RTC, Binder IPC, minimal init, 1GB RAM
@@ -830,7 +830,7 @@ NS-EL1: Linux guest (当前 hypervisor 功能降级为 SPMC)
 - [ ] 为 pKVM 集成做好准备（NS-EL2 空闲，可被 pKVM 占据）
 
 **预估总时间**: 6-8 周（Week 29-36）
-**状态**: 🔧 进行中 (Sprint 4.1/4.2/4.3 ✅, Sprint 4.4 Phase A/B ✅, Phase C ✅ — NS interrupt preemption + FFA_RUN, Phase D ✅ — multi-SP + secure vIRQ/vFIQ injection + `vfiq` feature flag, 12/12 BL33 tests with vfiq)
+**状态**: 🔧 进行中 (Sprint 4.1/4.2/4.3 ✅, Sprint 4.4 Phase A/B ✅, Phase C ✅ — NS interrupt preemption + FFA_RUN, Phase D ✅ — multi-SP + secure vIRQ injection, 11/11 BL33 tests)
 
 ---
 
@@ -912,7 +912,7 @@ NS-EL1: Linux/Android guest
 ### Milestone 4.6: SPMC 功能补全（Week 43-48）⏸️ **未开始**
 **目标**: 将 NS-proxy 侧的 FF-A 内存管理、通知、间接消息功能移植到 SPMC 侧，使真实 SP（如 OP-TEE TA）能端到端工作
 
-**背景**: 当前 SPMC (`spmc_handler.rs`) 已完成发现 (VERSION/ID_GET/FEATURES)、消息传递 (DIRECT_REQ/RESP)、中断 (preemption/vIRQ/vFIQ)、NWd RXTX 管理。但内存共享、通知、间接消息仅在 NS-proxy 侧 (`src/ffa/proxy.rs`) 实现，SPMC 侧缺失。
+**背景**: 当前 SPMC (`spmc_handler.rs`) 已完成发现 (VERSION/ID_GET/FEATURES)、消息传递 (DIRECT_REQ/RESP)、中断 (preemption/vIRQ)、NWd RXTX 管理。但内存共享、通知、间接消息仅在 NS-proxy 侧 (`src/ffa/proxy.rs`) 实现，SPMC 侧缺失。
 
 **架构约束**:
 - **并发安全**: 多 CPU event loop（每个物理 CPU 独立进入 S-EL2 处理 FF-A 请求）→ 共享状态需 SpinLock 保护
@@ -1457,7 +1457,7 @@ GitHub Actions配置：
 **Sprint 5.1 完成**: DIRECT_REQ end-to-end (NS proxy → SPMD → SPMC → SP1), `tfa_boot` feature flag, 8-register SMC forwarding, SP1 x4+=0x1000 proof, 7/7 BL33 tests PASS
 **Sprint 5.2 完成**: SPMC NWd RXTX management (SPMD forwards RXTX_MAP/UNMAP/RX_RELEASE to SPMC), PARTITION_INFO_GET writes to NWd RX buffer, Linux FF-A discovery, 8/8 BL33 tests PASS, 33 SPMC handler assertions
 **Phase C 完成**: NS interrupt preemption — FFA_INTERRUPT + FFA_RUN resume, CNTHP timer, SP_IRQ_PREEMPTED flag, Preempted state, 9/9 BL33 tests PASS
-**Phase D 完成**: Multi-SP + secure vIRQ/vFIQ injection — SP2 (sp_irq), per-SP INTID ownership, HCR_EL2.VI + HF_INTERRUPT_GET paravirt (Hafnium-compatible), CNTHP poll timer, cross-SP preemption, `vfiq` feature flag for HCR_EL2.VF + HF_FIQ_GET (FIQ delivery, per-SP `fiq_intids[]`), 12/12 BL33 tests PASS (11 base + 1 vFIQ), 42 SPMC handler + 28 SP context assertions (45/40 with vfiq)
+**Phase D 完成**: Multi-SP + secure vIRQ injection — SP2 (sp_irq), per-SP INTID ownership, HCR_EL2.VI + HF_INTERRUPT_GET paravirt (Hafnium-compatible), CNTHP poll timer, cross-SP preemption, 11/11 BL33 tests PASS, 42 SPMC handler + 28 SP context assertions
 **Phase 4.5 完成**: pKVM boot ✅ (`Protected hVHE mode initialized successfully`), SPMC FF-A responses ✅, FF-A nVHE mode ✅ (driver v1.1), FF-A protected mode ✅ (driver v1.2, firmware v1.1, AOSP android16-6.12 已修复之前的 kernel bug), secondary CPU warm-boot ✅ (FFA_SECONDARY_EP_REGISTER + per-CPU stacks + MMU install)
 **M4.6 SPMC 补全**: ⏸️ 未开始 — 将 NS-proxy 侧 FF-A 内存管理/通知/间接消息移植到 SPMC 侧 (Sprint S1: 内存管理 P0, Sprint S2: 通知 P1, Sprint S3: 间接消息 P2)
 

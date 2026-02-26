@@ -497,7 +497,7 @@ kvm-arm.mode=protected console=ttyAMA0 earlycon
 - NWd RXTX management (SPMD forwards RXTX_MAP from NWd)
 - NS interrupt preemption (FFA_INTERRUPT → FFA_RUN resume)
 - Secure Stage-2 for SP isolation (per-SP VSTTBR_EL2)
-- Virtual IRQ/FIQ injection (HCR_EL2.VI/VF, HF_INTERRUPT_GET/HF_FIQ_GET)
+- Virtual IRQ injection (HCR_EL2.VI, HF_INTERRUPT_GET)
 
 ### What Needs Work
 

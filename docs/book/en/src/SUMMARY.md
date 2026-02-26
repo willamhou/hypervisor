@@ -81,7 +81,7 @@
 - [Overview](./part9-spmc/README.md)
 - [Event Loop and SP Boot](./part9-spmc/event-loop.md)
 - [DIRECT_REQ End-to-End](./part9-spmc/direct-req.md)
-- [Interrupt Preemption and vIRQ/vFIQ](./part9-spmc/interrupts.md)
+- [Interrupt Preemption and vIRQ](./part9-spmc/interrupts.md)
 - [Testing](./part9-spmc/test.md)
 - [Debugging Notes](./part9-spmc/debug.md)
 

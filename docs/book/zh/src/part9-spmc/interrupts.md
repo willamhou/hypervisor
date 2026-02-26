@@ -1,3 +1,3 @@
-# Interrupt Preemption and vIRQ/vFIQ
+# Interrupt Preemption and vIRQ
 
 <!-- TODO -->

@@ -96,7 +96,7 @@ hypervisor/
 ├── tests/                  # 33 test suites
 ├── tfa/                    # TF-A configs, SP binaries, BL33 test client
 ├── guest/linux/            # Kernel build scripts, DTBs, initramfs
-├── Cargo.toml              # Features: linux_guest, multi_pcpu, sel2, vfiq, tfa_boot
+├── Cargo.toml              # Features: linux_guest, multi_pcpu, sel2, tfa_boot
 └── Makefile                # 20+ targets
 ```
 

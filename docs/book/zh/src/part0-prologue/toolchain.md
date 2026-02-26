@@ -96,7 +96,7 @@ hypervisor/
 ├── tests/                  # 33 个测试套件
 ├── tfa/                    # TF-A 配置、SP 二进制、BL33 测试客户端
 ├── guest/linux/            # 内核构建脚本、DTB、initramfs
-├── Cargo.toml              # Features: linux_guest, multi_pcpu, sel2, vfiq, tfa_boot
+├── Cargo.toml              # Features: linux_guest, multi_pcpu, sel2, tfa_boot
 └── Makefile                # 20+ 个目标
 ```
 

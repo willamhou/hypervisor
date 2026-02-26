@@ -81,7 +81,7 @@
 - [概览](./part9-spmc/README.md)
 - [事件循环与 SP 启动](./part9-spmc/event-loop.md)
 - [DIRECT_REQ 端到端](./part9-spmc/direct-req.md)
-- [中断抢占与 vIRQ/vFIQ 注入](./part9-spmc/interrupts.md)
+- [中断抢占与 vIRQ 注入](./part9-spmc/interrupts.md)
 - [测试](./part9-spmc/test.md)
 - [踩坑记录](./part9-spmc/debug.md)
 

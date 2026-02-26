@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Overview
 
-ARM64 Type-1 bare-metal hypervisor written in Rust (no_std) with ARM64 assembly. Runs at EL2 (hypervisor exception level) and manages guest VMs at EL1. Targets QEMU virt machine. Boots Linux 6.12.12 to BusyBox shell with 4 vCPUs, virtio-blk storage, and virtio-net inter-VM networking. Supports multi-VM with per-VM Stage-2, VMID-tagged TLBs, two-level scheduling, and L2 virtual switch. Includes FF-A v1.1 proxy with stub SPMC, page ownership validation via Stage-2 PTE SW bits, FF-A v1.1 descriptor parsing, SMC forwarding to EL3, and VM-to-VM memory sharing (MEM_RETRIEVE/RELINQUISH with dynamic Stage-2 page mapping). Android boot with PL031 RTC emulation, Binder IPC, binderfs, minimal init, 1GB guest RAM. Dual boot modes: NS-EL2 hypervisor via `make run-tfa-linux` (BL33, `tfa_boot` feature) and S-EL2 SPMC via `make run-spmc` (BL32). TF-A boot chain: BL1→BL2→BL31(SPMD)→BL32(SPMC)→BL33 with manifest FDT parsing. SPMC boots SP1 (Hello) + SP2 (IRQ) at S-EL1 via ERET with per-SP Secure Stage-2, dispatches NWd→SP DIRECT_REQ/RESP messaging to multiple SPs. End-to-end FF-A DIRECT_REQ: NS proxy → SPMD → SPMC → SP1/SP2 (SP modifies x4 += 0x1000 as proof). E2E memory sharing: NWd SHARE → SP RETRIEVE → SP write → SP RELINQUISH → NWd verify → NWd RECLAIM (SP-initiated FF-A calls via `handle_sp_exit()` loop). 14/14 BL33 integration tests pass (13 base + 1 vFIQ). NS interrupt preemption: IRQ during SP → FFA_INTERRUPT → NWd calls FFA_RUN → SPMC resumes SP (CNTHP timer, SP_IRQ_PREEMPTED flag, Preempted state). Secure virtual interrupt injection: per-SP INTID ownership, CNTHP poll timer at S-EL2, HCR_EL2.VI + HF_INTERRUPT_GET paravirt (Hafnium-compatible), cross-SP preemption. Optional vFIQ delivery (`vfiq` feature): HCR_EL2.VF + HF_FIQ_GET for FIQ-classified INTIDs, per-SP `fiq_intids[]`. SPMC manages NWd RXTX state (SPMD forwards RXTX_MAP/UNMAP/RX_RELEASE from NWd to SPMC per TF-A v2.12), NS proxy registers its own RXTX with SPMD, PARTITION_INFO_GET writes 24-byte FF-A v1.1 descriptors to NWd's RX buffer, Linux FF-A driver support (`CONFIG_ARM_FFA_TRANSPORT`, guest DTB `arm,ffa` node).
+ARM64 Type-1 bare-metal hypervisor written in Rust (no_std) with ARM64 assembly. Runs at EL2 (hypervisor exception level) and manages guest VMs at EL1. Targets QEMU virt machine. Boots Linux 6.12.12 to BusyBox shell with 4 vCPUs, virtio-blk storage, and virtio-net inter-VM networking. Supports multi-VM with per-VM Stage-2, VMID-tagged TLBs, two-level scheduling, and L2 virtual switch. Includes FF-A v1.1 proxy with stub SPMC, page ownership validation via Stage-2 PTE SW bits, FF-A v1.1 descriptor parsing, SMC forwarding to EL3, and VM-to-VM memory sharing (MEM_RETRIEVE/RELINQUISH with dynamic Stage-2 page mapping). Android boot with PL031 RTC emulation, Binder IPC, binderfs, minimal init, 1GB guest RAM. Dual boot modes: NS-EL2 hypervisor via `make run-tfa-linux` (BL33, `tfa_boot` feature) and S-EL2 SPMC via `make run-spmc` (BL32). TF-A boot chain: BL1→BL2→BL31(SPMD)→BL32(SPMC)→BL33 with manifest FDT parsing. SPMC boots SP1 (Hello) + SP2 (IRQ) at S-EL1 via ERET with per-SP Secure Stage-2, dispatches NWd→SP DIRECT_REQ/RESP messaging to multiple SPs. End-to-end FF-A DIRECT_REQ: NS proxy → SPMD → SPMC → SP1/SP2 (SP modifies x4 += 0x1000 as proof). E2E memory sharing: NWd SHARE → SP RETRIEVE → SP write → SP RELINQUISH → NWd verify → NWd RECLAIM (SP-initiated FF-A calls via `handle_sp_exit()` loop). 13/13 BL33 integration tests pass. NS interrupt preemption: IRQ during SP → FFA_INTERRUPT → NWd calls FFA_RUN → SPMC resumes SP (CNTHP timer, SP_IRQ_PREEMPTED flag, Preempted state). Secure virtual interrupt injection: per-SP INTID ownership, CNTHP poll timer at S-EL2, HCR_EL2.VI + HF_INTERRUPT_GET paravirt (Hafnium-compatible), cross-SP preemption. SPMC manages NWd RXTX state (SPMD forwards RXTX_MAP/UNMAP/RX_RELEASE from NWd to SPMC per TF-A v2.12), NS proxy registers its own RXTX with SPMD, PARTITION_INFO_GET writes 24-byte FF-A v1.1 descriptors to NWd's RX buffer, Linux FF-A driver support (`CONFIG_ARM_FFA_TRANSPORT`, guest DTB `arm,ffa` node).
 
 ## Build Commands
 
@@ -24,7 +24,7 @@ make run-tfa-linux-ffa # Boot TF-A → SPMC → hypervisor (BL33) → Linux (FF-
 make build-qemu   # Build QEMU 9.2.3 from source (one-time, Docker)
 make build-tfa    # Build TF-A flash.bin with SPD=spmd (Docker)
 make build-tfa-bl33 # Build TF-A flash.bin with PRELOADED_BL33_BASE=0x40200000
-make build-spmc   # Build hypervisor as S-EL2 SPMC binary (--features sel2,vfiq)
+make build-spmc   # Build hypervisor as S-EL2 SPMC binary (--features sel2)
 make build-sp-hello # Build SP Hello binary (S-EL1 Secure Partition)
 make build-sp-irq  # Build SP IRQ binary (S-EL1, interrupt handling)
 make build-tfa-spmc # Build TF-A with real SPMC as BL32 + SP Hello + SP IRQ
@@ -45,10 +45,9 @@ make fmt          # Format code
 - `multi_pcpu` — Multi-pCPU support (implies `linux_guest`): 1:1 vCPU-to-pCPU affinity, PSCI boot, TPIDR_EL2 context, SpinLock devices
 - `multi_vm` — Multi-VM support (implies `linux_guest`): 2 VMs time-sliced on 1 pCPU, per-VM Stage-2/VMID, per-VM DeviceManager
 - `sel2` — S-EL2 SPMC mode: hypervisor as BL32 (SPMC role), separate boot_sel2.S entry, linker base 0x0e100000 (secure DRAM), manifest parsing, FFA_MSG_WAIT handshake, secondary CPU warm-boot via FFA_SECONDARY_EP_REGISTER
-- `vfiq` — Virtual FIQ injection (implies `sel2`): HCR_EL2.VF + HF_FIQ_GET paravirt for FIQ-classified INTIDs, per-SP `fiq_intids[]`, dual IRQ/FIQ delivery paths in exception handler
 - `tfa_boot` — TF-A boot mode (implies `linux_guest`): sets SPMC_PRESENT=true at compile time, NS proxy registers RXTX with SPMD, forwards DIRECT_REQ and PARTITION_INFO_GET to real SPMC via 8-register SMC
 
-**Note**: `multi_pcpu` and `multi_vm` are mutually exclusive — both imply `linux_guest` but use different scheduling models. `sel2` is mutually exclusive with all others. `vfiq` implies `sel2` and adds vFIQ delivery paths. `tfa_boot` is used with `run-tfa-linux` when a real SPMC is available at S-EL2.
+**Note**: `multi_pcpu` and `multi_vm` are mutually exclusive — both imply `linux_guest` but use different scheduling models. `sel2` is mutually exclusive with all others. `tfa_boot` is used with `run-tfa-linux` when a real SPMC is available at S-EL2.
 
 **Toolchain requirements**: Rust nightly, `aarch64-linux-gnu-gcc`, `aarch64-linux-gnu-ar`, `aarch64-linux-gnu-objcopy`, `qemu-system-aarch64`
 
@@ -79,8 +78,8 @@ make fmt          # Format code
 | `NetRxRing` | `src/vswitch.rs` | Per-port SPSC ring buffer for async RX frame delivery |
 | `VirtualPl031` | `src/devices/pl031.rs` | PL031 RTC emulation: counter-based time, PrimeCell ID |
 | `SpMcManifest` | `src/manifest.rs` | SPMC manifest parser: TOS_FW_CONFIG DTB (spmc_id, version) |
-| `SpmcHandler` | `src/spmc_handler.rs` | S-EL2 SPMC event loop + FF-A dispatch, multi-SP DIRECT_REQ routing via `dispatch_to_sp()` + `enter_guest()` ERET, SP-initiated FF-A call loop in `handle_sp_exit()` (MEM_RETRIEVE_REQ/MEM_RELINQUISH → handle locally → re-enter SP), NS interrupt preemption (SP_IRQ_PREEMPTED flag, CNTHP timer, FFA_INTERRUPT return), `resume_preempted_sp()` via FFA_RUN, secure vIRQ injection via `inject_pending_virq()` (HCR_EL2.VI), vFIQ injection via `inject_pending_vfiq()` (HCR_EL2.VF, `vfiq` feature), cross-SP preemption via `dispatch_interrupt_to_sp()`, NWd RXTX management, PARTITION_INFO_GET writes 24-byte descriptors to NWd RX buffer, SPMC-side memory sharing (MEM_SHARE/LEND/RETRIEVE/RELINQUISH/RECLAIM with SpmcShareRecord storage, dynamic Secure Stage-2 mapping via Stage2Walker) |
-| `SpContext` | `src/sp_context.rs` | Per-SP state machine (Reset→Idle→Running→Blocked→Preempted), wraps VcpuContext, per-SP `owned_intids[4]` + `pending_irq` + `fiq_intids[4]`/`pending_fiq` (vfiq feature), global SpStore, `for_each_sp()`/`find_sp_for_intid()`/`find_sp_with_pending_irq()`/`is_fiq_delivery_for()` iterators |
+| `SpmcHandler` | `src/spmc_handler.rs` | S-EL2 SPMC event loop + FF-A dispatch, multi-SP DIRECT_REQ routing via `dispatch_to_sp()` + `enter_guest()` ERET, SP-initiated FF-A call loop in `handle_sp_exit()` (MEM_RETRIEVE_REQ/MEM_RELINQUISH → handle locally → re-enter SP), NS interrupt preemption (SP_IRQ_PREEMPTED flag, CNTHP timer, FFA_INTERRUPT return), `resume_preempted_sp()` via FFA_RUN, secure vIRQ injection via `inject_pending_virq()` (HCR_EL2.VI), cross-SP preemption via `dispatch_interrupt_to_sp()`, NWd RXTX management, PARTITION_INFO_GET writes 24-byte descriptors to NWd RX buffer, SPMC-side memory sharing (MEM_SHARE/LEND/RETRIEVE/RELINQUISH/RECLAIM with SpmcShareRecord storage, dynamic Secure Stage-2 mapping via Stage2Walker) |
+| `SpContext` | `src/sp_context.rs` | Per-SP state machine (Reset→Idle→Running→Blocked→Preempted), wraps VcpuContext, per-SP `owned_intids[4]` + `pending_irq`, global SpStore, `for_each_sp()`/`find_sp_for_intid()`/`find_sp_with_pending_irq()` iterators |
 | `SecureStage2Config` | `src/secure_stage2.rs` | VSTTBR_EL2/VSTCR_EL2 config for SP isolation, `build_sp_stage2()` identity-maps SP code + UART |
 | `Sel2Mmu` | `src/sel2_mmu.rs` | S-EL2 Stage-1 identity map: static L0/L1/L2 tables, NS=1 for NWd DRAM, Device for GIC/UART, Normal Secure for SPMC/SPs; `install_sel2_stage1_secondary()` for secondary CPU warm-boot |
 
@@ -92,11 +91,11 @@ Exception Vector (arch/aarch64/exception.S) — save context
   ↓
 handle_exception() (src/arch/aarch64/hypervisor/exception.rs)
   ├─ WFI → return false (exit to scheduler)
-  ├─ HVC → handle_psci() (CPU_ON, CPU_OFF, SYSTEM_RESET) or HF_INTERRUPT_GET (sel2: returns pending INTID) or HF_FIQ_GET (vfiq: returns pending FIQ INTID)
+  ├─ HVC → handle_psci() (CPU_ON, CPU_OFF, SYSTEM_RESET) or HF_INTERRUPT_GET (sel2: returns pending INTID)
   ├─ SMC → handle_smc() → PSCI or FF-A proxy or forward to EL3
   ├─ Data Abort → HPFAR_EL2 for IPA → decode instruction → MMIO dispatch
   ├─ MSR/MRS trap → handle ICC_SGI1R_EL1 (SGI emulation), sysreg emulation
-  └─ IRQ → handle INTID 26 (preemption/poll timer), 27 (vtimer), 33 (UART RX); sel2: per-SP INTID routing (VI default, VF with vfiq for FIQ-classified INTIDs)
+  └─ IRQ → handle INTID 26 (preemption/poll timer), 27 (vtimer), 33 (UART RX); sel2: per-SP INTID routing via HCR_EL2.VI
   ↓ advance PC, restore context
 ERET back to guest
 ```
@@ -301,7 +300,7 @@ Array-based routing: `devices: [Option<Device>; 8]`, scan for `dev.contains(addr
 
 ## Tests
 
-~294 assertions across 33 test suites run automatically on `make run` (no feature flags). With `vfiq` feature: ~309 assertions (adds 15 FIQ-specific tests in test_sp_context and test_spmc_handler). Orchestrated sequentially in `src/main.rs`. Located in `tests/`:
+~294 assertions across 33 test suites run automatically on `make run` (no feature flags). Orchestrated sequentially in `src/main.rs`. Located in `tests/`:
 
 | Test | Coverage | Assertions |
 |------|----------|------------|
@@ -334,8 +333,8 @@ Array-based routing: `devices: [Option<Device>; 8]`, scan for `dev.contains(addr
 | `test_page_ownership` | Stage-2 PTE SW bits: read/write OWNED/SHARED_OWNED, unmapped IPA, 2MB block→4KB split | 9 |
 | `test_pl031` | PL031 RTC: RTCDR readable, RTCLR write+readback, PeriphID/PrimeCellID, unknown offset | 4 |
 | `test_ffa` | FF-A proxy: VERSION/ID_GET/FEATURES/RXTX/messaging/MEM_SHARE/RECLAIM/descriptors/SMC forward/VM-to-VM RETRIEVE/RELINQUISH/SPM_ID_GET/RUN/notifications/MSG_SEND2/MSG_WAIT | 44 |
-| `test_spmc_handler` | SPMC dispatch: VERSION/ID_GET/SPM_ID_GET/FEATURES/PARTITION_INFO/DIRECT_REQ echo/framework msg/RXTX/FFA_RUN/multi-SP/find_sp_for_intid/MEM_SHARE/LEND/RETRIEVE/RELINQUISH/RECLAIM/DONATE (+3 vFIQ tests with `vfiq`) | 54 (57 with `vfiq`) |
-| `test_sp_context` | SpContext: state machine transitions (incl. Preempted), VcpuContext fields, set/get args (x0-x7), owned_intids, pending_irq lifecycle (+12 FIQ tests with `vfiq`) | 28 (40 with `vfiq`) |
+| `test_spmc_handler` | SPMC dispatch: VERSION/ID_GET/SPM_ID_GET/FEATURES/PARTITION_INFO/DIRECT_REQ echo/framework msg/RXTX/FFA_RUN/multi-SP/find_sp_for_intid/MEM_SHARE/LEND/RETRIEVE/RELINQUISH/RECLAIM/DONATE | 54 |
+| `test_sp_context` | SpContext: state machine transitions (incl. Preempted), VcpuContext fields, set/get args (x0-x7), owned_intids, pending_irq lifecycle | 28 |
 | `test_secure_stage2` | SecureStage2Config: VSTTBR address, VSTCR T0SZ, new_from_vsttbr | 4 |
 | `test_guest_interrupt` | Guest interrupt injection + exception vector (blocks) | 1 |
 
@@ -395,19 +394,16 @@ S-EL2 runs with MMU off by default. All memory accesses target the **Secure** ph
 Registers: MAIR_EL2 (Attr0=Device, Attr1=Normal-WB), TCR_EL2 (T0SZ=16, 4KB, 48-bit PA), TTBR0_EL2, SCTLR_EL2.{M,C,I}=1. Independent of Secure Stage-2 (VSTTBR_EL2) used for SP isolation.
 
 ### Secure Virtual Interrupt Injection (Phase D)
-Hafnium-compatible HCR_EL2.VI/VF mechanism for injecting virtual interrupts to SPs at S-EL1:
+Hafnium-compatible HCR_EL2.VI mechanism for injecting virtual interrupts to SPs at S-EL1:
 
 1. **Per-SP INTID ownership**: `SpContext.owned_intids[4]` — SP2 owns INTID 29 (Secure Physical Timer PPI)
-2. **Per-SP FIQ classification** (`vfiq` feature): `SpContext.fiq_intids[4]` — INTIDs delivered via VF (FIQ) instead of VI (IRQ). SP2 FIQ INTID 30
-3. **CNTHP poll timer**: Since CNTPS is inaccessible at S-EL1 (SCR_EL3.ST=0), CNTHP at S-EL2 polls for owned INTIDs
-4. **IRQ routing** (`exception.rs`): Case 1: owned by current SP → queue + HCR_EL2.VI (or VF if vfiq + FIQ-classified) → continue. Case 2: owned by another SP → queue + preempt current. Unowned → FFA_INTERRUPT
-5. **HCR_EL2.VI injection**: Setting VI causes hardware auto-vector to VBAR_EL1+0x280 on ERET
-6. **HCR_EL2.VF injection** (`vfiq` feature): Setting VF causes hardware auto-vector to VBAR_EL1+0x300 on ERET
-7. **HF_INTERRUPT_GET**: SP calls HVC with x0=0xFF04 → SPMC returns pending INTID in x0, clears VI
-8. **HF_FIQ_GET** (`vfiq` feature): SP calls HVC with x0=0xFF05 → SPMC returns pending FIQ INTID in x0, clears VF
-9. **Cross-SP preemption**: `dispatch_interrupt_to_sp()` — preempt SP1 → enter SP2 IRQ handler → SP2 returns → resume SP1
+2. **CNTHP poll timer**: Since CNTPS is inaccessible at S-EL1 (SCR_EL3.ST=0), CNTHP at S-EL2 polls for owned INTIDs
+3. **IRQ routing** (`exception.rs`): Case 1: owned by current SP → queue + HCR_EL2.VI → continue. Case 2: owned by another SP → queue + preempt current. Unowned → FFA_INTERRUPT
+4. **HCR_EL2.VI injection**: Setting VI causes hardware auto-vector to VBAR_EL1+0x280 on ERET
+5. **HF_INTERRUPT_GET**: SP calls HVC with x0=0xFF04 → SPMC returns pending INTID in x0, clears VI
+6. **Cross-SP preemption**: `dispatch_interrupt_to_sp()` — preempt SP1 → enter SP2 IRQ handler → SP2 returns → resume SP1
 
-**SP2 (sp_irq)** at `tfa/sp_irq/`: S-EL1 partition with VBAR_EL1 IRQ + FIQ handlers, slow-path busy-loop until vIRQ/vFIQ, responds with captured INTID in x5. Loaded at 0x0e400000 by BL2. FIQ handler at VBAR+0x300 uses HF_FIQ_GET (vfiq feature).
+**SP2 (sp_irq)** at `tfa/sp_irq/`: S-EL1 partition with VBAR_EL1 IRQ handler, slow-path busy-loop until vIRQ, responds with captured INTID in x5. Loaded at 0x0e400000 by BL2.
 
 ### SP Package Format (SPKG)
 BL2 loads raw SP packages to `load-address` from `tb_fw_config.dts`. SPKG header (24 bytes LE): magic("SPKG"), version, pm_offset(0x1000), pm_size, img_offset(0x4000), img_size. SPMC must parse header and enter SP at `load_addr + img_offset`. The sp_manifest.dts UUID gets byte-swapped by `sp_mk_generator.py` (LE conversion); `tb_fw_config.dts` UUID must match the swapped form. Use `fiptool info fip.bin` to verify.
@@ -434,10 +430,10 @@ NS-EL1: Linux/Android guest
 **Sprint 5.1** (done): DIRECT_REQ end-to-end — `tfa_boot` feature, NS proxy → SPMD → SPMC → SP1 (x4 += 0x1000 proof)
 **Sprint 5.2** (done): RXTX + PARTITION_INFO_GET forwarding + Linux FF-A discovery, SPMC NWd RXTX management (SPMD forwards RXTX_MAP to SPMC), 8/8 BL33 tests pass
 **Phase C** (done): NS interrupt preemption — IRQ during SP → FFA_INTERRUPT → FFA_RUN resume, CNTHP timer, SP_IRQ_PREEMPTED flag, Preempted state, SP Hello slow path, 9/9 BL33 tests pass
-**Phase D** (done): Multi-SP + secure vIRQ/vFIQ injection — SP2 (sp_irq) at S-EL1, per-SP INTID ownership, HCR_EL2.VI + HF_INTERRUPT_GET paravirt, CNTHP poll timer, cross-SP preemption, `vfiq` feature flag for HCR_EL2.VF + HF_FIQ_GET (FIQ delivery), 12/12 BL33 tests pass (11 base + 1 vFIQ)
+**Phase D** (done): Multi-SP + secure vIRQ injection — SP2 (sp_irq) at S-EL1, per-SP INTID ownership, HCR_EL2.VI + HF_INTERRUPT_GET paravirt, CNTHP poll timer, cross-SP preemption, 11/11 BL33 tests pass
 **Phase 4.5** (done): pKVM at NS-EL2 + our SPMC at S-EL2 — `make run-pkvm` boots pKVM to BusyBox shell (`Protected hVHE mode initialized successfully`). Uses AOSP android16-6.12 kernel (`make build-pkvm-kernel`) with Google's pKVM FF-A proxy (`kvm-arm.mode=protected`). FF-A v1.1 discovery works in both nVHE and protected mode: `ARM FF-A: Driver version 1.2`, `Firmware version 1.1 found`. RXTX_MAP forwarded by SPMD, PARTITION_INFO_GET returns SP1+SP2 descriptors (x3=24 partition_sz). S-EL2 Stage-1 MMU maps NS DRAM with NS=1 bit so writes to pKVM's hyp RX buffer reach Non-Secure memory. Secondary CPU warm-boot: `FFA_SECONDARY_EP_REGISTER` (0xC4000087) + `secondary_entry_sel2` in `boot_sel2.S` + per-CPU stacks (3 × 16KB) + `rust_main_sel2_secondary()` (VBAR → MMU → FFA_MSG_WAIT). SVE workaround: `sve=off` (ENABLE_SVE_FOR_NS=0 conflicts with CTX_INCLUDE_FPREGS=1). Non-blocking gaps: Notifications (`-95 EOPNOTSUPP`), sched callback (`-95`)
 **M4.6 Sprint S1** (done): SPMC-side memory sharing — MEM_SHARE/LEND/RETRIEVE/RELINQUISH/RECLAIM handlers in spmc_handler.rs with SpmcShareRecord storage, dynamic Secure Stage-2 mapping via Stage2Walker, register-based + descriptor-based protocols, 12 new unit test assertions (54 total), BL33 Test 13 (MEM_SHARE + RECLAIM)
-**M4.6 Sprint S2** (done): True E2E memory sharing — SP-initiated MEM_RETRIEVE/RELINQUISH via `handle_sp_exit()` loop in dispatch_to_sp()/resume_preempted_sp(), SP Hello memory test command (x3=0xABCD0001), BL33 Test 14 full lifecycle (NWd SHARE → SP RETRIEVE → SP write → SP RELINQUISH → NWd verify → NWd RECLAIM), 14/14 BL33 tests
+**M4.6 Sprint S2** (done): True E2E memory sharing — SP-initiated MEM_RETRIEVE/RELINQUISH via `handle_sp_exit()` loop in dispatch_to_sp()/resume_preempted_sp(), SP Hello memory test command (x3=0xABCD0001), BL33 Test 14 full lifecycle (NWd SHARE → SP RETRIEVE → SP write → SP RELINQUISH → NWd verify → NWd RECLAIM), 13/13 BL33 tests
 **Phase 5**: RME & CCA (Realm Manager)
 
 See `DEVELOPMENT_PLAN.md` for full details.

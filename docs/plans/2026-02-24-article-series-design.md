@@ -165,8 +165,8 @@ docs/book/
 |---------|---------|
 | 9a: Event Loop + SP Boot | SPMC event loop (`dispatch_ffa()`), SpContext state machine (Reset→Idle→Running→Blocked→Preempted), Secure Stage-2 (VSTTBR_EL2), SPKG header parsing (img_offset=0x4000), SP1 (sp_hello) + SP2 (sp_irq) boot via ERET, BL33 FF-A test client (12 tests) |
 | 9b: DIRECT_REQ End-to-End | `tfa_boot` feature, NS proxy → SPMD → SPMC → SP1 (x4 += 0x1000 proof), RXTX forwarding (SPMD manages NWd RXTX), PARTITION_INFO_GET (24-byte descriptors), Linux FF-A driver discovery |
-| 9c: Interrupt Preemption + vIRQ/vFIQ | NS interrupt preemption (FFA_INTERRUPT → FFA_RUN resume), per-SP INTID ownership, HCR_EL2.VI injection (VBAR_EL1+0x280), HF_INTERRUPT_GET paravirt (0xFF04), CNTHP poll timer, cross-SP preemption, `vfiq` feature flag (HCR_EL2.VF, HF_FIQ_GET) |
-| Test | 12/12 BL33 tests pass (11 base + 1 vFIQ), 42 unit test assertions (45 with vfiq), 28 SpContext assertions (40 with vfiq) |
+| 9c: Interrupt Preemption + vIRQ | NS interrupt preemption (FFA_INTERRUPT → FFA_RUN resume), per-SP INTID ownership, HCR_EL2.VI injection (VBAR_EL1+0x280), HF_INTERRUPT_GET paravirt (0xFF04), CNTHP poll timer, cross-SP preemption |
+| Test | 11/11 BL33 tests pass, 42 unit test assertions, 28 SpContext assertions |
 | Debug | SCTLR_EL1/VBAR_EL1 stale from TF-A, UUID byte-swap in sp_mk_generator.py, SPMD framework message x1 encoding, tb_fw_config single cell, FEATURES must NOT advertise RXTX_MAP |
 
 **Commits**: #147-177 (`9f8ce8d..b65045e`)
