@@ -20,45 +20,32 @@ fn uart_puts_local(s: &[u8]) {
 /// `dtb_addr` is the host DTB address passed by QEMU in x0, preserved by boot.S in x20.
 #[no_mangle]
 pub extern "C" fn rust_main(dtb_addr: usize) -> ! {
-    uart_puts_local(b"========================================\n");
-    uart_puts_local(b"  ARM64 Hypervisor - Sprint 2.4\n");
-    uart_puts_local(b"  API Documentation\n");
-    uart_puts_local(b"========================================\n");
-    uart_puts_local(b"\n");
-    uart_puts_local(b"[INIT] Initializing at EL2...\n");
+    // Initialize log module first (all static, no deps)
+    hypervisor::log::init();
+
+    hypervisor::log_info!("========================================\n");
+    hypervisor::log_info!("  ARM64 Hypervisor - Sprint 2.4\n");
+    hypervisor::log_info!("  API Documentation\n");
+    hypervisor::log_info!("========================================\n\n");
+    hypervisor::log_info!("[INIT] Initializing at EL2...\n");
 
     // Parse host DTB (before heap init — fdt crate does zero-copy parsing)
-    uart_puts_local(b"[INIT] Parsing host DTB at 0x");
-    hypervisor::uart_put_hex(dtb_addr as u64);
-    uart_puts_local(b"...\n");
+    hypervisor::log_info!("[INIT] Parsing host DTB at {:#018x}...\n", dtb_addr);
     hypervisor::dtb::init(dtb_addr);
     if hypervisor::dtb::is_initialized() {
         let pi = hypervisor::dtb::platform_info();
-        uart_puts_local(b"[INIT] DTB: cpus=");
-        print_digit(pi.num_cpus as u8);
-        uart_puts_local(b" ram=0x");
-        hypervisor::uart_put_hex(pi.ram_base);
-        uart_puts_local(b"+0x");
-        hypervisor::uart_put_hex(pi.ram_size);
-        uart_puts_local(b" uart=0x");
-        hypervisor::uart_put_hex(pi.uart_base);
-        uart_puts_local(b"\n");
-        uart_puts_local(b"[INIT] DTB: gicd=0x");
-        hypervisor::uart_put_hex(pi.gicd_base);
-        uart_puts_local(b" gicr=0x");
-        hypervisor::uart_put_hex(pi.gicr_base);
-        uart_puts_local(b"\n");
+        hypervisor::log_info!("[INIT] DTB: cpus={} ram={:#018x}+{:#018x} uart={:#018x}\n",
+            pi.num_cpus, pi.ram_base, pi.ram_size, pi.uart_base);
+        hypervisor::log_info!("[INIT] DTB: gicd={:#018x} gicr={:#018x}\n",
+            pi.gicd_base, pi.gicr_base);
     } else {
-        uart_puts_local(b"[INIT] DTB: parse failed, using defaults\n");
+        hypervisor::log_info!("[INIT] DTB: parse failed, using defaults\n");
     }
 
-    // Initialize log module
-    hypervisor::log::init();
-
     // Initialize exception handling
-    uart_puts_local(b"[INIT] Setting up exception vector table...\n");
+    hypervisor::log_info!("[INIT] Setting up exception vector table...\n");
     exception::init();
-    uart_puts_local(b"[INIT] Exception handling initialized\n");
+    hypervisor::log_info!("[INIT] Exception handling initialized\n");
 
     // Initialize GIC - try GICv3 first, fall back to GICv2
     hypervisor::arch::aarch64::peripherals::gicv3::init();
@@ -68,7 +55,7 @@ pub extern "C" fn rust_main(dtb_addr: usize) -> ! {
     hypervisor::ffa::proxy::init();
 
     // Initialize timer
-    uart_puts_local(b"[INIT] Configuring timer...\n");
+    hypervisor::log_info!("[INIT] Configuring timer...\n");
     hypervisor::arch::aarch64::peripherals::timer::init_hypervisor_timer();
     hypervisor::arch::aarch64::peripherals::timer::print_timer_info();
 
@@ -82,16 +69,14 @@ pub extern "C" fn rust_main(dtb_addr: usize) -> ! {
         );
     }
     let el = (current_el >> 2) & 0x3;
-    uart_puts_local(b"[INIT] Current EL: EL");
-    print_digit(el as u8);
-    uart_puts_local(b"\n");
+    hypervisor::log_info!("[INIT] Current EL: EL{}\n", el);
 
     // Initialize heap
-    uart_puts_local(b"[INIT] Initializing heap...\n");
+    hypervisor::log_info!("[INIT] Initializing heap...\n");
     unsafe {
         hypervisor::mm::heap::init();
     }
-    uart_puts_local(b"[INIT] Heap initialized (16MB at 0x41000000)\n\n");
+    hypervisor::log_info!("[INIT] Heap initialized (16MB at 0x41000000)\n\n");
 
     // Run the DTB parsing test (validates DTB init above)
     tests::run_dtb_test();
@@ -196,21 +181,18 @@ pub extern "C" fn rust_main(dtb_addr: usize) -> ! {
     {
         use hypervisor::guest_loader::{run_guest, GuestConfig};
 
-        uart_puts_local(b"\n[INIT] Booting Zephyr guest VM...\n");
+        hypervisor::log_info!("\n[INIT] Booting Zephyr guest VM...\n");
 
         let config = GuestConfig::zephyr_default();
         match run_guest(&config) {
             Ok(()) => {
-                uart_puts_local(b"[INIT] Guest exited normally\n");
+                hypervisor::log_info!("[INIT] Guest exited normally\n");
             }
             Err(e) => {
                 if e == "WFI" {
-                    // WFI exit is normal for simple apps that just print and idle
-                    uart_puts_local(b"[INIT] Guest completed and is idle\n");
+                    hypervisor::log_info!("[INIT] Guest completed and is idle\n");
                 } else {
-                    uart_puts_local(b"[INIT] Guest error: ");
-                    uart_puts_local(e.as_bytes());
-                    uart_puts_local(b"\n");
+                    hypervisor::log_info!("[INIT] Guest error: {}\n", e);
                 }
             }
         }
@@ -219,16 +201,14 @@ pub extern "C" fn rust_main(dtb_addr: usize) -> ! {
     // Check if we should boot multiple VMs
     #[cfg(feature = "multi_vm")]
     {
-        uart_puts_local(b"\n[INIT] Booting multi-VM mode...\n");
+        hypervisor::log_info!("\n[INIT] Booting multi-VM mode...\n");
 
         match hypervisor::guest_loader::run_multi_vm_guests() {
             Ok(()) => {
-                uart_puts_local(b"[INIT] Multi-VM exited normally\n");
+                hypervisor::log_info!("[INIT] Multi-VM exited normally\n");
             }
             Err(e) => {
-                uart_puts_local(b"[INIT] Multi-VM error: ");
-                uart_puts_local(e.as_bytes());
-                uart_puts_local(b"\n");
+                hypervisor::log_info!("[INIT] Multi-VM error: {}\n", e);
             }
         }
     }
@@ -238,24 +218,22 @@ pub extern "C" fn rust_main(dtb_addr: usize) -> ! {
     {
         use hypervisor::guest_loader::{run_guest, GuestConfig};
 
-        uart_puts_local(b"\n[INIT] Booting Linux guest VM...\n");
+        hypervisor::log_info!("\n[INIT] Booting Linux guest VM...\n");
 
         let config = GuestConfig::linux_default();
         match run_guest(&config) {
             Ok(()) => {
-                uart_puts_local(b"[INIT] Linux guest exited normally\n");
+                hypervisor::log_info!("[INIT] Linux guest exited normally\n");
             }
             Err(e) => {
-                uart_puts_local(b"[INIT] Linux guest error: ");
-                uart_puts_local(e.as_bytes());
-                uart_puts_local(b"\n");
+                hypervisor::log_info!("[INIT] Linux guest error: {}\n", e);
             }
         }
     }
 
-    uart_puts_local(b"\n========================================\n");
-    uart_puts_local(b"All Sprints Complete (2.1-2.4)\n");
-    uart_puts_local(b"========================================\n");
+    hypervisor::log_info!("\n========================================\n");
+    hypervisor::log_info!("All Sprints Complete (2.1-2.4)\n");
+    hypervisor::log_info!("========================================\n");
 
     // Halt - we'll implement proper VM execution later
     loop {
@@ -277,54 +255,43 @@ pub extern "C" fn rust_main_sel2(
     // 1. Install exception vectors FIRST (before any memory access that could fault)
     exception::init();
 
-    uart_puts_local(b"========================================\n");
-    uart_puts_local(b"  ARM64 SPMC - S-EL2\n");
-    uart_puts_local(b"========================================\n\n");
+    // Initialize log module (all static, no deps)
+    hypervisor::log::init();
+
+    hypervisor::log_info!("========================================\n");
+    hypervisor::log_info!("  ARM64 SPMC - S-EL2\n");
+    hypervisor::log_info!("========================================\n\n");
 
     let current_el: u64;
     unsafe {
         core::arch::asm!("mrs {}, CurrentEL", out(reg) current_el);
     }
     let el = (current_el >> 2) & 0x3;
-    uart_puts_local(b"[SPMC] Running at EL");
-    print_digit(el as u8);
-    uart_puts_local(b"\n");
+    hypervisor::log_info!("[SPMC] Running at EL{}\n", el);
 
     // 3. Parse SPMC manifest (TOS_FW_CONFIG in x0)
-    uart_puts_local(b"[SPMC] Manifest at 0x");
-    hypervisor::uart_put_hex(manifest_addr as u64);
-    uart_puts_local(b"\n");
+    hypervisor::log_info!("[SPMC] Manifest at {:#018x}\n", manifest_addr);
     hypervisor::manifest::init(manifest_addr);
     let mi = hypervisor::manifest::manifest_info();
-    uart_puts_local(b"[SPMC] spmc_id=0x");
-    hypervisor::uart_put_hex(mi.spmc_id as u64);
-    uart_puts_local(b" version=");
-    print_digit(mi.maj_ver as u8);
-    uart_puts_local(b".");
-    print_digit(mi.min_ver as u8);
-    uart_puts_local(b"\n");
+    hypervisor::log_info!("[SPMC] spmc_id={:#06x} version={}.{}\n",
+        mi.spmc_id, mi.maj_ver, mi.min_ver);
 
     // 4. Parse hardware DTB (HW_CONFIG in x1)
-    uart_puts_local(b"[SPMC] HW config at 0x");
-    hypervisor::uart_put_hex(hw_config_addr as u64);
-    uart_puts_local(b"\n");
+    hypervisor::log_info!("[SPMC] HW config at {:#018x}\n", hw_config_addr);
     if hw_config_addr != 0 {
         hypervisor::dtb::init(hw_config_addr);
     } else {
-        uart_puts_local(b"[SPMC] No HW config DTB, using QEMU virt defaults\n");
+        hypervisor::log_info!("[SPMC] No HW config DTB, using QEMU virt defaults\n");
     }
-
-    // Initialize log module
-    hypervisor::log::init();
 
     // 4.5. Enable S-EL2 Stage-1 MMU (identity map with NS=1 for Non-Secure DRAM)
     // Must be before GIC init (Device mapping needed) and before any NWd RXTX access.
     hypervisor::sel2_mmu::init_sel2_stage1();
-    uart_puts_local(b"[SPMC] S-EL2 Stage-1 MMU enabled (NS DRAM mapped)\n");
+    hypervisor::log_info!("[SPMC] S-EL2 Stage-1 MMU enabled (NS DRAM mapped)\n");
 
     // 5. Initialize GIC
     hypervisor::arch::aarch64::peripherals::gicv3::init();
-    uart_puts_local(b"[SPMC] GIC initialized\n");
+    hypervisor::log_info!("[SPMC] GIC initialized\n");
 
     // 5.1. Enable PPIs in GICR for physical delivery at S-EL2:
     //   - PPI 26 (CNTHP timer): preemption watchdog for SP execution
@@ -357,7 +324,7 @@ pub extern "C" fn rust_main_sel2(
     }
 
     // 5.5. Initialize secure heap (for page table allocation)
-    uart_puts_local(b"[SPMC] Initializing secure heap\n");
+    hypervisor::log_info!("[SPMC] Initializing secure heap\n");
     unsafe {
         hypervisor::mm::heap::init_at(
             hypervisor::platform::SECURE_HEAP_START,
@@ -375,7 +342,7 @@ pub extern "C" fn rust_main_sel2(
     }
 
     // 5.6. Build Secure Stage-2 for SP1
-    uart_puts_local(b"[SPMC] Building Secure Stage-2 for SP1\n");
+    hypervisor::log_info!("[SPMC] Building Secure Stage-2 for SP1\n");
     let mapper = hypervisor::secure_stage2::build_sp_stage2(
         hypervisor::platform::SP1_LOAD_ADDR,
         hypervisor::platform::SP1_MEM_SIZE,
@@ -411,13 +378,8 @@ pub extern "C" fn rust_main_sel2(
     };
     let sp1_entry = pkg_base + img_offset;
 
-    uart_puts_local(b"[SPMC] SP1 package at 0x");
-    hypervisor::uart_put_hex(pkg_base);
-    uart_puts_local(b", img_offset=0x");
-    hypervisor::uart_put_hex(img_offset);
-    uart_puts_local(b", entry=0x");
-    hypervisor::uart_put_hex(sp1_entry);
-    uart_puts_local(b"\n");
+    hypervisor::log_info!("[SPMC] SP1 package at {:#018x}, img_offset={:#018x}, entry={:#018x}\n",
+        pkg_base, img_offset, sp1_entry);
 
     // SP1 UUID from sp_manifest.dts (byte-swapped by sp_mk_generator.py)
     let sp1_uuid: [u32; 4] = [0x12345678, 0x12345678, 0x12345678, 0x12345678];
@@ -455,13 +417,11 @@ pub extern "C" fn rust_main_sel2(
     // SP trapped back — verify it called FFA_MSG_WAIT
     let (x0, _, _, _, _, _, _, _) = sp1.get_args();
     if x0 == hypervisor::ffa::FFA_MSG_WAIT {
-        uart_puts_local(b"[SPMC] SP1 booted, now Idle (FFA_MSG_WAIT received)\n");
+        hypervisor::log_info!("[SPMC] SP1 booted, now Idle (FFA_MSG_WAIT received)\n");
         sp1.transition_to(hypervisor::sp_context::SpState::Idle)
             .expect("SP1 transition failed");
     } else {
-        uart_puts_local(b"[SPMC] WARNING: SP1 did not call FFA_MSG_WAIT, x0=0x");
-        hypervisor::uart_put_hex(x0);
-        uart_puts_local(b"\n");
+        hypervisor::log_warn!("[SPMC] WARNING: SP1 did not call FFA_MSG_WAIT, x0={:#018x}\n", x0);
     }
 
     // Store SP1 context globally for dispatch
@@ -473,9 +433,7 @@ pub extern "C" fn rust_main_sel2(
         let sp2_magic = unsafe { core::ptr::read_volatile(sp2_pkg_base as *const u32) };
         if sp2_magic == 0x474B5053 {
             // "SPKG" magic found
-            uart_puts_local(b"[SPMC] SP2 package found at 0x");
-            hypervisor::uart_put_hex(sp2_pkg_base);
-            uart_puts_local(b"\n");
+            hypervisor::log_info!("[SPMC] SP2 package found at {:#018x}\n", sp2_pkg_base);
 
             // Build Secure Stage-2 for SP2
             let mapper2 = hypervisor::secure_stage2::build_sp_stage2(
@@ -493,9 +451,7 @@ pub extern "C" fn rust_main_sel2(
             };
             let sp2_entry = sp2_pkg_base + sp2_img_offset;
 
-            uart_puts_local(b"[SPMC] SP2 entry=0x");
-            hypervisor::uart_put_hex(sp2_entry);
-            uart_puts_local(b"\n");
+            hypervisor::log_info!("[SPMC] SP2 entry={:#018x}\n", sp2_entry);
 
             // SP2 UUID from sp_manifest.dts (byte-swapped)
             let sp2_uuid: [u32; 4] = [0xAABBCCDD, 0xAABBCCDD, 0xAABBCCDD, 0xAABBCCDD];
@@ -537,18 +493,16 @@ pub extern "C" fn rust_main_sel2(
             // Verify SP2 called FFA_MSG_WAIT
             let (x0, _, _, _, _, _, _, _) = sp2.get_args();
             if x0 == hypervisor::ffa::FFA_MSG_WAIT {
-                uart_puts_local(b"[SPMC] SP2 booted, now Idle (FFA_MSG_WAIT received)\n");
+                hypervisor::log_info!("[SPMC] SP2 booted, now Idle (FFA_MSG_WAIT received)\n");
                 sp2.transition_to(hypervisor::sp_context::SpState::Idle)
                     .expect("SP2 transition failed");
             } else {
-                uart_puts_local(b"[SPMC] WARNING: SP2 did not call FFA_MSG_WAIT, x0=0x");
-                hypervisor::uart_put_hex(x0);
-                uart_puts_local(b"\n");
+                hypervisor::log_warn!("[SPMC] WARNING: SP2 did not call FFA_MSG_WAIT, x0={:#018x}\n", x0);
             }
 
             hypervisor::sp_context::register_sp(sp2);
         } else {
-            uart_puts_local(b"[SPMC] No SP2 package found (single-SP mode)\n");
+            hypervisor::log_info!("[SPMC] No SP2 package found (single-SP mode)\n");
         }
     }
 
@@ -558,9 +512,7 @@ pub extern "C" fn rust_main_sel2(
             fn secondary_entry_sel2();
         }
         let ep = secondary_entry_sel2 as *const () as usize as u64;
-        uart_puts_local(b"[SPMC] Registering secondary EP at 0x");
-        hypervisor::uart_put_hex(ep);
-        uart_puts_local(b"\n");
+        hypervisor::log_info!("[SPMC] Registering secondary EP at {:#018x}\n", ep);
 
         let result = hypervisor::ffa::smc_forward::forward_smc(
             hypervisor::ffa::FFA_SECONDARY_EP_REGISTER,
@@ -575,18 +527,16 @@ pub extern "C" fn rust_main_sel2(
         if result.x0 == hypervisor::ffa::FFA_SUCCESS_32
             || result.x0 == hypervisor::ffa::FFA_SUCCESS_64
         {
-            uart_puts_local(b"[SPMC] Secondary EP registered with SPMD\n");
+            hypervisor::log_info!("[SPMC] Secondary EP registered with SPMD\n");
         } else {
-            uart_puts_local(b"[SPMC] WARNING: FFA_SECONDARY_EP_REGISTER failed, x0=0x");
-            hypervisor::uart_put_hex(result.x0);
-            uart_puts_local(b"\n");
+            hypervisor::log_warn!("[SPMC] WARNING: FFA_SECONDARY_EP_REGISTER failed, x0={:#018x}\n", result.x0);
         }
     }
 
     // 6. Signal SPMD: init complete, receive first NWd request
     // Note: NWd RXTX is managed by the SPMC event loop (SPMD forwards
     // FFA_RXTX_MAP from NWd to SPMC, not handled by SPMD itself).
-    uart_puts_local(b"[SPMC] Init complete, signaling SPMD via FFA_MSG_WAIT\n");
+    hypervisor::log_info!("[SPMC] Init complete, signaling SPMD via FFA_MSG_WAIT\n");
     let first_req = hypervisor::manifest::signal_spmc_ready();
 
     // 7. Enter SPMC event loop (does not return)
@@ -675,9 +625,7 @@ pub extern "C" fn rust_main_sel2_secondary(
         }
     }
 
-    uart_puts_local(b"[SPMC] Secondary CPU ");
-    print_digit(core_id as u8);
-    uart_puts_local(b" warm-boot, signaling FFA_MSG_WAIT\n");
+    hypervisor::log_info!("[SPMC] Secondary CPU {} warm-boot, signaling FFA_MSG_WAIT\n", core_id);
 
     // 3. Signal SPMD: secondary init complete, receive first FF-A request.
     // FFA_MSG_WAIT tells SPMD this CPU's S-EL2 init is done.
@@ -726,9 +674,7 @@ pub extern "C" fn rust_main_secondary(cpu_id: usize) -> ! {
         );
     }
 
-    uart_puts_local(b"[SMP] pCPU ");
-    print_digit(cpu_id as u8);
-    uart_puts_local(b" started\n");
+    hypervisor::log_info!("[SMP] pCPU {} started\n", cpu_id);
 
     // 1. Set VBAR_EL2 (same exception vectors as primary)
     exception::init();
@@ -784,17 +730,13 @@ pub extern "C" fn rust_main_secondary(cpu_id: usize) -> ! {
         (*hypervisor::percpu::this_cpu()).vcpu_id = cpu_id;
     }
 
-    uart_puts_local(b"[SMP] pCPU ");
-    print_digit(cpu_id as u8);
-    uart_puts_local(b" ready, waiting for CPU_ON\n");
+    hypervisor::log_info!("[SMP] pCPU {} ready, waiting for CPU_ON\n", cpu_id);
 
     // 7. Idle loop: WFE until PSCI CPU_ON sets our request
     loop {
         unsafe { core::arch::asm!("wfe") };
         if let Some((entry, ctx)) = hypervisor::global::PENDING_CPU_ON_PER_VCPU[cpu_id].take() {
-            uart_puts_local(b"[SMP] pCPU ");
-            print_digit(cpu_id as u8);
-            uart_puts_local(b" got CPU_ON, entering guest\n");
+            hypervisor::log_info!("[SMP] pCPU {} got CPU_ON, entering guest\n", cpu_id);
             secondary_enter_guest(cpu_id, entry, ctx);
         }
     }
@@ -843,11 +785,7 @@ fn secondary_enter_guest(cpu_id: usize, entry: u64, ctx_id: u64) {
     // Reset exception counters for this pCPU
     hypervisor::arch::aarch64::hypervisor::exception::reset_exception_counters();
 
-    uart_puts_local(b"[SMP] vCPU ");
-    print_digit(cpu_id as u8);
-    uart_puts_local(b" entering guest at 0x");
-    hypervisor::uart_put_hex(entry);
-    uart_puts_local(b"\n");
+    hypervisor::log_info!("[SMP] vCPU {} entering guest at {:#018x}\n", cpu_id, entry);
 
     // Run loop: inject pending, enter guest, handle exit.
     // Uses shared inject_pending_sgis/spis helpers (with re-queue on LR full).
@@ -867,9 +805,7 @@ fn secondary_enter_guest(cpu_id: usize, entry: u64, ctx_id: u64) {
                     .compare_exchange(true, false, Ordering::Acquire, Ordering::Relaxed)
                     .is_ok()
                 {
-                    uart_puts_local(b"[SMP] vCPU ");
-                    print_digit(cpu_id as u8);
-                    uart_puts_local(b" terminal exit\n");
+                    hypervisor::log_info!("[SMP] vCPU {} terminal exit\n", cpu_id);
                     hypervisor::global::vm_state(0)
                         .vcpu_online_mask
                         .fetch_and(!(1 << cpu_id), Ordering::Release);
@@ -888,12 +824,6 @@ fn secondary_enter_guest(cpu_id: usize, entry: u64, ctx_id: u64) {
         }
     }
     // Returns to idle loop in rust_main_secondary for potential CPU_ON reuse
-}
-
-/// Print a single digit (0-9)
-fn print_digit(digit: u8) {
-    let ch = b'0' + digit;
-    uart_puts_local(&[ch]);
 }
 
 /// Panic handler - required for no_std
