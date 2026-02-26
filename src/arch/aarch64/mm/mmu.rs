@@ -453,13 +453,21 @@ impl DynamicIdentityMapper {
             l3
         };
 
-        // Write the 4KB page entry (L3 page descriptor: bit[1]=1 means page at L3)
-        let page_entry = self.make_page_entry(ipa & !PAGE_MASK_4KB, attr);
-        unsafe {
-            *(l3_table as *mut u64).add(l3_idx) = page_entry;
+        // Write the 4KB page entry (L3 page descriptor: bit[1]=1 means page at L3).
+        // Break-before-make: if old L3 entry is valid, invalidate it and flush TLB
+        // before writing the new entry (ARMv8-A D5.10.1 requires this to avoid TLB
+        // conflict aborts when replacing one valid entry with another).
+        let l3_ptr = unsafe { (l3_table as *mut u64).add(l3_idx) };
+        let old_l3 = unsafe { core::ptr::read_volatile(l3_ptr) };
+        if old_l3 & PTE_VALID != 0 {
+            unsafe { core::ptr::write_volatile(l3_ptr, 0) };
+            Self::tlbi_ipa(ipa);
         }
 
-        // TLB invalidate for this IPA
+        let page_entry = self.make_page_entry(ipa & !PAGE_MASK_4KB, attr);
+        unsafe {
+            core::ptr::write_volatile(l3_ptr, page_entry);
+        }
         Self::tlbi_ipa(ipa);
 
         Ok(())

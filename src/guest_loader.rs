@@ -426,27 +426,29 @@ fn wake_secondary_pcpus() {
 
         let ret: u64;
         unsafe {
-            // SMC #0 with:
-            //   x0 = PSCI_CPU_ON_64 (function ID)
-            //   x1 = target CPU MPIDR
-            //   x2 = entry point address
-            //   x3 = context_id (unused, 0)
-            // Returns result in x0
+            // PSCI CPU_ON via SMC. Per SMCCC v1.2, x4-x17 are caller-saved
+            // and may be clobbered by the SMC call.
             core::arch::asm!(
-                "mov x0, {func_id}",
-                "mov x1, {target}",
-                "mov x2, {entry}",
-                "mov x3, #0",
                 "smc #0",
-                "mov {ret}, x0",
-                func_id = in(reg) PSCI_CPU_ON_64,
-                target = in(reg) target_mpidr,
-                entry = in(reg) entry_addr,
-                ret = out(reg) ret,
-                out("x0") _,
-                out("x1") _,
-                out("x2") _,
-                out("x3") _,
+                inout("x0") PSCI_CPU_ON_64 => ret,
+                inout("x1") target_mpidr => _,
+                inout("x2") entry_addr => _,
+                inout("x3") 0u64 => _,
+                // x4-x17 clobbered per SMCCC
+                lateout("x4") _,
+                lateout("x5") _,
+                lateout("x6") _,
+                lateout("x7") _,
+                lateout("x8") _,
+                lateout("x9") _,
+                lateout("x10") _,
+                lateout("x11") _,
+                lateout("x12") _,
+                lateout("x13") _,
+                lateout("x14") _,
+                lateout("x15") _,
+                lateout("x16") _,
+                lateout("x17") _,
                 options(nostack, nomem),
             );
         }

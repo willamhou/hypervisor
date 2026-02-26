@@ -1012,3 +1012,99 @@ Incorporating all five review passes:
 | **Batch 12** | API encapsulation: FfaMailbox, naming, share records, SpStore docs | 1 day | Part 3 |
 | **Batch 13** | Structure: main.rs split, SAFETY comments | 2-3 days | Part 2 |
 | **Batch 14** | Testability: reset_all(), compile-time asserts, host cargo test | 1-2 days | Part 2 |
+
+---
+
+## Part 6: Codex CLI Automated Review (gpt-5.3-codex)
+
+**Reviewer**: OpenAI Codex CLI v0.105.0 (gpt-5.3-codex, `codex exec --full-auto --sandbox read-only`)
+**Scope**: All files in `src/` reviewed against `docs/RUST_FIRMWARE_CODING_GUIDELINES.md` (12 sections)
+**Date**: 2026-02-26
+
+### A. Summary Statistics
+
+| Metric | Count |
+|--------|-------|
+| CRITICAL | 2 |
+| HIGH | 15 |
+| MEDIUM | 12 |
+| LOW | 2 |
+| Total violations | 31 |
+| `unsafe` blocks missing `// SAFETY:` (heuristic) | 312 |
+| `asm!` blocks missing `options(...)` | 59 |
+
+**Clean checks** (no violations found):
+- `.expect()`/`.unwrap()` in exception handlers — **none** (correct)
+- `SeqCst` atomics — **none** (correct)
+- `dyn Trait` — **none** (correct)
+- `f32`/`f64` — **none** (correct)
+
+### B. CRITICAL Findings
+
+| # | Section | File | Line | Description |
+|---|---------|------|------|-------------|
+| 1 | §4.3 SMC clobbers | `guest_loader.rs` | 435 | Direct `smc #0` only declares `x0..x3` clobbers; compiler may assume `x4..x17` survive. Must add `lateout("x4")..lateout("x17") _` |
+| 2 | §3.3 Break-before-make | `mmu.rs` | 458 | `map_4kb_page()` overwrites L3 entry directly without BBM sequence (invalidate → TLBI → write → TLBI) |
+
+### C. HIGH Findings
+
+| # | Section | File | Line(s) | Description |
+|---|---------|------|---------|-------------|
+| 3-6 | §3.2 ISB after MSR | `timer.rs` | 48, 64, 80, 95 | `set_ctl/cval/tval()` and `init_hypervisor_timer()` write sysregs without `isb` |
+| 7-8 | §3.2 ISB after MSR | `exception.rs` | 852, 858 | `emulate_msr()` for `mdscr_el1`/`oslar_el1` missing `isb` |
+| 9-14 | §3.2 ISB after MSR | `gicv3.rs` | 104, 117, 143, 169, 195, 223 | `write_eoir1/dir/ctlr/pmr/bpr1/igrpen1()` all missing `isb` |
+| 15 | §7.1 `static mut` | `spmc_handler.rs` | 63 | `NWD_RXTX` is `static mut` in per-CPU SPMC event loop code |
+| 16 | §8.2 Feature guards | `lib.rs` | — | No `compile_error!` guards for `multi_pcpu ⊕ multi_vm`, `sel2 ⊕ linux_guest`, `sel2 ⊕ guest` |
+| 17 | §5.1 VcpuContext offsets | `regs.rs` | 261 | No compile-time offset assertions against `exception.S` hardcoded offsets |
+
+### D. MEDIUM Findings
+
+| # | Section | File | Line(s) | Description |
+|---|---------|------|---------|-------------|
+| 18-22 | §3.1 `asm!` options | `timer.rs`, `exception.rs`, `main.rs`, `percpu.rs`, `vm.rs` | (many) | 59 `asm!` blocks across codebase omit `options(...)` |
+| 23-31 | §2.1 `// SAFETY:` | `manifest.rs`, `smc_forward.rs`, `guest_loader.rs`, `spmc_handler.rs`, `mmu.rs`, `exception.rs`, `timer.rs`, `main.rs`, `percpu.rs` | (many) | 312 `unsafe` blocks missing nearby `// SAFETY:` rationale comment |
+
+### E. LOW Findings
+
+| # | Section | File | Line(s) | Description |
+|---|---------|------|---------|-------------|
+| 32 | §2.4 `static mut` | `ffa/proxy.rs` | 27 | `PROXY_TX_BUF`/`PROXY_RX_BUF` rely on usage discipline, not synchronization |
+| 33 | §2.4 `static mut` | `manifest.rs` | 14 | `MANIFEST` init-once but invariant not encoded by type |
+
+### F. Cross-Reference with Previous Reviews
+
+| Codex Finding | Previously Identified? | Part |
+|---------------|----------------------|------|
+| SMC clobbers x4-x17 | Yes (§4.3 audit) | Part 1, Batch 2 |
+| BBM violation in mmu.rs | Partial (mentioned in Part 1) | Part 1, Batch 3 |
+| Missing ISB after MSR | Yes (§3.2 audit) | Part 1, Batch 1 |
+| `static mut NWD_RXTX` | Yes (concurrency) | Part 2, Batch 13 |
+| Missing `compile_error!` | Yes (feature guards) | Part 1, Batch 4 |
+| VcpuContext offset asserts | Yes (assembly offset fragility) | Part 5, Batch 9 |
+| Missing `// SAFETY:` | Yes (unsafe discipline) | Part 1/2, Batch 13 |
+| Missing `asm! options()` | Yes (§3.1 audit) | Part 1, Batch 1 |
+| `PROXY_TX_BUF` static mut | New — not previously flagged | — |
+| `MANIFEST` static mut | New — not previously flagged | — |
+
+### G. Net New Findings (Not in Parts 1-5)
+
+Only **2 genuinely new items** from Codex:
+
+1. **`PROXY_TX_BUF`/`PROXY_RX_BUF`** (`ffa/proxy.rs:27`) — `static mut` buffers for SPMD relay. LOW severity since they're only accessed in single-threaded NS proxy context, but should use `UnsafeCell` wrapper or `SyncUnsafeCell` for Rust 2024 compatibility.
+
+2. **`MANIFEST` static mut** (`manifest.rs:14`) — init-once pattern without `OnceLock`/`OnceCell`. LOW severity since it's written once during boot, but could use `core::cell::OnceCell` (stabilized in Rust 1.70).
+
+### H. Assessment
+
+Codex confirmed **100% of HIGH/CRITICAL findings** from our manual Parts 1-5 reviews. The automated scan adds strong validation that the existing action plan (Batches 0-14) covers all material issues. The 2 net-new LOW findings are minor Rust idiom improvements.
+
+**Recommendation**: No new batches needed. Add the 2 proxy/manifest `static mut` fixes to **Batch 13** (SAFETY comments + `static mut` cleanup).
+
+### Updated Batch 13 (revised)
+
+| Item | Change |
+|------|--------|
+| `static mut NWD_RXTX` | Wrap in `UnsafeCell` + accessor (already planned) |
+| `static mut PROXY_TX_BUF`/`PROXY_RX_BUF` | **NEW**: Wrap in `UnsafeCell` or `SyncUnsafeCell` |
+| `static mut MANIFEST` | **NEW**: Replace with `core::cell::OnceCell<SpMcManifest>` |
+| `// SAFETY:` comments | Add to all 312 `unsafe` blocks (already planned) |

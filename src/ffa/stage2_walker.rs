@@ -156,12 +156,17 @@ impl Stage2Walker {
     /// * `s2ap` - Stage-2 access permissions (2 bits): 0b00=None, 0b01=RO, 0b11=RW
     /// * `sw_bits` - Software-defined PTE bits [56:55] for page ownership tracking
     ///
+    /// # Break-Before-Make Safety
+    /// This function is BBM-safe by construction: it rejects already-valid L3
+    /// entries (returns `"L3 entry already mapped"`), so it never overwrites a
+    /// valid PTE. Use [`remap_page`] to change attributes on an existing mapping.
+    ///
     /// # Errors
     /// Returns an error if:
     /// - L0 entry is invalid (no L1 table)
     /// - L1 entry is a 1GB block (won't split)
     /// - L2 entry is a 2MB block (won't split existing blocks for cross-VM mapping)
-    /// - L3 entry is already valid (page already mapped)
+    /// - L3 entry is already valid (page already mapped — use `remap_page` instead)
     /// - Heap allocation fails
     #[allow(dead_code)]
     pub fn map_page(&self, ipa: u64, s2ap: u8, sw_bits: u8) -> Result<(), &'static str> {
@@ -267,6 +272,39 @@ impl Stage2Walker {
             core::ptr::write_volatile(l3_ptr, 0u64);
         }
 
+        Self::tlbi_ipa(ipa);
+        Ok(())
+    }
+
+    /// Re-map an existing 4KB page with new S2AP and SW bits.
+    ///
+    /// Performs break-before-make (ARMv8-A D5.10.1): invalidate the old L3
+    /// entry → TLBI → write new entry → TLBI. This avoids TLB conflict aborts
+    /// that occur when overwriting one valid PTE with another.
+    ///
+    /// # Errors
+    /// Returns an error if the IPA is not currently mapped as a 4KB page.
+    #[allow(dead_code)]
+    pub fn remap_page(&self, ipa: u64, s2ap: u8, sw_bits: u8) -> Result<(), &'static str> {
+        let l3_ptr = self
+            .walk_to_l3_ptr(ipa)
+            .ok_or("IPA not mapped as 4KB page")?;
+
+        // Break: invalidate old entry
+        unsafe {
+            core::ptr::write_volatile(l3_ptr, 0u64);
+        }
+        Self::tlbi_ipa(ipa);
+
+        // Make: write new entry with updated attributes
+        let normal_attrs: u64 = (0b1111 << 2) | (0b11 << 8) | (1 << 10);
+        let s2ap_bits = ((s2ap as u64) & 0x3) << S2AP_SHIFT;
+        let sw = ((sw_bits as u64) & 0x3) << PTE_SW_SHIFT;
+        let pa = ipa & !PAGE_MASK_4KB;
+        let page_entry = pa | normal_attrs | s2ap_bits | sw | PTE_TABLE | PTE_VALID;
+        unsafe {
+            core::ptr::write_volatile(l3_ptr, page_entry);
+        }
         Self::tlbi_ipa(ipa);
         Ok(())
     }
