@@ -521,8 +521,8 @@ pub extern "C" fn handle_fiq_exception(_context: &mut VcpuContext) -> bool {
         //
         // The NS interrupt stays pending in the GIC. When NWd runs (after
         // FFA_INTERRUPT → SPMD → NWd), it will acknowledge and handle it.
-        crate::spmc_handler::SP_IRQ_PREEMPTED.store(true, core::sync::atomic::Ordering::Release);
-        crate::spmc_handler::FIQ_PREEMPT_COUNT.fetch_add(1, core::sync::atomic::Ordering::Relaxed);
+        crate::spmc_handler::set_sp_irq_preempted(true);
+        crate::spmc_handler::inc_fiq_preempt_count();
         return false;
     }
 
@@ -587,7 +587,7 @@ pub extern "C" fn handle_irq_exception(_context: &mut VcpuContext) -> bool {
                 if let Some(sp) = crate::sp_context::get_sp_mut(owner_id) {
                     sp.set_pending_irq(intid);
                 }
-                crate::spmc_handler::SP_IRQ_PREEMPTED.store(true, Ordering::Release);
+                crate::spmc_handler::set_sp_irq_preempted(true);
                 return false;
             }
 
@@ -615,7 +615,7 @@ pub extern "C" fn handle_irq_exception(_context: &mut VcpuContext) -> bool {
 
         // No running SP, unowned interrupt, or SP with no owned INTIDs
         // → NS preemption
-        crate::spmc_handler::SP_IRQ_PREEMPTED.store(true, Ordering::Release);
+        crate::spmc_handler::set_sp_irq_preempted(true);
         return false;
     }
 

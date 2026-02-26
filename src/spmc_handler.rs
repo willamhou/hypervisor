@@ -17,36 +17,95 @@ use core::sync::atomic::{AtomicBool, AtomicU64};
 #[cfg(feature = "sel2")]
 use core::sync::atomic::Ordering;
 
-/// Flag set by the IRQ handler when a physical IRQ preempts SP execution.
+// ── Per-CPU SPMC state ──────────────────────────────────────────────────
+//
+// With pKVM at NS-EL2, SPMD is per-CPU: each physical CPU can independently
+// enter S-EL2 via SMC. These globals MUST be per-CPU arrays indexed by
+// MPIDR_EL1.Aff0 to prevent concurrent CPUs from corrupting each other's
+// saved state (the root cause of the SAVED_SP_PTR=0x20002569 crash).
+
+use crate::platform::MAX_SMP_CPUS;
+
+/// Helper: read current CPU index (MPIDR_EL1.Aff0). Works at both NS-EL2 and S-EL2.
+#[cfg(feature = "sel2")]
+#[inline(always)]
+fn sel2_cpu_id() -> usize {
+    let mpidr: u64;
+    unsafe { core::arch::asm!("mrs {}, MPIDR_EL1", out(reg) mpidr, options(nostack, nomem)) };
+    (mpidr & 0xFF) as usize
+}
+
+/// Per-CPU flag set by the IRQ handler when a physical IRQ preempts SP execution.
 /// The SPMC event loop checks this after enter_guest() returns to decide
 /// whether to return FFA_INTERRUPT (preempted) or DIRECT_RESP (completed).
-pub static SP_IRQ_PREEMPTED: AtomicBool = AtomicBool::new(false);
+static SP_IRQ_PREEMPTED: [AtomicBool; MAX_SMP_CPUS] = {
+    const INIT: AtomicBool = AtomicBool::new(false);
+    [INIT; MAX_SMP_CPUS]
+};
 
-/// Debug: count FIQ preemptions to detect infinite loops.
+/// Per-CPU debug counter: count FIQ preemptions to detect infinite loops.
 #[cfg(feature = "sel2")]
-pub static FIQ_PREEMPT_COUNT: core::sync::atomic::AtomicU32 = core::sync::atomic::AtomicU32::new(0);
+static FIQ_PREEMPT_COUNT: [core::sync::atomic::AtomicU32; MAX_SMP_CPUS] = {
+    const INIT: core::sync::atomic::AtomicU32 = core::sync::atomic::AtomicU32::new(0);
+    [INIT; MAX_SMP_CPUS]
+};
 
-/// Saved host ELR_EL2/SPSR_EL2 across enter_guest() calls.
-/// Using globals instead of stack locals because debug-mode stack slots can get
-/// corrupted by the enter_guest/exception_handler/guest_exit stack sequence.
+/// Per-CPU saved host ELR_EL2/SPSR_EL2 across enter_guest() calls.
+/// Using per-CPU globals instead of stack locals because debug-mode stack slots
+/// can get corrupted by the enter_guest/exception_handler/guest_exit stack sequence.
 #[cfg(feature = "sel2")]
-static SAVED_HOST_ELR: AtomicU64 = AtomicU64::new(0);
+static SAVED_HOST_ELR: [AtomicU64; MAX_SMP_CPUS] = {
+    const INIT: AtomicU64 = AtomicU64::new(0);
+    [INIT; MAX_SMP_CPUS]
+};
 #[cfg(feature = "sel2")]
-static SAVED_HOST_SPSR: AtomicU64 = AtomicU64::new(0);
-/// SP context pointer saved to global before enter_guest().
+static SAVED_HOST_SPSR: [AtomicU64; MAX_SMP_CPUS] = {
+    const INIT: AtomicU64 = AtomicU64::new(0);
+    [INIT; MAX_SMP_CPUS]
+};
+/// Per-CPU SP context pointer saved before enter_guest().
 #[cfg(feature = "sel2")]
-static SAVED_SP_PTR: AtomicU64 = AtomicU64::new(0);
+static SAVED_SP_PTR: [AtomicU64; MAX_SMP_CPUS] = {
+    const INIT: AtomicU64 = AtomicU64::new(0);
+    [INIT; MAX_SMP_CPUS]
+};
 
-/// Tracks which SP is currently executing at S-EL1. Set before enter_guest(),
+/// Per-CPU tracking of which SP is executing at S-EL1. Set before enter_guest(),
 /// cleared after return. Used by the IRQ handler to inject virtual interrupts
 /// directly via LR without going through SPMD.
 #[cfg(feature = "sel2")]
-static CURRENT_RUNNING_SP: core::sync::atomic::AtomicU16 = core::sync::atomic::AtomicU16::new(0);
+static CURRENT_RUNNING_SP: [core::sync::atomic::AtomicU16; MAX_SMP_CPUS] = {
+    const INIT: core::sync::atomic::AtomicU16 = core::sync::atomic::AtomicU16::new(0);
+    [INIT; MAX_SMP_CPUS]
+};
 
-/// Get the currently running SP ID (0 if none).
+/// Get the currently running SP ID on this CPU (0 if none).
 #[cfg(feature = "sel2")]
 pub fn current_running_sp() -> u16 {
-    CURRENT_RUNNING_SP.load(Ordering::Acquire)
+    CURRENT_RUNNING_SP[sel2_cpu_id()].load(Ordering::Acquire)
+}
+
+/// Set the SP_IRQ_PREEMPTED flag for the current CPU.
+pub fn set_sp_irq_preempted(val: bool) {
+    let cpu = {
+        let mpidr: u64;
+        unsafe { core::arch::asm!("mrs {}, MPIDR_EL1", out(reg) mpidr, options(nostack, nomem)) };
+        (mpidr & 0xFF) as usize
+    };
+    SP_IRQ_PREEMPTED[cpu].store(val, core::sync::atomic::Ordering::Release);
+}
+
+/// Increment the FIQ preempt count for the current CPU.
+pub fn inc_fiq_preempt_count() {
+    let cpu = {
+        let mpidr: u64;
+        unsafe { core::arch::asm!("mrs {}, MPIDR_EL1", out(reg) mpidr, options(nostack, nomem)) };
+        (mpidr & 0xFF) as usize
+    };
+    #[cfg(feature = "sel2")]
+    FIQ_PREEMPT_COUNT[cpu].fetch_add(1, core::sync::atomic::Ordering::Relaxed);
+    #[cfg(not(feature = "sel2"))]
+    let _ = cpu;
 }
 
 // ── NWd RXTX state (SPMD forwards RXTX_MAP from NWd to SPMC) ──
@@ -240,10 +299,11 @@ fn pre_enter_guest(sp: &mut crate::sp_context::SpContext) {
             options(nostack, nomem),
         );
     }
+    let cpu = sel2_cpu_id();
     let (saved_elr, saved_spsr) = save_host_el2_state();
-    SAVED_HOST_ELR.store(saved_elr, Ordering::Relaxed);
-    SAVED_HOST_SPSR.store(saved_spsr, Ordering::Relaxed);
-    SAVED_SP_PTR.store(sp as *mut _ as u64, Ordering::Relaxed);
+    SAVED_HOST_ELR[cpu].store(saved_elr, Ordering::Relaxed);
+    SAVED_HOST_SPSR[cpu].store(saved_spsr, Ordering::Relaxed);
+    SAVED_SP_PTR[cpu].store(sp as *mut _ as u64, Ordering::Relaxed);
 }
 
 /// Common postamble after enter_guest: restore host state, re-enable FMO.
@@ -251,13 +311,14 @@ fn pre_enter_guest(sp: &mut crate::sp_context::SpContext) {
 #[cfg(feature = "sel2")]
 #[inline(always)]
 fn post_enter_guest() -> &'static mut crate::sp_context::SpContext {
+    let cpu = sel2_cpu_id();
     let sp = unsafe {
-        &mut *(SAVED_SP_PTR.load(Ordering::Relaxed)
+        &mut *(SAVED_SP_PTR[cpu].load(Ordering::Relaxed)
             as *mut crate::sp_context::SpContext)
     };
     restore_host_el2_state(
-        SAVED_HOST_ELR.load(Ordering::Relaxed),
-        SAVED_HOST_SPSR.load(Ordering::Relaxed),
+        SAVED_HOST_ELR[cpu].load(Ordering::Relaxed),
+        SAVED_HOST_SPSR[cpu].load(Ordering::Relaxed),
     );
     unsafe {
         core::arch::asm!("msr tpidr_el2, xzr", options(nostack, nomem));
@@ -368,7 +429,7 @@ fn dispatch_to_sp(req: &SmcResult8, sp_id: u16) -> SmcResult8 {
         .expect("SP Running transition failed");
 
     // Clear preemption flag before SP entry
-    SP_IRQ_PREEMPTED.store(false, Ordering::Release);
+    SP_IRQ_PREEMPTED[sel2_cpu_id()].store(false, Ordering::Release);
 
     // Inject any pending virtual interrupt before entry
     inject_pending_virq(sp);
@@ -378,7 +439,8 @@ fn dispatch_to_sp(req: &SmcResult8, sp_id: u16) -> SmcResult8 {
     s2.install();
 
     // Track which SP is running so exception/IRQ handler can route correctly
-    CURRENT_RUNNING_SP.store(sp_id, Ordering::Release);
+    let cpu = sel2_cpu_id();
+    CURRENT_RUNNING_SP[cpu].store(sp_id, Ordering::Release);
 
     // Restore SP's EL1 sysregs (SCTLR_EL1, VBAR_EL1, etc.)
     sp.restore_el1_state();
@@ -398,7 +460,7 @@ fn dispatch_to_sp(req: &SmcResult8, sp_id: u16) -> SmcResult8 {
 
     sp.save_el1_state();
 
-    CURRENT_RUNNING_SP.store(0, Ordering::Release);
+    CURRENT_RUNNING_SP[sel2_cpu_id()].store(0, Ordering::Release);
     crate::arch::aarch64::peripherals::timer::disarm_preemption_timer();
 
     // Handle SP exit — may loop if SP calls FF-A memory operations
@@ -460,9 +522,10 @@ fn handle_sp_exit(
 ) -> SmcResult8 {
     loop {
         // Check if SP was preempted by a physical IRQ (NS FIQ at S-EL2)
-        if SP_IRQ_PREEMPTED.swap(false, Ordering::Acquire) {
+        let cpu = sel2_cpu_id();
+        if SP_IRQ_PREEMPTED[cpu].swap(false, Ordering::Acquire) {
             crate::log_debug!("[SPMC] preempted sp={:#06x} fiq_count={}\n",
-                sp_id, FIQ_PREEMPT_COUNT.load(Ordering::Relaxed));
+                sp_id, FIQ_PREEMPT_COUNT[cpu].load(Ordering::Relaxed));
             sp.transition_to(crate::sp_context::SpState::Preempted)
                 .expect("SP Preempted transition failed");
 
@@ -521,12 +584,13 @@ fn handle_sp_exit(
         sp.transition_to(crate::sp_context::SpState::Running)
             .expect("SP Running transition failed (re-enter)");
 
-        SP_IRQ_PREEMPTED.store(false, Ordering::Release);
+        let cpu = sel2_cpu_id();
+        SP_IRQ_PREEMPTED[cpu].store(false, Ordering::Release);
         inject_pending_virq(sp);
 
         let s2 = crate::secure_stage2::SecureStage2Config::new_from_vsttbr(sp.vsttbr());
         s2.install();
-        CURRENT_RUNNING_SP.store(sp_id, Ordering::Release);
+        CURRENT_RUNNING_SP[cpu].store(sp_id, Ordering::Release);
 
         sp.restore_el1_state();
         crate::arch::aarch64::peripherals::timer::arm_preemption_timer();
@@ -541,7 +605,7 @@ fn handle_sp_exit(
         let sp = post_enter_guest();
         sp.save_el1_state();
 
-        CURRENT_RUNNING_SP.store(0, Ordering::Release);
+        CURRENT_RUNNING_SP[sel2_cpu_id()].store(0, Ordering::Release);
         crate::arch::aarch64::peripherals::timer::disarm_preemption_timer();
     }
 }
@@ -565,13 +629,14 @@ fn resume_preempted_sp(sp_id: u16) -> SmcResult8 {
     sp.transition_to(crate::sp_context::SpState::Running)
         .expect("SP Running transition failed");
 
-    SP_IRQ_PREEMPTED.store(false, Ordering::Release);
+    let cpu = sel2_cpu_id();
+    SP_IRQ_PREEMPTED[cpu].store(false, Ordering::Release);
 
     inject_pending_virq(sp);
 
     let s2 = crate::secure_stage2::SecureStage2Config::new_from_vsttbr(sp.vsttbr());
     s2.install();
-    CURRENT_RUNNING_SP.store(sp_id, Ordering::Release);
+    CURRENT_RUNNING_SP[cpu].store(sp_id, Ordering::Release);
 
     sp.restore_el1_state();
     crate::arch::aarch64::peripherals::timer::arm_preemption_timer();
@@ -586,7 +651,7 @@ fn resume_preempted_sp(sp_id: u16) -> SmcResult8 {
     let sp = post_enter_guest();
     sp.save_el1_state();
 
-    CURRENT_RUNNING_SP.store(0, Ordering::Release);
+    CURRENT_RUNNING_SP[sel2_cpu_id()].store(0, Ordering::Release);
     crate::arch::aarch64::peripherals::timer::disarm_preemption_timer();
 
     let result = handle_sp_exit(sp, sp_id);
