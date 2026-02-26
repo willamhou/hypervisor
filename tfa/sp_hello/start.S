@@ -113,10 +113,6 @@ _start:
     mov     x21, x5                 /* handle_hi */
     mov     x22, x6                 /* shared page IPA */
 
-    /* Debug: print "[SP] MEM_TEST\r\n" */
-    adr     x0, str_memtest
-    bl      uart_print
-
     /* Step 1: FFA_MEM_RETRIEVE_REQ_32(handle_lo, handle_hi) */
     ldr     x0, =FFA_MEM_RETRIEVE_REQ_32
     mov     x1, x20                 /* handle_lo */
@@ -133,17 +129,9 @@ _start:
     cmp     x0, x8
     b.ne    .Lmem_test_error
 
-    /* Debug: print "[SP] RETRIEVE OK\r\n" */
-    adr     x0, str_retrieve_ok
-    bl      uart_print
-
     /* Step 2: Write magic to shared page */
     ldr     w8, =SHARED_PAGE_MAGIC
     str     w8, [x22]
-
-    /* Debug: print "[SP] WRITE OK\r\n" */
-    adr     x0, str_write_ok
-    bl      uart_print
 
     /* Step 3: FFA_MEM_RELINQUISH(handle_lo, handle_hi) */
     ldr     x0, =FFA_MEM_RELINQUISH
@@ -214,9 +202,3 @@ uart_print:
 .section .rodata
 str_banner:
     .asciz "[SP] Hello from S-EL1!\r\n"
-str_memtest:
-    .asciz "[SP] MEM_TEST\r\n"
-str_retrieve_ok:
-    .asciz "[SP] RETRIEVE OK\r\n"
-str_write_ok:
-    .asciz "[SP] WRITE OK\r\n"

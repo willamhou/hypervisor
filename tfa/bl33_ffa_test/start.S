@@ -671,7 +671,7 @@ _start:
     /* Verify: x0 == FFA_SUCCESS_32 (MEM_SHARE) */
     ldr     x9, =FFA_SUCCESS_32
     cmp     x0, x9
-    b.ne    .Lfail_14e
+    b.ne    .Lfail_14
 
     /* Save handle in callee-saved registers (x18+ preserved across SMC) */
     mov     x24, x2                /* handle_lo */
@@ -693,24 +693,24 @@ _start:
     /* Verify: x0 == FFA_DIRECT_RESP_32 */
     ldr     x9, =FFA_DIRECT_RESP_32
     cmp     x0, x9
-    b.ne    .Lfail_14a
+    b.ne    .Lfail_14
 
     /* Verify: x4 == handle_lo + 0x4000 (memory test signature from SP) */
     add     x9, x24, #0x4000
     cmp     x4, x9
-    b.ne    .Lfail_14b
+    b.ne    .Lfail_14
 
     /* Verify: x5 == SHARED_PAGE_MAGIC (SP echoes what it wrote) */
     ldr     x9, =SHARED_PAGE_MAGIC
     cmp     x5, x9
-    b.ne    .Lfail_14c
+    b.ne    .Lfail_14
 
     /* Step 3: Verify shared page — SP wrote SHARED_PAGE_MAGIC to _tx_page */
     adr     x8, _tx_page
     ldr     w9, [x8]
     ldr     w10, =SHARED_PAGE_MAGIC
     cmp     w9, w10
-    b.ne    .Lfail_14d
+    b.ne    .Lfail_14
 
     /* Step 4: MEM_RECLAIM to clean up */
     ldr     x0, =FFA_MEM_RECLAIM
@@ -726,28 +726,12 @@ _start:
     /* Verify: x0 == FFA_SUCCESS_32 (MEM_RECLAIM) */
     ldr     x9, =FFA_SUCCESS_32
     cmp     x0, x9
-    b.ne    .Lfail_14e
+    b.ne    .Lfail_14
 
     adr     x0, str_pass
     bl      uart_print
     b       .Ldone
-.Lfail_14a:
-    adr     x0, str_f14a
-    bl      uart_print
-    b       .Ldone
-.Lfail_14b:
-    adr     x0, str_f14b
-    bl      uart_print
-    b       .Ldone
-.Lfail_14c:
-    adr     x0, str_f14c
-    bl      uart_print
-    b       .Ldone
-.Lfail_14d:
-    adr     x0, str_f14d
-    bl      uart_print
-    b       .Ldone
-.Lfail_14e:
+.Lfail_14:
     adr     x0, str_fail
     bl      uart_print
 
@@ -807,14 +791,6 @@ str_t13:
     .asciz "  Test 13: MEM_SHARE + RECLAIM ..... "
 str_t14:
     .asciz "  Test 14: MEM_SHARE lifecycle E2E . "
-str_f14a:
-    .asciz "FAIL(x0!=RESP)\r\n"
-str_f14b:
-    .asciz "FAIL(x4!=sig)\r\n"
-str_f14c:
-    .asciz "FAIL(x5!=magic)\r\n"
-str_f14d:
-    .asciz "FAIL(page!=magic)\r\n"
 str_pass:
     .asciz "PASS\r\n"
 str_fail:

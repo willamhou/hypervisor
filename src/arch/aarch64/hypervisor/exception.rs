@@ -741,9 +741,16 @@ pub extern "C" fn handle_irq_exception(_context: &mut VcpuContext) -> bool {
                     injected = true;
                 }
 
+                // If we injected something, continue the SP.
+                // If the SP has no owned INTIDs, the timer is harmless —
+                // just re-arm and let the SP continue. Do NOT preempt,
+                // otherwise SPs without owned INTIDs (like SP1) get
+                // spuriously preempted and FFA_INTERRUPT is returned
+                // instead of DIRECT_RESP.
                 if injected {
-                    return true;
+                    timer::arm_preemption_timer();
                 }
+                return true;
             }
         }
 
