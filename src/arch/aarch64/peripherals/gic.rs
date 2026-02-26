@@ -153,11 +153,11 @@ pub static GICC: GicCpuInterface = GicCpuInterface::new(platform::GICC_BASE);
 
 /// Initialize the GIC
 pub fn init() {
-    crate::uart_puts(b"[GIC] Initializing GICv2 (system register interface)...\n");
+    crate::log_info!("[GIC] Initializing GICv2 (system register interface)...\n");
 
     // For GICv2 in QEMU, we'll skip detailed initialization for now
     // The GIC should be in a usable state by default
     // We'll enable interrupt routing through HCR_EL2 (already done in exception::init)
 
-    crate::uart_puts(b"[GIC] Using default GIC configuration\n");
+    crate::log_info!("[GIC] Using default GIC configuration\n");
 }

@@ -138,26 +138,20 @@ impl Vm {
 
     /// Initialize memory for the VM
     pub fn init_memory(&mut self, guest_mem_start: u64, guest_mem_size: u64) {
-        use crate::uart_put_hex;
-        use crate::uart_puts;
-
         if self.memory_initialized {
-            uart_puts(b"[VM] Memory already initialized\n");
+            crate::log_info!("[VM] Memory already initialized\n");
             return;
         }
 
-        uart_puts(b"[VM] Initializing memory mapping...\n");
+        crate::log_info!("[VM] Initializing memory mapping...\n");
 
         // Round to 2MB boundaries
         let start_aligned = guest_mem_start & !BLOCK_MASK_2MB;
         let size_aligned =
             ((guest_mem_size + BLOCK_SIZE_2MB - 1) / BLOCK_SIZE_2MB) * BLOCK_SIZE_2MB;
 
-        uart_puts(b"[VM] Mapping region: 0x");
-        uart_put_hex(start_aligned);
-        uart_puts(b" - 0x");
-        uart_put_hex(start_aligned + size_aligned);
-        uart_puts(b"\n");
+        crate::log_info!("[VM] Mapping region: {:#018x} - {:#018x}\n",
+            start_aligned, start_aligned + size_aligned);
 
         #[cfg(feature = "linux_guest")]
         self.init_memory_dynamic(start_aligned, size_aligned);
@@ -166,7 +160,7 @@ impl Vm {
         self.init_memory_static(start_aligned, size_aligned);
 
         self.memory_initialized = true;
-        uart_puts(b"[VM] Memory mapping complete\n");
+        crate::log_info!("[VM] Memory mapping complete\n");
     }
 
     /// Static mapper path for unit tests (no 4KB page support needed)
@@ -200,7 +194,6 @@ impl Vm {
         use crate::arch::aarch64::mm::mmu::{
             init_stage2_from_config, DynamicIdentityMapper, MemoryAttribute,
         };
-        use crate::uart_puts;
 
         let mut mapper = DynamicIdentityMapper::new();
 
@@ -232,28 +225,19 @@ impl Vm {
             // Map the portion before the heap (if any)
             if start_aligned < overlap_start {
                 let before_size = overlap_start - start_aligned;
-                uart_puts(b"[VM] Guest region before heap: 0x");
-                crate::uart_put_hex(start_aligned);
-                uart_puts(b" - 0x");
-                crate::uart_put_hex(overlap_start);
-                uart_puts(b"\n");
+                crate::log_info!("[VM] Guest region before heap: {:#018x} - {:#018x}\n",
+                    start_aligned, overlap_start);
                 mapper
                     .map_region(start_aligned, before_size, MemoryAttribute::Normal)
                     .expect("Failed to map guest memory before heap");
             }
-            uart_puts(b"[VM] Heap gap (unmapped): 0x");
-            crate::uart_put_hex(overlap_start);
-            uart_puts(b" - 0x");
-            crate::uart_put_hex(overlap_end);
-            uart_puts(b"\n");
+            crate::log_info!("[VM] Heap gap (unmapped): {:#018x} - {:#018x}\n",
+                overlap_start, overlap_end);
             // Map the portion after the heap (if any)
             if overlap_end < end_aligned {
                 let after_size = end_aligned - overlap_end;
-                uart_puts(b"[VM] Guest region after heap: 0x");
-                crate::uart_put_hex(overlap_end);
-                uart_puts(b" - 0x");
-                crate::uart_put_hex(end_aligned);
-                uart_puts(b"\n");
+                crate::log_info!("[VM] Guest region after heap: {:#018x} - {:#018x}\n",
+                    overlap_end, end_aligned);
                 mapper
                     .map_region(overlap_end, after_size, MemoryAttribute::Normal)
                     .expect("Failed to map guest memory after heap");
@@ -285,7 +269,7 @@ impl Vm {
                 .unmap_4kb_page(addr)
                 .expect("Failed to unmap GICD page");
         }
-        uart_puts(b"[VM] GICD unmapped (trap to EL2 via VirtualGicd)\n");
+        crate::log_info!("[VM] GICD unmapped (trap to EL2 via VirtualGicd)\n");
 
         // Unmap all GICR frames (each = 128KB = 32 × 4KB pages)
         for cpu in 0..platform::num_cpus() {
@@ -297,7 +281,7 @@ impl Vm {
                     .expect("Failed to unmap GICR page");
             }
         }
-        uart_puts(b"[VM] All GICRs unmapped (trap to EL2 via VirtualGicr)\n");
+        crate::log_info!("[VM] All GICRs unmapped (trap to EL2 via VirtualGicr)\n");
 
         // UART (0x09000000) is NOT mapped — all accesses trap to VirtualUart
 
@@ -432,8 +416,6 @@ impl Vm {
     #[cfg(feature = "multi_pcpu")]
     #[allow(unreachable_code)]
     pub fn run_vcpu(&mut self, vcpu_id: usize) -> Result<(), &'static str> {
-        use crate::uart_puts;
-
         if self.state != VmState::Ready {
             return Err("VM is not in Ready state");
         }
@@ -446,7 +428,7 @@ impl Vm {
         vs.vcpu_online_mask
             .fetch_or(1 << vcpu_id, Ordering::Release);
 
-        uart_puts(b"[VM] pCPU 0 entering run_vcpu loop for vCPU 0\n");
+        crate::log_info!("[VM] pCPU 0 entering run_vcpu loop for vCPU 0\n");
 
         loop {
             // Drain physical UART RX bytes → VirtualUart → inject SPI 33
@@ -472,7 +454,7 @@ impl Vm {
                         .compare_exchange(true, false, Ordering::Acquire, Ordering::Relaxed)
                         .is_ok()
                     {
-                        uart_puts(b"[VM] vCPU 0 terminal exit\n");
+                        crate::log_info!("[VM] vCPU 0 terminal exit\n");
                         break;
                     }
                     // Normal exit — IRQ handler exited to host for processing
@@ -505,11 +487,8 @@ impl Vm {
         if let Some((target, entry, ctx_id)) = vs.pending_cpu_on.take() {
             let vcpu_id = (target & 0xFF) as usize;
             if vcpu_id < MAX_VCPUS && self.vcpus[vcpu_id].is_none() {
-                crate::uart_puts(b"[VM] Booting secondary vCPU ");
-                crate::uart_put_hex(vcpu_id as u64);
-                crate::uart_puts(b" at entry=0x");
-                crate::uart_put_hex(entry);
-                crate::uart_puts(b"\n");
+                crate::log_info!("[VM] Booting secondary vCPU {} at entry={:#018x}\n",
+                    vcpu_id, entry);
                 self.boot_secondary_vcpu(vcpu_id, entry, ctx_id);
             }
         }
@@ -734,12 +713,10 @@ impl Vm {
 /// UART RX is only delivered to VM 0. VM 1 has TX-only virtual UART.
 #[cfg(not(feature = "multi_pcpu"))]
 pub fn run_multi_vm(vms: &mut [Vm]) {
-    use crate::uart_puts;
-
     // Mark all VMs as Running and vCPU 0 as online
     for vm in vms.iter_mut() {
         if vm.state != VmState::Ready {
-            uart_puts(b"[MULTI-VM] VM not ready, skipping\n");
+            crate::log_info!("[MULTI-VM] VM not ready, skipping\n");
             continue;
         }
         vm.state = VmState::Running;
@@ -766,9 +743,7 @@ pub fn run_multi_vm(vms: &mut [Vm]) {
             if vm.run_one_iteration() {
                 done[vm.id] = true;
                 vm.state = VmState::Ready;
-                uart_puts(b"[MULTI-VM] VM ");
-                crate::uart_put_hex(vm.id as u64);
-                uart_puts(b" finished\n");
+                crate::log_info!("[MULTI-VM] VM {} finished\n", vm.id);
             }
         }
         if all_done {

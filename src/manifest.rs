@@ -19,7 +19,7 @@ static mut MANIFEST: Option<SpMcManifest> = None;
 /// v1.0 (DEN0077A). Falls back to defaults on parse failure.
 pub fn init(manifest_addr: usize) {
     if manifest_addr == 0 {
-        crate::uart_puts(b"[SPMC] WARNING: manifest addr=0, using defaults\n");
+        crate::log_warn!("[SPMC] WARNING: manifest addr=0, using defaults\n");
         set_defaults();
         return;
     }
@@ -53,7 +53,7 @@ pub fn init(manifest_addr: usize) {
             }
         }
         Err(_) => {
-            crate::uart_puts(b"[SPMC] WARNING: manifest FDT parse failed, using defaults\n");
+            crate::log_warn!("[SPMC] WARNING: manifest FDT parse failed, using defaults\n");
             set_defaults();
         }
     }

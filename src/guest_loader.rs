@@ -5,8 +5,6 @@
 
 use crate::arch::aarch64::defs::*;
 use crate::platform;
-use crate::uart_put_hex;
-use crate::uart_puts;
 use crate::vm::Vm;
 
 /// Guest type for different kernel formats
@@ -45,34 +43,25 @@ impl GuestConfig {
             let magic = core::slice::from_raw_parts(elf_header, 4);
 
             // Debug: print first 8 bytes at load address
-            uart_puts(b"[GUEST] First 8 bytes at load addr: ");
+            crate::log_info!("[GUEST] First 8 bytes at load addr: ");
             for i in 0..8 {
                 let byte = *elf_header.add(i);
-                let hex_chars = b"0123456789abcdef";
-                uart_puts(&[
-                    hex_chars[(byte >> 4) as usize],
-                    hex_chars[(byte & 0xf) as usize],
-                    b' ',
-                ]);
+                crate::log_info!("{:02x} ", byte);
             }
-            uart_puts(b"\n");
+            crate::log_info!("\n");
 
             if magic == [0x7F, b'E', b'L', b'F'] {
                 // Valid ELF, read e_entry at offset 0x18
                 let e_entry_ptr = (load_addr + 0x18) as *const u64;
                 let entry = core::ptr::read_volatile(e_entry_ptr);
-                uart_puts(b"[GUEST] ELF detected, e_entry = 0x");
-                uart_put_hex(entry);
-                uart_puts(b"\n");
+                crate::log_info!("[GUEST] ELF detected, e_entry = {:#018x}\n", entry);
                 entry
             } else {
                 // Not an ELF - QEMU loaded raw segments
-                uart_puts(b"[GUEST] No ELF magic - checking for branch instruction\n");
+                crate::log_info!("[GUEST] No ELF magic - checking for branch instruction\n");
 
                 let first_instr = core::ptr::read_volatile(load_addr as *const u32);
-                uart_puts(b"[GUEST] First instruction: 0x");
-                uart_put_hex(first_instr as u64);
-                uart_puts(b"\n");
+                crate::log_info!("[GUEST] First instruction: {:#010x}\n", first_instr);
 
                 if (first_instr >> 26) == 0b000101 {
                     // B imm26 - unconditional branch
@@ -83,14 +72,11 @@ impl GuestConfig {
                         (imm26 as i32) * 4
                     };
                     let target = (load_addr as i64 + offset as i64) as u64;
-                    uart_puts(b"[GUEST] Branch to offset ");
-                    uart_put_hex(offset as u64);
-                    uart_puts(b", target = 0x");
-                    uart_put_hex(target);
-                    uart_puts(b"\n");
+                    crate::log_info!("[GUEST] Branch to offset {:#018x}, target = {:#018x}\n",
+                        offset as u64, target);
                     target
                 } else {
-                    uart_puts(b"[GUEST] Using load address as entry\n");
+                    crate::log_info!("[GUEST] Using load address as entry\n");
                     load_addr
                 }
             }
@@ -116,31 +102,24 @@ impl GuestConfig {
             let header = kernel_addr as *const u8;
 
             // Debug: print header
-            uart_puts(b"[LINUX] First 64 bytes of Image header:\n");
+            crate::log_info!("[LINUX] First 64 bytes of Image header:\n");
             for row in 0..4 {
-                uart_puts(b"  ");
+                crate::log_info!("  ");
                 for col in 0..16 {
                     let byte = *header.add(row * 16 + col);
-                    let hex_chars = b"0123456789abcdef";
-                    uart_puts(&[
-                        hex_chars[(byte >> 4) as usize],
-                        hex_chars[(byte & 0xf) as usize],
-                        b' ',
-                    ]);
+                    crate::log_info!("{:02x} ", byte);
                 }
-                uart_puts(b"\n");
+                crate::log_info!("\n");
             }
 
             // Check for ARM64 magic at offset 0x38
             let magic = core::ptr::read_volatile((kernel_addr + 0x38) as *const u32);
             if magic == 0x644d5241 {
                 // "ARMd" little-endian
-                uart_puts(b"[LINUX] ARM64 Image format detected\n");
+                crate::log_info!("[LINUX] ARM64 Image format detected\n");
 
                 let text_offset = core::ptr::read_volatile((kernel_addr + 0x08) as *const u64);
-                uart_puts(b"[LINUX] text_offset = 0x");
-                uart_put_hex(text_offset);
-                uart_puts(b"\n");
+                crate::log_info!("[LINUX] text_offset = {:#018x}\n", text_offset);
 
                 if text_offset != 0 && text_offset < 0x100000 {
                     kernel_addr + text_offset
@@ -148,14 +127,12 @@ impl GuestConfig {
                     kernel_addr
                 }
             } else {
-                uart_puts(b"[LINUX] WARNING: No ARM64 magic, using kernel address\n");
+                crate::log_warn!("[LINUX] WARNING: No ARM64 magic, using kernel address\n");
                 kernel_addr
             }
         };
 
-        uart_puts(b"[LINUX] Entry point: 0x");
-        uart_put_hex(entry_point);
-        uart_puts(b"\n");
+        crate::log_info!("[LINUX] Entry point: {:#018x}\n", entry_point);
 
         // Stage-2 mapping must cover from GUEST_RAM_BASE through the end of
         // the DTB-declared memory region (GUEST_LOAD_ADDR + LINUX_MEM_SIZE).
@@ -212,37 +189,27 @@ impl GuestConfig {
 
 /// Boot a guest VM with the given configuration
 pub fn run_guest(config: &GuestConfig) -> Result<(), &'static str> {
-    uart_puts(b"\n========================================\n");
-    uart_puts(b"  Guest VM Boot\n");
-    uart_puts(b"========================================\n");
+    crate::log_info!("\n========================================\n");
+    crate::log_info!("  Guest VM Boot\n");
+    crate::log_info!("========================================\n");
 
-    uart_puts(b"[GUEST] Load address: 0x");
-    uart_put_hex(config.load_addr);
-    uart_puts(b"\n");
-
-    uart_puts(b"[GUEST] Memory size: ");
-    uart_put_hex(config.mem_size);
-    uart_puts(b" bytes\n");
-
-    uart_puts(b"[GUEST] Entry point: 0x");
-    uart_put_hex(config.entry_point);
-    uart_puts(b"\n\n");
+    crate::log_info!("[GUEST] Load address: {:#018x}\n", config.load_addr);
+    crate::log_info!("[GUEST] Memory size: {:#018x} bytes\n", config.mem_size);
+    crate::log_info!("[GUEST] Entry point: {:#018x}\n\n", config.entry_point);
 
     // Create VM
-    uart_puts(b"[GUEST] Creating VM...\n");
+    crate::log_info!("[GUEST] Creating VM...\n");
     let mut vm = Vm::new(0);
 
     // Initialize memory mapping for guest
-    uart_puts(b"[GUEST] Initializing Stage-2 memory...\n");
+    crate::log_info!("[GUEST] Initializing Stage-2 memory...\n");
     vm.init_memory(config.load_addr, config.mem_size);
 
     // Create vCPU with guest entry point
     let guest_sp = config.load_addr + config.mem_size - platform::GUEST_STACK_RESERVE;
 
-    uart_puts(b"[GUEST] Creating vCPU...\n");
-    uart_puts(b"[GUEST] Stack pointer: 0x");
-    uart_put_hex(guest_sp);
-    uart_puts(b"\n");
+    crate::log_info!("[GUEST] Creating vCPU...\n");
+    crate::log_info!("[GUEST] Stack pointer: {:#018x}\n", guest_sp);
 
     match vm.create_vcpu(0) {
         Ok(vcpu) => {
@@ -251,10 +218,8 @@ pub fn run_guest(config: &GuestConfig) -> Result<(), &'static str> {
 
             // Set up Linux boot protocol if this is a Linux guest
             if config.guest_type == GuestType::Linux {
-                uart_puts(b"[GUEST] Setting up Linux boot protocol...\n");
-                uart_puts(b"[GUEST] x0 (DTB) = 0x");
-                uart_put_hex(config.dtb_addr);
-                uart_puts(b"\n");
+                crate::log_info!("[GUEST] Setting up Linux boot protocol...\n");
+                crate::log_info!("[GUEST] x0 (DTB) = {:#018x}\n", config.dtb_addr);
 
                 // Linux ARM64 boot protocol:
                 // x0 = physical address of device tree blob (DTB)
@@ -266,20 +231,18 @@ pub fn run_guest(config: &GuestConfig) -> Result<(), &'static str> {
             }
         }
         Err(e) => {
-            uart_puts(b"[GUEST] Failed to create vCPU: ");
-            uart_puts(e.as_bytes());
-            uart_puts(b"\n");
+            crate::log_info!("[GUEST] Failed to create vCPU: {}\n", e);
             return Err(e);
         }
     }
 
     // Initialize guest timer access
-    uart_puts(b"[GUEST] Configuring virtual timer for guest...\n");
+    crate::log_info!("[GUEST] Configuring virtual timer for guest...\n");
     crate::arch::aarch64::peripherals::timer::init_guest_timer();
 
     // Initialize EL1 system registers to clean state for Linux boot
     if config.guest_type == GuestType::Linux {
-        uart_puts(b"[GUEST] Initializing EL1/EL2 registers...\n");
+        crate::log_info!("[GUEST] Initializing EL1/EL2 registers...\n");
 
         // Set initial EL1 state in vCPU 0's arch_state (restored on guest entry)
         if let Some(vcpu) = vm.vcpu_mut(0) {
@@ -314,7 +277,7 @@ pub fn run_guest(config: &GuestConfig) -> Result<(), &'static str> {
                 options(nostack),
             );
         }
-        uart_puts(b"[GUEST] EL1/EL2 registers initialized\n");
+        crate::log_info!("[GUEST] EL1/EL2 registers initialized\n");
     }
 
     // For Linux guests: configure WFI/WFE trapping.
@@ -370,10 +333,8 @@ pub fn run_guest(config: &GuestConfig) -> Result<(), &'static str> {
     }
 
     // Enter guest
-    uart_puts(b"[GUEST] Entering guest at 0x");
-    uart_put_hex(config.entry_point);
-    uart_puts(b"...\n");
-    uart_puts(b"========================================\n\n");
+    crate::log_info!("[GUEST] Entering guest at {:#018x}...\n", config.entry_point);
+    crate::log_info!("========================================\n\n");
 
     // Run VM - use SMP scheduling for Linux, single vCPU for others
     #[cfg(not(feature = "multi_pcpu"))]
@@ -393,21 +354,12 @@ pub fn run_guest(config: &GuestConfig) -> Result<(), &'static str> {
     };
 
     // Debug: check UART state after guest exits
-    uart_puts(b"\n[GUEST] Guest exited, checking UART state...\n");
+    crate::log_info!("\n[GUEST] Guest exited, checking UART state...\n");
     unsafe {
         let uart_base = crate::dtb::platform_info().uart_base as usize;
         let uartfr = core::ptr::read_volatile((uart_base + 0x18) as *const u32);
-        uart_puts(b"[GUEST] UART FR: 0x");
-        let fr_bytes = [
-            b"0123456789abcdef"[((uartfr >> 12) & 0xF) as usize],
-            b"0123456789abcdef"[((uartfr >> 8) & 0xF) as usize],
-            b"0123456789abcdef"[((uartfr >> 4) & 0xF) as usize],
-            b"0123456789abcdef"[(uartfr & 0xF) as usize],
-        ];
-        uart_puts(&fr_bytes);
-        uart_puts(b"\n");
-
-        uart_puts(b"[GUEST] Test output after guest: OK\n");
+        crate::log_info!("[GUEST] UART FR: {:#06x}\n", uartfr);
+        crate::log_info!("[GUEST] Test output after guest: OK\n");
     }
 
     result
@@ -419,7 +371,6 @@ pub fn run_guest(config: &GuestConfig) -> Result<(), &'static str> {
 /// 1. GICD: enable INTID 33, set priority, route to PE 0
 /// 2. Physical PL011: enable RX interrupt in UARTIMSC
 fn enable_physical_uart_irq() {
-    use crate::uart_puts;
     const GICD_BASE: u64 = 0x0800_0000;
     const UART_BASE: u64 = 0x0900_0000;
     const INTID: u32 = 33; // SPI 1
@@ -444,7 +395,7 @@ fn enable_physical_uart_irq() {
         core::ptr::write_volatile(uartimsc, current | (1 << 4));
     }
 
-    uart_puts(b"[GUEST] Physical UART RX interrupt enabled (INTID 33)\n");
+    crate::log_info!("[GUEST] Physical UART RX interrupt enabled (INTID 33)\n");
 }
 
 /// Wake secondary pCPUs via real PSCI CPU_ON SMC calls to QEMU firmware.
@@ -455,8 +406,6 @@ fn enable_physical_uart_irq() {
 /// `secondary_entry` in boot.S (EL2, MMU off).
 #[cfg(feature = "multi_pcpu")]
 fn wake_secondary_pcpus() {
-    use crate::uart_put_hex;
-    use crate::uart_puts;
     // PSCI CPU_ON (64-bit): function_id=0xC4000003
     const PSCI_CPU_ON_64: u64 = 0xC400_0003;
     const PSCI_SUCCESS: u64 = 0;
@@ -469,10 +418,8 @@ fn wake_secondary_pcpus() {
 
     let num_cpus = crate::platform::num_cpus();
     let entry_addr = secondary_entry as *const () as usize as u64;
-    uart_puts(b"[SMP] Waking secondary pCPUs via PSCI CPU_ON...\n");
-    uart_puts(b"[SMP] secondary_entry = 0x");
-    uart_put_hex(entry_addr);
-    uart_puts(b"\n");
+    crate::log_info!("[SMP] Waking secondary pCPUs via PSCI CPU_ON...\n");
+    crate::log_info!("[SMP] secondary_entry = {:#018x}\n", entry_addr);
 
     for cpu_id in 1..num_cpus {
         let target_mpidr = cpu_id as u64; // Aff0 = cpu_id
@@ -504,17 +451,13 @@ fn wake_secondary_pcpus() {
             );
         }
 
-        uart_puts(b"[SMP] PSCI CPU_ON for pCPU ");
-        uart_puts(&[b'0' + cpu_id as u8]);
         if ret == PSCI_SUCCESS {
-            uart_puts(b" -> SUCCESS\n");
+            crate::log_info!("[SMP] PSCI CPU_ON for pCPU {} -> SUCCESS\n", cpu_id);
         } else {
-            uart_puts(b" -> FAILED (0x");
-            uart_put_hex(ret);
-            uart_puts(b")\n");
+            crate::log_warn!("[SMP] PSCI CPU_ON for pCPU {} -> FAILED ({:#018x})\n", cpu_id, ret);
         }
     }
-    uart_puts(b"[SMP] All secondary pCPUs signaled\n");
+    crate::log_info!("[SMP] All secondary pCPUs signaled\n");
 }
 
 /// Boot two Linux VMs time-sliced on a single pCPU.
@@ -527,17 +470,14 @@ pub fn run_multi_vm_guests() -> Result<(), &'static str> {
     use crate::arch::aarch64::defs::*;
     use crate::vm::{run_multi_vm, Vm};
 
-    uart_puts(b"\n========================================\n");
-    uart_puts(b"  Multi-VM Boot (2 Linux VMs)\n");
-    uart_puts(b"========================================\n\n");
+    crate::log_info!("\n========================================\n");
+    crate::log_info!("  Multi-VM Boot (2 Linux VMs)\n");
+    crate::log_info!("========================================\n\n");
 
     // --- VM 0 setup ---
     let config0 = GuestConfig::linux_default();
-    uart_puts(b"[MULTI-VM] VM 0: entry=0x");
-    uart_put_hex(config0.entry_point);
-    uart_puts(b" dtb=0x");
-    uart_put_hex(config0.dtb_addr);
-    uart_puts(b"\n");
+    crate::log_info!("[MULTI-VM] VM 0: entry={:#018x} dtb={:#018x}\n",
+        config0.entry_point, config0.dtb_addr);
 
     let mut vm0 = Vm::new(0);
     vm0.init_memory(config0.load_addr, config0.mem_size);
@@ -564,11 +504,8 @@ pub fn run_multi_vm_guests() -> Result<(), &'static str> {
 
     // --- VM 1 setup ---
     let config1 = GuestConfig::linux_vm1();
-    uart_puts(b"[MULTI-VM] VM 1: entry=0x");
-    uart_put_hex(config1.entry_point);
-    uart_puts(b" dtb=0x");
-    uart_put_hex(config1.dtb_addr);
-    uart_puts(b"\n");
+    crate::log_info!("[MULTI-VM] VM 1: entry={:#018x} dtb={:#018x}\n",
+        config1.entry_point, config1.dtb_addr);
 
     // Save VM 0's Stage-2 before VM 1 creates its own
     let vm0_vttbr = vm0.vttbr();
@@ -654,14 +591,14 @@ pub fn run_multi_vm_guests() -> Result<(), &'static str> {
     // Both VMs' Stage-2 are configured and PER_VM_VTTBR is populated.
     test_ffa_vm_to_vm_integration(vm0_vttbr);
 
-    uart_puts(b"[MULTI-VM] Starting round-robin scheduler...\n");
-    uart_puts(b"========================================\n\n");
+    crate::log_info!("[MULTI-VM] Starting round-robin scheduler...\n");
+    crate::log_info!("========================================\n\n");
 
     // Run both VMs with the two-level scheduler
     let mut vms = [vm0, vm1];
     run_multi_vm(&mut vms);
 
-    uart_puts(b"\n[MULTI-VM] All VMs finished\n");
+    crate::log_info!("\n[MULTI-VM] All VMs finished\n");
     Ok(())
 }
 
@@ -680,7 +617,7 @@ fn test_ffa_vm_to_vm_integration(vm0_vttbr: u64) {
     use crate::global::{CURRENT_VM_ID, PER_VM_VTTBR};
     use core::sync::atomic::Ordering;
 
-    uart_puts(b"\n=== Test: FF-A Integration (VM-to-VM with Stage-2) ===\n");
+    crate::log_info!("\n=== Test: FF-A Integration (VM-to-VM with Stage-2) ===\n");
     let mut pass: u64 = 0;
     let mut fail: u64 = 0;
 
@@ -710,19 +647,12 @@ fn test_ffa_vm_to_vm_integration(vm0_vttbr: u64) {
     let handle = ctx.gp_regs.x2 | (ctx.gp_regs.x3 << 32);
 
     if cont && ctx.gp_regs.x0 == ffa::FFA_SUCCESS_32 && handle > 0 {
-        uart_puts(b"  [PASS] 1: MEM_SHARE VM0->VM1 handle=0x");
-        uart_put_hex(handle);
-        uart_puts(b"\n");
+        crate::log_info!("  [PASS] 1: MEM_SHARE VM0->VM1 handle={:#018x}\n", handle);
         pass += 1;
     } else {
-        uart_puts(b"  [FAIL] 1: MEM_SHARE VM0->VM1\n");
+        crate::log_info!("  [FAIL] 1: MEM_SHARE VM0->VM1\n");
         fail += 1;
-        // Cannot continue without a valid handle
-        uart_puts(b"  Results: ");
-        crate::uart_put_u64(pass);
-        uart_puts(b" passed, ");
-        crate::uart_put_u64(fail);
-        uart_puts(b" failed\n");
+        crate::log_info!("  Results: {} passed, {} failed\n", pass, fail);
         assert!(false, "FF-A integration: MEM_SHARE failed");
         return;
     }
@@ -732,12 +662,10 @@ fn test_ffa_vm_to_vm_integration(vm0_vttbr: u64) {
         let walker = Stage2Walker::from_vttbr();
         let sw = walker.read_sw_bits(TEST_IPA);
         if sw == Some(PageOwnership::SharedOwned as u8) {
-            uart_puts(b"  [PASS] 2: Sender PTE SW = SharedOwned\n");
+            crate::log_info!("  [PASS] 2: Sender PTE SW = SharedOwned\n");
             pass += 1;
         } else {
-            uart_puts(b"  [FAIL] 2: Sender PTE SW = 0x");
-            uart_put_hex(sw.unwrap_or(0xFF) as u64);
-            uart_puts(b"\n");
+            crate::log_info!("  [FAIL] 2: Sender PTE SW = {:#04x}\n", sw.unwrap_or(0xFF));
             fail += 1;
         }
     }
@@ -748,12 +676,10 @@ fn test_ffa_vm_to_vm_integration(vm0_vttbr: u64) {
         let s2ap = walker.read_s2ap(TEST_IPA);
         let expected = (S2AP_RO >> S2AP_SHIFT) as u8;
         if s2ap == Some(expected) {
-            uart_puts(b"  [PASS] 3: Sender S2AP = RO\n");
+            crate::log_info!("  [PASS] 3: Sender S2AP = RO\n");
             pass += 1;
         } else {
-            uart_puts(b"  [FAIL] 3: Sender S2AP = 0x");
-            uart_put_hex(s2ap.unwrap_or(0xFF) as u64);
-            uart_puts(b"\n");
+            crate::log_info!("  [FAIL] 3: Sender S2AP = {:#04x}\n", s2ap.unwrap_or(0xFF));
             fail += 1;
         }
     }
@@ -780,12 +706,10 @@ fn test_ffa_vm_to_vm_integration(vm0_vttbr: u64) {
         ctx.gp_regs.x2 = handle >> 32;
         let cont = ffa::proxy::handle_ffa_call(&mut ctx);
         if cont && ctx.gp_regs.x0 == ffa::FFA_MEM_RETRIEVE_RESP {
-            uart_puts(b"  [PASS] 4: MEM_RETRIEVE_REQ by VM1\n");
+            crate::log_info!("  [PASS] 4: MEM_RETRIEVE_REQ by VM1\n");
             pass += 1;
         } else {
-            uart_puts(b"  [FAIL] 4: MEM_RETRIEVE_REQ x0=0x");
-            uart_put_hex(ctx.gp_regs.x0);
-            uart_puts(b"\n");
+            crate::log_info!("  [FAIL] 4: MEM_RETRIEVE_REQ x0={:#018x}\n", ctx.gp_regs.x0);
             fail += 1;
         }
     }
@@ -795,12 +719,10 @@ fn test_ffa_vm_to_vm_integration(vm0_vttbr: u64) {
         let walker = Stage2Walker::new(vm1_l0_pa);
         let sw = walker.read_sw_bits(TEST_IPA);
         if sw == Some(PageOwnership::SharedBorrowed as u8) {
-            uart_puts(b"  [PASS] 5: Receiver PTE SW = SharedBorrowed\n");
+            crate::log_info!("  [PASS] 5: Receiver PTE SW = SharedBorrowed\n");
             pass += 1;
         } else {
-            uart_puts(b"  [FAIL] 5: Receiver PTE SW = 0x");
-            uart_put_hex(sw.unwrap_or(0xFF) as u64);
-            uart_puts(b"\n");
+            crate::log_info!("  [FAIL] 5: Receiver PTE SW = {:#04x}\n", sw.unwrap_or(0xFF));
             fail += 1;
         }
     }
@@ -811,12 +733,10 @@ fn test_ffa_vm_to_vm_integration(vm0_vttbr: u64) {
         let s2ap = walker.read_s2ap(TEST_IPA);
         let expected = (S2AP_RW >> S2AP_SHIFT) as u8;
         if s2ap == Some(expected) {
-            uart_puts(b"  [PASS] 6: Receiver S2AP = RW\n");
+            crate::log_info!("  [PASS] 6: Receiver S2AP = RW\n");
             pass += 1;
         } else {
-            uart_puts(b"  [FAIL] 6: Receiver S2AP = 0x");
-            uart_put_hex(s2ap.unwrap_or(0xFF) as u64);
-            uart_puts(b"\n");
+            crate::log_info!("  [FAIL] 6: Receiver S2AP = {:#04x}\n", s2ap.unwrap_or(0xFF));
             fail += 1;
         }
     }
@@ -829,12 +749,10 @@ fn test_ffa_vm_to_vm_integration(vm0_vttbr: u64) {
         ctx.gp_regs.x2 = handle >> 32;
         let cont = ffa::proxy::handle_ffa_call(&mut ctx);
         if cont && ctx.gp_regs.x0 == ffa::FFA_SUCCESS_32 {
-            uart_puts(b"  [PASS] 7: MEM_RELINQUISH by VM1\n");
+            crate::log_info!("  [PASS] 7: MEM_RELINQUISH by VM1\n");
             pass += 1;
         } else {
-            uart_puts(b"  [FAIL] 7: MEM_RELINQUISH x0=0x");
-            uart_put_hex(ctx.gp_regs.x0);
-            uart_puts(b"\n");
+            crate::log_info!("  [FAIL] 7: MEM_RELINQUISH x0={:#018x}\n", ctx.gp_regs.x0);
             fail += 1;
         }
     }
@@ -844,12 +762,10 @@ fn test_ffa_vm_to_vm_integration(vm0_vttbr: u64) {
         let walker = Stage2Walker::new(vm1_l0_pa);
         let sw = walker.read_sw_bits(TEST_IPA);
         if sw.is_none() {
-            uart_puts(b"  [PASS] 8: Receiver page unmapped after RELINQUISH\n");
+            crate::log_info!("  [PASS] 8: Receiver page unmapped after RELINQUISH\n");
             pass += 1;
         } else {
-            uart_puts(b"  [FAIL] 8: Receiver page still mapped, SW=0x");
-            uart_put_hex(sw.unwrap() as u64);
-            uart_puts(b"\n");
+            crate::log_info!("  [FAIL] 8: Receiver page still mapped, SW={:#04x}\n", sw.unwrap());
             fail += 1;
         }
     }
@@ -873,12 +789,10 @@ fn test_ffa_vm_to_vm_integration(vm0_vttbr: u64) {
         ctx.gp_regs.x2 = handle >> 32;
         let cont = ffa::proxy::handle_ffa_call(&mut ctx);
         if cont && ctx.gp_regs.x0 == ffa::FFA_SUCCESS_32 {
-            uart_puts(b"  [PASS] 9: MEM_RECLAIM by VM0\n");
+            crate::log_info!("  [PASS] 9: MEM_RECLAIM by VM0\n");
             pass += 1;
         } else {
-            uart_puts(b"  [FAIL] 9: MEM_RECLAIM x0=0x");
-            uart_put_hex(ctx.gp_regs.x0);
-            uart_puts(b"\n");
+            crate::log_info!("  [FAIL] 9: MEM_RECLAIM x0={:#018x}\n", ctx.gp_regs.x0);
             fail += 1;
         }
     }
@@ -888,12 +802,10 @@ fn test_ffa_vm_to_vm_integration(vm0_vttbr: u64) {
         let walker = Stage2Walker::from_vttbr();
         let sw = walker.read_sw_bits(TEST_IPA);
         if sw == Some(PageOwnership::Owned as u8) {
-            uart_puts(b"  [PASS] 10: Sender PTE SW restored to Owned\n");
+            crate::log_info!("  [PASS] 10: Sender PTE SW restored to Owned\n");
             pass += 1;
         } else {
-            uart_puts(b"  [FAIL] 10: Sender PTE SW = 0x");
-            uart_put_hex(sw.unwrap_or(0xFF) as u64);
-            uart_puts(b"\n");
+            crate::log_info!("  [FAIL] 10: Sender PTE SW = {:#04x}\n", sw.unwrap_or(0xFF));
             fail += 1;
         }
     }
@@ -904,21 +816,15 @@ fn test_ffa_vm_to_vm_integration(vm0_vttbr: u64) {
         let s2ap = walker.read_s2ap(TEST_IPA);
         let expected = (S2AP_RW >> S2AP_SHIFT) as u8;
         if s2ap == Some(expected) {
-            uart_puts(b"  [PASS] 11: Sender S2AP restored to RW\n");
+            crate::log_info!("  [PASS] 11: Sender S2AP restored to RW\n");
             pass += 1;
         } else {
-            uart_puts(b"  [FAIL] 11: Sender S2AP = 0x");
-            uart_put_hex(s2ap.unwrap_or(0xFF) as u64);
-            uart_puts(b"\n");
+            crate::log_info!("  [FAIL] 11: Sender S2AP = {:#04x}\n", s2ap.unwrap_or(0xFF));
             fail += 1;
         }
     }
 
     // ── Results ─────────────────────────────────────────────────────
-    uart_puts(b"  Results: ");
-    crate::uart_put_u64(pass);
-    uart_puts(b" passed, ");
-    crate::uart_put_u64(fail);
-    uart_puts(b" failed\n");
+    crate::log_info!("  Results: {} passed, {} failed\n", pass, fail);
     assert!(fail == 0, "FF-A integration tests failed");
 }

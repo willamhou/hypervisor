@@ -41,7 +41,7 @@ pub fn init() {
     #[cfg(feature = "tfa_boot")]
     {
         SPMC_PRESENT.store(true, Ordering::Relaxed);
-        crate::uart_puts(b"[FFA] TF-A boot: SPMC present (build-time)\n");
+        crate::log_info!("[FFA] TF-A boot: SPMC present (build-time)\n");
 
         // Register proxy RXTX buffers with SPMD for PARTITION_INFO relay
         let tx_pa = &raw const PROXY_TX_BUF as u64;
@@ -58,9 +58,9 @@ pub fn init() {
         );
         if result.x0 == FFA_SUCCESS_32 {
             PROXY_RXTX_REGISTERED.store(true, Ordering::Relaxed);
-            crate::uart_puts(b"[FFA] Proxy RXTX registered with SPMD\n");
+            crate::log_info!("[FFA] Proxy RXTX registered with SPMD\n");
         } else {
-            crate::uart_puts(b"[FFA] WARNING: Proxy RXTX registration failed\n");
+            crate::log_warn!("[FFA] WARNING: Proxy RXTX registration failed\n");
         }
 
         return;
@@ -70,7 +70,7 @@ pub fn init() {
     {
         if smc_forward::probe_spmc() {
             SPMC_PRESENT.store(true, Ordering::Relaxed);
-            crate::uart_puts(b"[FFA] Real SPMC detected at EL3\n");
+            crate::log_info!("[FFA] Real SPMC detected at EL3\n");
         }
     }
 }
@@ -393,7 +393,7 @@ fn handle_partition_info_get(context: &mut VcpuContext) -> bool {
         // Release proxy RX back to SPMD
         let release_result = smc_forward::forward_smc8(FFA_RX_RELEASE, 0, 0, 0, 0, 0, 0, 0);
         if release_result.x0 != FFA_SUCCESS_32 {
-            crate::uart_puts(b"[FFA] WARNING: Proxy RX_RELEASE failed\n");
+            crate::log_warn!("[FFA] WARNING: Proxy RX_RELEASE failed\n");
         }
 
         // Transfer guest RX ownership to VM
