@@ -18,6 +18,7 @@ fdt = "0.1.5"
 [profile.dev]
 panic = "abort"
 lto = false  # Disable LTO to prevent code elimination
+opt-level = 1  # Avoid debug-mode stack corruption across enter_guest
 
 [features]
 default = []
@@ -26,7 +27,6 @@ linux_guest = []
 multi_pcpu = ["linux_guest"]
 multi_vm = ["linux_guest"]
 sel2 = []
-vfiq = ["sel2"]
 tfa_boot = ["linux_guest"]
 
 [profile.release]
