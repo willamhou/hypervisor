@@ -528,78 +528,9 @@ _start:
     adr     x0, str_fail
     bl      uart_print
 
-    /* ============ Test 12: Secure vFIQ injection (SP2 HCR_EL2.VF) ============ */
+    /* ============ Test 12: MEM_SHARE + MEM_RECLAIM ============ */
 .Ltest_12:
     adr     x0, str_t12
-    bl      uart_print
-
-    /* Send DIRECT_REQ to SP2 with x3=0xCAFEBEEF (FIQ slow-path trigger) */
-    ldr     x0, =FFA_DIRECT_REQ_32
-    movz    x1, #0x8002
-    movk    x1, #0x0001, lsl #16
-    mov     x2, xzr
-    ldr     x3, =0xCAFEBEEF        /* FIQ slow-path trigger */
-    movz    x4, #0xBBBB            /* SP2 will add 0x3000 -> 0xEBBB */
-    movz    x5, #0xCCCC
-    movz    x6, #0xDDDD
-    movz    x7, #0xEEEE
-    smc     #0
-
-    /* Result is either FFA_INTERRUPT (preempted) or DIRECT_RESP (completed) */
-    ldr     x9, =FFA_DIRECT_RESP_32
-    cmp     x0, x9
-    b.eq    .Ltest12_got_resp
-
-    /* Expect FFA_INTERRUPT — call FFA_RUN to resume */
-    ldr     x9, =FFA_INTERRUPT
-    cmp     x0, x9
-    b.ne    .Lfail_12
-
-    /* FFA_RUN loop: resume SP2, handle possible repeated preemptions */
-    mov     x15, #20               /* max FFA_RUN attempts */
-.Ltest12_run_loop:
-    cbz     x15, .Lfail_12         /* too many preemptions */
-    sub     x15, x15, #1
-
-    ldr     x0, =FFA_RUN
-    movz    x1, #0x0000
-    movk    x1, #0x8002, lsl #16
-    mov     x2, xzr
-    mov     x3, xzr
-    mov     x4, xzr
-    mov     x5, xzr
-    mov     x6, xzr
-    mov     x7, xzr
-    smc     #0
-
-    /* Check if SP2 completed or was preempted again */
-    ldr     x9, =FFA_DIRECT_RESP_32
-    cmp     x0, x9
-    b.eq    .Ltest12_got_resp
-
-    ldr     x9, =FFA_INTERRUPT
-    cmp     x0, x9
-    b.eq    .Ltest12_run_loop      /* preempted again, retry */
-    b       .Lfail_12              /* unexpected response */
-
-.Ltest12_got_resp:
-    /* x4 should be 0xBBBB + 0x3000 = 0xEBBB (FIQ slow-path proof) */
-    movz    x9, #0xEBBB
-    cmp     x4, x9
-    b.ne    .Lfail_12
-    /* x5 should be 30 (INTID of virtual FIQ test) */
-    cmp     x5, #30
-    b.ne    .Lfail_12
-    adr     x0, str_pass
-    bl      uart_print
-    b       .Ltest_13
-.Lfail_12:
-    adr     x0, str_fail
-    bl      uart_print
-
-    /* ============ Test 13: MEM_SHARE + MEM_RECLAIM ============ */
-.Ltest_13:
-    adr     x0, str_t13
     bl      uart_print
 
     /* FFA_MEM_SHARE_32: register-based protocol
@@ -622,7 +553,7 @@ _start:
     /* x0 should be FFA_SUCCESS_32 */
     ldr     x9, =FFA_SUCCESS_32
     cmp     x0, x9
-    b.ne    .Lfail_13
+    b.ne    .Lfail_12
 
     /* Save handle: x2 = low 32 bits, x3 = high 32 bits */
     mov     x16, x2                /* handle_lo */
@@ -642,18 +573,18 @@ _start:
     /* x0 should be FFA_SUCCESS_32 */
     ldr     x9, =FFA_SUCCESS_32
     cmp     x0, x9
-    b.ne    .Lfail_13
+    b.ne    .Lfail_12
 
     adr     x0, str_pass
     bl      uart_print
-    b       .Ltest_14
-.Lfail_13:
+    b       .Ltest_13
+.Lfail_12:
     adr     x0, str_fail
     bl      uart_print
 
-    /* ============ Test 14: MEM_SHARE lifecycle E2E ============ */
-.Ltest_14:
-    adr     x0, str_t14
+    /* ============ Test 13: MEM_SHARE lifecycle E2E ============ */
+.Ltest_13:
+    adr     x0, str_t13
     bl      uart_print
 
     /* Step 1: MEM_SHARE _tx_page with SP1 — get handle */
@@ -671,7 +602,7 @@ _start:
     /* Verify: x0 == FFA_SUCCESS_32 (MEM_SHARE) */
     ldr     x9, =FFA_SUCCESS_32
     cmp     x0, x9
-    b.ne    .Lfail_14
+    b.ne    .Lfail_13
 
     /* Save handle in callee-saved registers (x18+ preserved across SMC) */
     mov     x24, x2                /* handle_lo */
@@ -693,24 +624,24 @@ _start:
     /* Verify: x0 == FFA_DIRECT_RESP_32 */
     ldr     x9, =FFA_DIRECT_RESP_32
     cmp     x0, x9
-    b.ne    .Lfail_14
+    b.ne    .Lfail_13
 
     /* Verify: x4 == handle_lo + 0x4000 (memory test signature from SP) */
     add     x9, x24, #0x4000
     cmp     x4, x9
-    b.ne    .Lfail_14
+    b.ne    .Lfail_13
 
     /* Verify: x5 == SHARED_PAGE_MAGIC (SP echoes what it wrote) */
     ldr     x9, =SHARED_PAGE_MAGIC
     cmp     x5, x9
-    b.ne    .Lfail_14
+    b.ne    .Lfail_13
 
     /* Step 3: Verify shared page — SP wrote SHARED_PAGE_MAGIC to _tx_page */
     adr     x8, _tx_page
     ldr     w9, [x8]
     ldr     w10, =SHARED_PAGE_MAGIC
     cmp     w9, w10
-    b.ne    .Lfail_14
+    b.ne    .Lfail_13
 
     /* Step 4: MEM_RECLAIM to clean up */
     ldr     x0, =FFA_MEM_RECLAIM
@@ -726,12 +657,12 @@ _start:
     /* Verify: x0 == FFA_SUCCESS_32 (MEM_RECLAIM) */
     ldr     x9, =FFA_SUCCESS_32
     cmp     x0, x9
-    b.ne    .Lfail_14
+    b.ne    .Lfail_13
 
     adr     x0, str_pass
     bl      uart_print
     b       .Ldone
-.Lfail_14:
+.Lfail_13:
     adr     x0, str_fail
     bl      uart_print
 
@@ -786,11 +717,9 @@ str_t10:
 str_t11:
     .asciz "  Test 11: Secure vIRQ injection ... "
 str_t12:
-    .asciz "  Test 12: Secure vFIQ injection ... "
+    .asciz "  Test 12: MEM_SHARE + RECLAIM ..... "
 str_t13:
-    .asciz "  Test 13: MEM_SHARE + RECLAIM ..... "
-str_t14:
-    .asciz "  Test 14: MEM_SHARE lifecycle E2E . "
+    .asciz "  Test 13: MEM_SHARE lifecycle E2E . "
 str_pass:
     .asciz "PASS\r\n"
 str_fail:

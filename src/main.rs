@@ -463,11 +463,8 @@ pub extern "C" fn rust_main_sel2(
             );
             sp2.set_vsttbr(s2_config2.vsttbr);
 
-            // Register INTID 29 (Secure Physical Timer PPI) for IRQ delivery
+            // Register INTID 29 (Secure Physical Timer PPI) for vIRQ injection
             sp2.set_owned_intids([29, 0, 0, 0]);
-            // Register INTID 30 for FIQ delivery (virtual FIQ injection test)
-            #[cfg(feature = "vfiq")]
-            sp2.set_fiq_intids([30, 0, 0, 0]);
 
             // Install SP2's Stage-2, clear EL1 state, ERET to SP2
             s2_config2.install();

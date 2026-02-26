@@ -143,14 +143,8 @@ pub struct SpContext {
     uuid: [u32; 4],
     /// Pending virtual interrupt to inject via HCR_EL2.VI on next entry.
     pending_irq: Option<u32>,
-    /// Pending virtual FIQ to inject via HCR_EL2.VF on next entry.
-    #[cfg(feature = "vfiq")]
-    pending_fiq: Option<u32>,
     /// INTIDs owned by this SP, delivered as virtual IRQ (up to 4, 0 = unused).
     owned_intids: [u32; 4],
-    /// INTIDs owned by this SP, delivered as virtual FIQ (up to 4, 0 = unused).
-    #[cfg(feature = "vfiq")]
-    fiq_intids: [u32; 4],
 }
 
 impl SpContext {
@@ -171,11 +165,7 @@ impl SpContext {
             vsttbr: 0,
             uuid,
             pending_irq: None,
-            #[cfg(feature = "vfiq")]
-            pending_fiq: None,
             owned_intids: [0; 4],
-            #[cfg(feature = "vfiq")]
-            fiq_intids: [0; 4],
         }
     }
 
@@ -311,41 +301,6 @@ impl SpContext {
         self.owned_intids.iter().copied().find(|&id| id != 0)
     }
 
-    /// Set the FIQ-delivery INTID array for this SP.
-    #[cfg(feature = "vfiq")]
-    pub fn set_fiq_intids(&mut self, intids: [u32; 4]) {
-        self.fiq_intids = intids;
-    }
-
-    /// Check if this SP owns the given INTID for FIQ delivery.
-    #[cfg(feature = "vfiq")]
-    pub fn is_fiq_delivery(&self, intid: u32) -> bool {
-        self.fiq_intids.iter().any(|&id| id != 0 && id == intid)
-    }
-
-    /// Set a pending virtual FIQ for injection on next SP entry.
-    #[cfg(feature = "vfiq")]
-    pub fn set_pending_fiq(&mut self, intid: u32) {
-        self.pending_fiq = Some(intid);
-    }
-
-    /// Take the pending virtual FIQ (returns None if none pending).
-    #[cfg(feature = "vfiq")]
-    pub fn take_pending_fiq(&mut self) -> Option<u32> {
-        self.pending_fiq.take()
-    }
-
-    /// Check if this SP has a pending FIQ.
-    #[cfg(feature = "vfiq")]
-    pub fn has_pending_fiq(&self) -> bool {
-        self.pending_fiq.is_some()
-    }
-
-    /// Return the first non-zero FIQ INTID, if any.
-    #[cfg(feature = "vfiq")]
-    pub fn first_fiq_intid(&self) -> Option<u32> {
-        self.fiq_intids.iter().copied().find(|&id| id != 0)
-    }
 }
 
 // ── Global SP store ─────────────────────────────────────────────────
@@ -438,40 +393,7 @@ pub fn first_owned_intid_for(sp_id: u16) -> Option<u32> {
     }
 }
 
-/// Get the first FIQ-delivery INTID for a given SP (read-only lookup).
-/// Used by the IRQ handler to inject virtual FIQ without &mut.
-#[cfg(feature = "vfiq")]
-pub fn first_fiq_intid_for(sp_id: u16) -> Option<u32> {
-    unsafe {
-        let contexts = &*SP_STORE.contexts.get();
-        for slot in contexts.iter() {
-            if let Some(ref sp) = slot {
-                if sp.sp_id() == sp_id {
-                    return sp.first_fiq_intid();
-                }
-            }
-        }
-        None
-    }
-}
-
-/// Check if a given INTID is FIQ-delivery for the specified SP.
-#[cfg(feature = "vfiq")]
-pub fn is_fiq_delivery_for(sp_id: u16, intid: u32) -> bool {
-    unsafe {
-        let contexts = &*SP_STORE.contexts.get();
-        for slot in contexts.iter() {
-            if let Some(ref sp) = slot {
-                if sp.sp_id() == sp_id {
-                    return sp.is_fiq_delivery(intid);
-                }
-            }
-        }
-        false
-    }
-}
-
-/// Find which SP owns a given INTID (either IRQ or FIQ delivery).
+/// Find which SP owns a given INTID.
 /// Returns the SP's partition ID, or None.
 pub fn find_sp_for_intid(intid: u32) -> Option<u16> {
     unsafe {
@@ -479,10 +401,6 @@ pub fn find_sp_for_intid(intid: u32) -> Option<u16> {
         for slot in contexts.iter() {
             if let Some(ref sp) = slot {
                 if sp.owns_intid(intid) {
-                    return Some(sp.sp_id());
-                }
-                #[cfg(feature = "vfiq")]
-                if sp.is_fiq_delivery(intid) {
                     return Some(sp.sp_id());
                 }
             }

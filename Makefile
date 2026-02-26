@@ -252,8 +252,8 @@ SPMC_BIN := $(BUILD_DIR)/$(TARGET)_spmc.bin
 
 # Build hypervisor as S-EL2 SPMC (BL32)
 build-spmc:
-	@echo "Building SPMC (sel2+vfiq features)..."
-	cargo build --target aarch64-unknown-none --features sel2,vfiq
+	@echo "Building SPMC (sel2 feature)..."
+	cargo build --target aarch64-unknown-none --features sel2
 	aarch64-linux-gnu-objcopy -O binary $(BINARY) $(SPMC_BIN)
 	@echo "SPMC binary: $(SPMC_BIN)"
 

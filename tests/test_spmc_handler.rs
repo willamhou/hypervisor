@@ -226,21 +226,6 @@ pub fn run_tests() {
     assert_eq!(resp.x2, ffa::FFA_INVALID_PARAMETERS as u64);
     pass += 1;
 
-    // Test 43-45: vfiq-gated FIQ tests
-    #[cfg(feature = "vfiq")]
-    {
-        // Test 43-44: find_sp_for_intid finds FIQ INTIDs too
-        if let Some(sp2) = hypervisor::sp_context::get_sp_mut(0x8002) {
-            sp2.set_fiq_intids([30, 0, 0, 0]);
-        }
-        assert_eq!(hypervisor::sp_context::find_sp_for_intid(30), Some(0x8002));
-        assert_eq!(hypervisor::sp_context::is_fiq_delivery_for(0x8002, 30), true);
-        pass += 2;
-
-        // Test 45: is_fiq_delivery_for returns false for IRQ intid
-        assert_eq!(hypervisor::sp_context::is_fiq_delivery_for(0x8002, 29), false);
-        pass += 1;
-    }
 
     // ── SPMC memory sharing tests ───────────────────────────────────
 
