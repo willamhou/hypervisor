@@ -5,7 +5,6 @@
 
 use crate::arch::aarch64::defs::*;
 use crate::arch::aarch64::regs::VcpuContext;
-use crate::uart_put_hex;
 use crate::uart_puts;
 use core::sync::atomic::{AtomicU32, AtomicU64, Ordering};
 
@@ -160,14 +159,8 @@ pub extern "C" fn handle_exception(context: &mut VcpuContext) -> bool {
     // Check for exception loop
     let count = inc_exception_count();
     if count > MAX_CONSECUTIVE_EXCEPTIONS {
-        uart_puts(b"\n[FATAL] Too many consecutive exceptions, halting system\n");
-        uart_puts(b"[DEBUG] ESR_EL2=0x");
-        uart_put_hex(esr);
-        uart_puts(b" FAR_EL2=0x");
-        uart_put_hex(far);
-        uart_puts(b" PC=0x");
-        uart_put_hex(context.pc);
-        uart_puts(b"\n");
+        crate::log_error!("\n[FATAL] Too many consecutive exceptions, halting system\n");
+        crate::log_error!("[DEBUG] ESR_EL2={:#018x} FAR_EL2={:#018x} PC={:#018x}\n", esr, far, context.pc);
         // Halt the system completely to prevent further execution
         loop {
             unsafe {
@@ -296,11 +289,8 @@ pub extern "C" fn handle_exception(context: &mut VcpuContext) -> bool {
         }
 
         ExitReason::InstructionAbort => {
-            uart_puts(b"[VCPU] Instruction abort at FAR=0x");
-            uart_put_hex(context.sys_regs.far_el2);
-            uart_puts(b" PC=0x");
-            uart_put_hex(context.pc);
-            uart_puts(b"\n");
+            crate::log_error!("[VCPU] Instruction abort at FAR={:#018x} PC={:#018x}\n",
+                context.sys_regs.far_el2, context.pc);
 
             // Read EL1 registers to understand what caused the ORIGINAL EL1 exception
             let elr_el1: u64;
@@ -325,52 +315,22 @@ pub extern "C" fn handle_exception(context: &mut VcpuContext) -> bool {
                 core::arch::asm!("mrs {}, ttbr1_el1", out(reg) ttbr1_el1);
                 core::arch::asm!("mrs {}, vbar_el1", out(reg) vbar_el1);
             }
-            uart_puts(b"[VCPU] EL1 state at crash:\n");
-            uart_puts(b"  ELR_EL1  = 0x");
-            uart_put_hex(elr_el1);
-            uart_puts(b" (instruction that caused EL1 exception)\n");
-            uart_puts(b"  ESR_EL1  = 0x");
-            uart_put_hex(esr_el1);
             let el1_ec = (esr_el1 >> ESR_EC_SHIFT) & ESR_EC_MASK;
-            uart_puts(b" (EC=0x");
-            uart_put_hex(el1_ec);
-            uart_puts(b")\n");
-            uart_puts(b"  SPSR_EL1 = 0x");
-            uart_put_hex(spsr_el1);
-            uart_puts(b"\n");
-            uart_puts(b"  SCTLR_EL1= 0x");
-            uart_put_hex(sctlr_el1);
-            uart_puts(b" (M=");
-            if sctlr_el1 & 1 != 0 {
-                uart_puts(b"1");
-            } else {
-                uart_puts(b"0");
-            }
-            uart_puts(b")\n");
-            uart_puts(b"  SP_EL1   = 0x");
-            uart_put_hex(sp_el1);
-            uart_puts(b"\n");
-            uart_puts(b"  FAR_EL1  = 0x");
-            uart_put_hex(far_el1);
-            uart_puts(b" (faulting address)\n");
-            uart_puts(b"  TCR_EL1  = 0x");
-            uart_put_hex(tcr_el1);
-            uart_puts(b"\n");
-            uart_puts(b"  TTBR0_EL1= 0x");
-            uart_put_hex(ttbr0_el1);
-            uart_puts(b"\n");
-            uart_puts(b"  TTBR1_EL1= 0x");
-            uart_put_hex(ttbr1_el1);
-            uart_puts(b"\n");
-            uart_puts(b"  VBAR_EL1 = 0x");
-            uart_put_hex(vbar_el1);
-            uart_puts(b"\n");
+            crate::log_error!("[VCPU] EL1 state at crash:\n");
+            crate::log_error!("  ELR_EL1  = {:#018x} (instruction that caused EL1 exception)\n", elr_el1);
+            crate::log_error!("  ESR_EL1  = {:#018x} (EC={:#018x})\n", esr_el1, el1_ec);
+            crate::log_error!("  SPSR_EL1 = {:#018x}\n", spsr_el1);
+            crate::log_error!("  SCTLR_EL1= {:#018x} (M={})\n", sctlr_el1, if sctlr_el1 & 1 != 0 { 1 } else { 0 });
+            crate::log_error!("  SP_EL1   = {:#018x}\n", sp_el1);
+            crate::log_error!("  FAR_EL1  = {:#018x} (faulting address)\n", far_el1);
+            crate::log_error!("  TCR_EL1  = {:#018x}\n", tcr_el1);
+            crate::log_error!("  TTBR0_EL1= {:#018x}\n", ttbr0_el1);
+            crate::log_error!("  TTBR1_EL1= {:#018x}\n", ttbr1_el1);
+            crate::log_error!("  VBAR_EL1 = {:#018x}\n", vbar_el1);
 
             // Also read ESR_EL2 ISS for more details on the Stage-2 fault
             let iss = esr & ESR_ISS_MASK;
-            uart_puts(b"  ESR_EL2 ISS = 0x");
-            uart_put_hex(iss);
-            uart_puts(b"\n");
+            crate::log_error!("  ESR_EL2 ISS = {:#018x}\n", iss);
 
             // Dump VTCR_EL2, VTTBR_EL2, and HCR_EL2
             let vtcr_el2: u64;
@@ -383,49 +343,25 @@ pub extern "C" fn handle_exception(context: &mut VcpuContext) -> bool {
                 core::arch::asm!("mrs {}, hcr_el2", out(reg) hcr_el2);
                 core::arch::asm!("mrs {}, id_aa64mmfr0_el1", out(reg) id_mmfr0);
             }
-            uart_puts(b"  VTCR_EL2 = 0x");
-            uart_put_hex(vtcr_el2);
             let vtcr_t0sz = vtcr_el2 & 0x3F;
             let vtcr_sl0 = (vtcr_el2 >> 6) & 0x3;
             let vtcr_ps = (vtcr_el2 >> 16) & 0x7;
-            uart_puts(b" (T0SZ=");
-            uart_put_hex(vtcr_t0sz);
-            uart_puts(b" SL0=");
-            uart_put_hex(vtcr_sl0);
-            uart_puts(b" PS=");
-            uart_put_hex(vtcr_ps);
-            uart_puts(b")\n");
-            uart_puts(b"  VTTBR_EL2= 0x");
-            uart_put_hex(vttbr_el2);
-            uart_puts(b"\n");
-            uart_puts(b"  HCR_EL2  = 0x");
-            uart_put_hex(hcr_el2);
-            uart_puts(b" (VM=");
-            if hcr_el2 & HCR_VM != 0 {
-                uart_puts(b"1)\n");
-            } else {
-                uart_puts(b"0)\n");
-            }
-            uart_puts(b"  ID_AA64MMFR0_EL1 = 0x");
-            uart_put_hex(id_mmfr0);
-            uart_puts(b"\n");
+            crate::log_error!("  VTCR_EL2 = {:#018x} (T0SZ={:#018x} SL0={:#018x} PS={:#018x})\n",
+                vtcr_el2, vtcr_t0sz, vtcr_sl0, vtcr_ps);
+            crate::log_error!("  VTTBR_EL2= {:#018x}\n", vttbr_el2);
+            crate::log_error!("  HCR_EL2  = {:#018x} (VM={})\n", hcr_el2, if hcr_el2 & HCR_VM != 0 { 1 } else { 0 });
+            crate::log_error!("  ID_AA64MMFR0_EL1 = {:#018x}\n", id_mmfr0);
 
             // Dump Stage-2 L0 table entries to verify
             let s2_l0_base = vttbr_el2 & !PAGE_OFFSET_MASK;
-            uart_puts(b"  S2 L0[0] = 0x");
             let s2_l0_0 = unsafe { core::ptr::read_volatile(s2_l0_base as *const u64) };
-            uart_put_hex(s2_l0_0);
-            uart_puts(b"\n");
+            crate::log_error!("  S2 L0[0] = {:#018x}\n", s2_l0_0);
             if s2_l0_0 & (PTE_VALID | PTE_TABLE) == (PTE_VALID | PTE_TABLE) {
                 let s2_l1_base = s2_l0_0 & PTE_ADDR_MASK;
-                uart_puts(b"  S2 L1[0] = 0x");
                 let s2_l1_0 = unsafe { core::ptr::read_volatile(s2_l1_base as *const u64) };
-                uart_put_hex(s2_l1_0);
-                uart_puts(b"\n");
-                uart_puts(b"  S2 L1[1] = 0x");
+                crate::log_error!("  S2 L1[0] = {:#018x}\n", s2_l1_0);
                 let s2_l1_1 = unsafe { core::ptr::read_volatile((s2_l1_base + 8) as *const u64) };
-                uart_put_hex(s2_l1_1);
-                uart_puts(b"\n");
+                crate::log_error!("  S2 L1[1] = {:#018x}\n", s2_l1_1);
             }
 
             // Dump the kernel L0 page table entry that caused the fault
@@ -435,35 +371,19 @@ pub extern "C" fn handle_exception(context: &mut VcpuContext) -> bool {
                 let l0_index = ((far_el1 >> 39) & PT_INDEX_MASK) as usize;
                 let l0_entry_addr = l0_base + (l0_index as u64) * 8;
                 let l0_entry = unsafe { core::ptr::read_volatile(l0_entry_addr as *const u64) };
-                uart_puts(b"  TTBR1 L0 base = 0x");
-                uart_put_hex(l0_base);
-                uart_puts(b"\n");
-                uart_puts(b"  L0[");
-                uart_put_hex(l0_index as u64);
-                uart_puts(b"] @ 0x");
-                uart_put_hex(l0_entry_addr);
-                uart_puts(b" = 0x");
-                uart_put_hex(l0_entry);
                 let l0_valid = l0_entry & PTE_VALID;
                 let l0_type = (l0_entry >> 1) & 1;
-                uart_puts(b" (valid=");
-                uart_put_hex(l0_valid);
-                uart_puts(b" type=");
-                uart_put_hex(l0_type);
-                uart_puts(b")\n");
+                crate::log_error!("  TTBR1 L0 base = {:#018x}\n", l0_base);
+                crate::log_error!("  L0[{:#018x}] @ {:#018x} = {:#018x} (valid={:#018x} type={:#018x})\n",
+                    l0_index as u64, l0_entry_addr, l0_entry, l0_valid, l0_type);
                 // If L0 entry is valid table, dump the address it points to
                 if l0_entry & (PTE_VALID | PTE_TABLE) == (PTE_VALID | PTE_TABLE) {
                     let l1_base = l0_entry & PTE_ADDR_MASK;
                     let l1_index = ((far_el1 >> 30) & PT_INDEX_MASK) as usize;
                     let l1_entry_addr = l1_base + (l1_index as u64) * 8;
                     let l1_entry = unsafe { core::ptr::read_volatile(l1_entry_addr as *const u64) };
-                    uart_puts(b"  L1[");
-                    uart_put_hex(l1_index as u64);
-                    uart_puts(b"] @ 0x");
-                    uart_put_hex(l1_entry_addr);
-                    uart_puts(b" = 0x");
-                    uart_put_hex(l1_entry);
-                    uart_puts(b"\n");
+                    crate::log_error!("  L1[{:#018x}] @ {:#018x} = {:#018x}\n",
+                        l1_index as u64, l1_entry_addr, l1_entry);
                 }
             }
 
@@ -509,11 +429,8 @@ pub extern "C" fn handle_exception(context: &mut VcpuContext) -> bool {
                 true
             } else {
                 // Not MMIO or failed to handle
-                uart_puts(b"[VCPU] Data abort IPA=0x");
-                uart_put_hex(addr);
-                uart_puts(b" VA=0x");
-                uart_put_hex(context.sys_regs.far_el2);
-                uart_puts(b" (not MMIO)\n");
+                crate::log_error!("[VCPU] Data abort IPA={:#018x} VA={:#018x} (not MMIO)\n",
+                    addr, context.sys_regs.far_el2);
                 false // Exit
             }
         }
@@ -524,48 +441,33 @@ pub extern "C" fn handle_exception(context: &mut VcpuContext) -> bool {
                 EC_TRAPPED_SIMD_FP => {
                     // Trapped SIMD/FP access - skip instruction
                     // (Should not happen after CPTR_EL2 fix)
-                    uart_puts(b"[VCPU] FP/SIMD trap at PC=0x");
-                    uart_put_hex(context.pc);
-                    uart_puts(b"\n");
+                    crate::log_warn!("[VCPU] FP/SIMD trap at PC={:#018x}\n", context.pc);
                     context.pc += AARCH64_INSN_SIZE;
                     true
                 }
                 EC_TRAPPED_SVE => {
                     // SVE/SME access trap (CPTR_EL2.TZ or TSM)
-                    uart_puts(b"[VCPU] SVE/SME trap at PC=0x");
-                    uart_put_hex(context.pc);
-                    uart_puts(b"\n");
+                    crate::log_warn!("[VCPU] SVE/SME trap at PC={:#018x}\n", context.pc);
                     context.pc += AARCH64_INSN_SIZE;
                     true
                 }
                 EC_SVE_TRAP => {
                     // SVE trapped by CPTR_EL2.TZ when ZEN != 0b11
-                    uart_puts(b"[VCPU] SVE trap (EC=0x19) at PC=0x");
-                    uart_put_hex(context.pc);
-                    uart_puts(b"\n");
+                    crate::log_warn!("[VCPU] SVE trap (EC=0x19) at PC={:#018x}\n", context.pc);
                     context.pc += AARCH64_INSN_SIZE;
                     true
                 }
                 _ => {
                     // Unknown/unhandled exception - fatal
-                    uart_puts(b"[VCPU] Unknown exception EC=0x");
-                    uart_put_hex(ec);
-                    uart_puts(b" ESR=0x");
-                    uart_put_hex(esr);
-                    uart_puts(b" PC=0x");
-                    uart_put_hex(context.pc);
-                    uart_puts(b"\n");
+                    crate::log_error!("[VCPU] Unknown exception EC={:#018x} ESR={:#018x} PC={:#018x}\n",
+                        ec, esr, context.pc);
                     false // Exit
                 }
             }
         }
 
         ExitReason::Unknown => {
-            uart_puts(b"[VCPU] Unknown exception, ESR=0x");
-            uart_put_hex(esr);
-            uart_puts(b" PC=0x");
-            uart_put_hex(context.pc);
-            uart_puts(b"\n");
+            crate::log_error!("[VCPU] Unknown exception, ESR={:#018x} PC={:#018x}\n", esr, context.pc);
             false // Exit
         }
     }
@@ -659,6 +561,7 @@ pub extern "C" fn handle_fiq_exception(_context: &mut VcpuContext) -> bool {
         // The NS interrupt stays pending in the GIC. When NWd runs (after
         // FFA_INTERRUPT → SPMD → NWd), it will acknowledge and handle it.
         crate::spmc_handler::SP_IRQ_PREEMPTED.store(true, core::sync::atomic::Ordering::Release);
+        crate::spmc_handler::FIQ_PREEMPT_COUNT.fetch_add(1, core::sync::atomic::Ordering::Relaxed);
         return false;
     }
 
@@ -932,9 +835,7 @@ pub extern "C" fn handle_irq_exception(_context: &mut VcpuContext) -> bool {
             return true;
         }
         _ => {
-            uart_puts(b"[IRQ] Unhandled INTID=");
-            uart_put_hex(intid as u64);
-            uart_puts(b"\n");
+            crate::log_warn!("[IRQ] Unhandled INTID={:#018x}\n", intid as u64);
         }
     }
 
@@ -1209,16 +1110,14 @@ fn handle_hypercall_with_imm(context: &mut VcpuContext, hvc_imm: u32) -> bool {
 
         1 => {
             // Hypercall 1: Exit guest
-            uart_puts(b"\n[VCPU] Guest requested exit\n");
+            crate::log_info!("\n[VCPU] Guest requested exit\n");
             context.gp_regs.x0 = 0; // Success
             false // Exit - guest wants to terminate
         }
 
         _ => {
             // Unknown hypercall
-            uart_puts(b"\n[VCPU] Unknown hypercall: 0x");
-            uart_put_hex(hypercall_num);
-            uart_puts(b"\n");
+            crate::log_error!("\n[VCPU] Unknown hypercall: {:#018x}\n", hypercall_num);
             context.gp_regs.x0 = !0; // Error
             false // Exit on error
         }
@@ -1354,7 +1253,7 @@ fn handle_psci(context: &mut VcpuContext, function_id: u64) -> bool {
         PSCI_VERSION => {
             // Return PSCI v0.2
             context.gp_regs.x0 = PSCI_VERSION_0_2;
-            uart_puts(b"[PSCI] VERSION -> 0.2\n");
+            crate::log_info!("[PSCI] VERSION -> 0.2\n");
             true
         }
 
@@ -1374,7 +1273,7 @@ fn handle_psci(context: &mut VcpuContext, function_id: u64) -> bool {
 
         PSCI_CPU_OFF => {
             // CPU off - for single vCPU, this is like system halt
-            uart_puts(b"[PSCI] CPU_OFF\n");
+            crate::log_info!("[PSCI] CPU_OFF\n");
             context.gp_regs.x0 = PSCI_SUCCESS;
             let vcpu_id = crate::global::current_vcpu_id();
             crate::global::current_vm_state().terminal_exit[vcpu_id].store(true, Ordering::Release);
@@ -1386,11 +1285,7 @@ fn handle_psci(context: &mut VcpuContext, function_id: u64) -> bool {
             let entry_point = context.gp_regs.x2;
             let context_id = context.gp_regs.x3;
 
-            uart_puts(b"[PSCI] CPU_ON target=0x");
-            uart_put_hex(target_cpu);
-            uart_puts(b" entry=0x");
-            uart_put_hex(entry_point);
-            uart_puts(b"\n");
+            crate::log_info!("[PSCI] CPU_ON target={:#018x} entry={:#018x}\n", target_cpu, entry_point);
 
             #[cfg(not(feature = "multi_pcpu"))]
             {
@@ -1438,7 +1333,7 @@ fn handle_psci(context: &mut VcpuContext, function_id: u64) -> bool {
 
         PSCI_SYSTEM_OFF => {
             // System shutdown
-            uart_puts(b"[PSCI] SYSTEM_OFF\n");
+            crate::log_info!("[PSCI] SYSTEM_OFF\n");
             let vcpu_id = crate::global::current_vcpu_id();
             crate::global::current_vm_state().terminal_exit[vcpu_id].store(true, Ordering::Release);
             false // Exit guest
@@ -1446,7 +1341,7 @@ fn handle_psci(context: &mut VcpuContext, function_id: u64) -> bool {
 
         PSCI_SYSTEM_RESET => {
             // System reset
-            uart_puts(b"[PSCI] SYSTEM_RESET\n");
+            crate::log_info!("[PSCI] SYSTEM_RESET\n");
             let vcpu_id = crate::global::current_vcpu_id();
             crate::global::current_vm_state().terminal_exit[vcpu_id].store(true, Ordering::Release);
             false
@@ -1454,16 +1349,14 @@ fn handle_psci(context: &mut VcpuContext, function_id: u64) -> bool {
 
         PSCI_CPU_SUSPEND_32 => {
             // CPU suspend - treat like WFI
-            uart_puts(b"[PSCI] CPU_SUSPEND\n");
+            crate::log_info!("[PSCI] CPU_SUSPEND\n");
             context.gp_regs.x0 = PSCI_SUCCESS;
             true
         }
 
         _ => {
             // Unknown PSCI function
-            uart_puts(b"[PSCI] Unknown function: 0x");
-            uart_put_hex(function_id);
-            uart_puts(b"\n");
+            crate::log_warn!("[PSCI] Unknown function: {:#018x}\n", function_id);
             context.gp_regs.x0 = PSCI_NOT_SUPPORTED;
             true // Continue but return error
         }
@@ -1492,9 +1385,7 @@ fn handle_mmio_abort(context: &mut VcpuContext, addr: u64) -> bool {
         unsafe { core::ptr::read_volatile(context.pc as *const u32) }
     } else {
         // PC is a virtual address (guest MMU is on), can't read instruction
-        uart_puts(b"[MMIO] Can't decode: guest VA PC=0x");
-        uart_put_hex(context.pc);
-        uart_puts(b" ISV=0\n");
+        crate::log_warn!("[MMIO] Can't decode: guest VA PC={:#018x} ISV=0\n", context.pc);
         return false;
     };
 
@@ -1502,9 +1393,7 @@ fn handle_mmio_abort(context: &mut VcpuContext, addr: u64) -> bool {
     let access = match MmioAccess::decode(insn, iss) {
         Some(a) => a,
         None => {
-            uart_puts(b"[MMIO] Failed to decode instruction at 0x");
-            uart_put_hex(context.pc);
-            uart_puts(b"\n");
+            crate::log_warn!("[MMIO] Failed to decode instruction at {:#018x}\n", context.pc);
             return false;
         }
     };
@@ -1523,9 +1412,7 @@ fn handle_mmio_abort(context: &mut VcpuContext, addr: u64) -> bool {
                 true
             }
             None => {
-                uart_puts(b"[MMIO] Read failed at 0x");
-                uart_put_hex(addr);
-                uart_puts(b"\n");
+                crate::log_warn!("[MMIO] Read failed at {:#018x}\n", addr);
                 false
             }
         }
@@ -1566,9 +1453,7 @@ fn handle_wfi_with_timer_injection(context: &mut VcpuContext) -> bool {
     // Increment WFI counter
     let count = WFI_CONSECUTIVE_COUNT.fetch_add(1, Ordering::Relaxed) + 1;
     if count > MAX_CONSECUTIVE_WFI {
-        uart_puts(b"[WFI] Guest idle (");
-        uart_put_hex(count as u64);
-        uart_puts(b" WFIs at same PC), exiting\n");
+        crate::log_warn!("[WFI] Guest idle ({:#018x} WFIs at same PC), exiting\n", count as u64);
         return false;
     }
 
