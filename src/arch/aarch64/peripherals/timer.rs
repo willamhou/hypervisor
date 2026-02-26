@@ -190,15 +190,7 @@ pub fn print_timer_info() {
     let count = get_counter();
     let ctl = get_ctl();
 
-    crate::uart_puts(b"[TIMER] Frequency: ");
-    crate::uart_put_u64(freq);
-    crate::uart_puts(b" Hz\n");
-
-    crate::uart_puts(b"[TIMER] Counter: ");
-    crate::uart_put_u64(count);
-    crate::uart_puts(b"\n");
-
-    crate::uart_puts(b"[TIMER] Control: 0x");
-    crate::uart_put_hex(ctl);
-    crate::uart_puts(b"\n");
+    crate::log_info!("[TIMER] Frequency: {} Hz\n", freq);
+    crate::log_info!("[TIMER] Counter: {}\n", count);
+    crate::log_info!("[TIMER] Control: {:#018x}\n", ctl);
 }

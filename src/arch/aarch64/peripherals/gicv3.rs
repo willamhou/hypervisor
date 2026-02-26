@@ -585,20 +585,20 @@ pub fn is_gicv3_available() -> bool {
 
 /// Initialize GICv3 for hypervisor use
 pub fn init() {
-    crate::uart_puts(b"[GIC] Checking GICv3/v4 availability...\n");
+    crate::log_info!("[GIC] Checking GICv3/v4 availability...\n");
 
     if !is_gicv3_available() {
-        crate::uart_puts(b"[GIC] GICv3 not available, falling back to GICv2\n");
+        crate::log_info!("[GIC] GICv3 not available, falling back to GICv2\n");
         super::gic::init();
         return;
     }
 
-    crate::uart_puts(b"[GIC] Initializing GICv3/v4 (system register interface)...\n");
+    crate::log_info!("[GIC] Initializing GICv3/v4 (system register interface)...\n");
 
     // Configure ICC_SRE_EL2 - CRITICAL for guest interrupt handling
     let sre_el2: u32 = ICC_SRE_SRE | ICC_SRE_ENABLE;
     GicV3SystemRegs::write_sre_el2(sre_el2);
-    crate::uart_puts(b"[GIC] ICC_SRE_EL2 configured (Enable=1, SRE=1)\n");
+    crate::log_info!("[GIC] ICC_SRE_EL2 configured (Enable=1, SRE=1)\n");
 
     // Also set ICC_SRE_EL1 to enable system register interface for guest
     GicV3SystemRegs::write_sre_el1(ICC_SRE_SRE);
@@ -608,13 +608,8 @@ pub fn init() {
     let num_lrs = ((vtr & VTR_LISTREGS_MASK) + 1) as u32;
     let num_priority_bits = ((vtr >> 29) & 0x7) + 1;
 
-    crate::uart_puts(b"[GIC] VGIC capabilities:\n");
-    crate::uart_puts(b"  - List Registers: ");
-    print_num(num_lrs);
-    crate::uart_puts(b"\n");
-    crate::uart_puts(b"  - Priority bits: ");
-    print_num(num_priority_bits);
-    crate::uart_puts(b"\n");
+    crate::log_info!("[GIC] VGIC capabilities:\n  - List Registers: {}\n  - Priority bits: {}\n",
+        num_lrs, num_priority_bits);
 
     // Initialize virtual interrupt interface
     GicV3VirtualInterface::init();
@@ -622,21 +617,12 @@ pub fn init() {
     // Set EOImode=1 so EOIR only does priority drop (not deactivation).
     let ctlr = GicV3SystemRegs::read_ctlr();
     GicV3SystemRegs::write_ctlr(ctlr | ICC_CTLR_EOIMODE);
-    crate::uart_puts(b"[GIC] ICC_CTLR_EL1.EOImode=1 (split priority drop/deactivation)\n");
+    crate::log_info!("[GIC] ICC_CTLR_EL1.EOImode=1 (split priority drop/deactivation)\n");
 
     // Enable interrupt delivery to this CPU
     GicV3SystemRegs::enable();
 
-    crate::uart_puts(b"[GIC] GICv3 initialization complete\n");
-}
-
-/// Helper to print a number
-fn print_num(n: u32) {
-    if n >= 10 {
-        print_num(n / 10);
-    }
-    let digit = (b'0' + (n % 10) as u8) as u8;
-    crate::uart_puts(&[digit]);
+    crate::log_info!("[GIC] GICv3 initialization complete\n");
 }
 
 #[cfg(test)]
