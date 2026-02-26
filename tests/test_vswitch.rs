@@ -1,12 +1,11 @@
 //! VSwitch L2 forwarding tests
 
-use hypervisor::uart_puts;
 use hypervisor::vswitch::{MAX_FRAME_SIZE, PORT_RX};
 
 pub fn run_vswitch_test() {
-    uart_puts(b"\n========================================\n");
-    uart_puts(b"  VSwitch Test\n");
-    uart_puts(b"========================================\n\n");
+    hypervisor::log_info!("\n========================================\n");
+    hypervisor::log_info!("  VSwitch Test\n");
+    hypervisor::log_info!("========================================\n\n");
 
     // Setup: register 2 ports
     hypervisor::vswitch::vswitch_reset();
@@ -27,18 +26,18 @@ pub fn run_vswitch_test() {
     frame0[6..12].copy_from_slice(&[0xAA, 0xBB, 0xCC, 0xDD, 0xEE, 0x00]);
 
     // Test 1: Unknown unicast -> flood all ports except src
-    uart_puts(b"[VSWITCH] Test 1: Unknown unicast flood...\n");
+    hypervisor::log_info!("[VSWITCH] Test 1: Unknown unicast flood...\n");
     hypervisor::vswitch::vswitch_forward(0, &frame0);
     let mut buf = [0u8; MAX_FRAME_SIZE];
     let len = PORT_RX[1].take(&mut buf);
     assert_ok(len.is_some(), "port 1 should receive flooded frame");
     let len0 = PORT_RX[0].take(&mut buf);
     assert_ok(len0.is_none(), "port 0 (src) should NOT receive own frame");
-    uart_puts(b"[VSWITCH] Test 1 PASSED\n\n");
+    hypervisor::log_info!("[VSWITCH] Test 1 PASSED\n\n");
 
     // Test 2: MAC learning — src MAC AA:BB:CC:DD:EE:00 learned on port 0
     // Now send frame FROM port 1 TO that learned MAC
-    uart_puts(b"[VSWITCH] Test 2: MAC learning + precise forward...\n");
+    hypervisor::log_info!("[VSWITCH] Test 2: MAC learning + precise forward...\n");
     let mut frame1 = [0u8; 64];
     // dst = previously learned MAC (AA:BB:CC:DD:EE:00 -> port 0)
     frame1[0..6].copy_from_slice(&[0xAA, 0xBB, 0xCC, 0xDD, 0xEE, 0x00]);
@@ -50,10 +49,10 @@ pub fn run_vswitch_test() {
         len.is_some(),
         "port 0 should receive precisely forwarded frame",
     );
-    uart_puts(b"[VSWITCH] Test 2 PASSED\n\n");
+    hypervisor::log_info!("[VSWITCH] Test 2 PASSED\n\n");
 
     // Test 3: Broadcast floods all ports except src
-    uart_puts(b"[VSWITCH] Test 3: Broadcast flood...\n");
+    hypervisor::log_info!("[VSWITCH] Test 3: Broadcast flood...\n");
     let mut bcast = [0u8; 64];
     bcast[0..6].copy_from_slice(&[0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF]);
     bcast[6..12].copy_from_slice(&[0xAA, 0xBB, 0xCC, 0xDD, 0xEE, 0x00]);
@@ -65,10 +64,10 @@ pub fn run_vswitch_test() {
         len.is_none(),
         "port 0 (src) should NOT receive own broadcast",
     );
-    uart_puts(b"[VSWITCH] Test 3 PASSED\n\n");
+    hypervisor::log_info!("[VSWITCH] Test 3 PASSED\n\n");
 
     // Test 4: No self-delivery on unicast
-    uart_puts(b"[VSWITCH] Test 4: No self-delivery...\n");
+    hypervisor::log_info!("[VSWITCH] Test 4: No self-delivery...\n");
     // Send from port 0 to port 0's own learned MAC
     let mut self_frame = [0u8; 64];
     self_frame[0..6].copy_from_slice(&[0xAA, 0xBB, 0xCC, 0xDD, 0xEE, 0x00]); // dst = port 0
@@ -77,10 +76,10 @@ pub fn run_vswitch_test() {
     // Port 0 should NOT get its own frame (dst_port == src_port)
     let len = PORT_RX[0].take(&mut buf);
     assert_ok(len.is_none(), "no self-delivery when dst_port == src_port");
-    uart_puts(b"[VSWITCH] Test 4 PASSED\n\n");
+    hypervisor::log_info!("[VSWITCH] Test 4 PASSED\n\n");
 
     // Test 5: MAC table capacity (fill 16 entries)
-    uart_puts(b"[VSWITCH] Test 5: MAC table capacity...\n");
+    hypervisor::log_info!("[VSWITCH] Test 5: MAC table capacity...\n");
     hypervisor::vswitch::vswitch_reset();
     hypervisor::vswitch::vswitch_add_port(0);
     hypervisor::vswitch::vswitch_add_port(1);
@@ -104,18 +103,16 @@ pub fn run_vswitch_test() {
     hypervisor::vswitch::vswitch_forward(1, &to_first);
     let len = PORT_RX[0].take(&mut buf);
     assert_ok(len.is_some(), "MAC table should hold 16 entries");
-    uart_puts(b"[VSWITCH] Test 5 PASSED\n\n");
+    hypervisor::log_info!("[VSWITCH] Test 5 PASSED\n\n");
 
-    uart_puts(b"========================================\n");
-    uart_puts(b"  VSwitch Test PASSED (6 assertions)\n");
-    uart_puts(b"========================================\n\n");
+    hypervisor::log_info!("========================================\n");
+    hypervisor::log_info!("  VSwitch Test PASSED (6 assertions)\n");
+    hypervisor::log_info!("========================================\n\n");
 }
 
 fn assert_ok(cond: bool, msg: &str) {
     if !cond {
-        uart_puts(b"[VSWITCH] ASSERTION FAILED: ");
-        uart_puts(msg.as_bytes());
-        uart_puts(b"\n");
+        hypervisor::log_info!("[VSWITCH] ASSERTION FAILED: {}\n", msg);
         panic!("test assertion failed");
     }
 }

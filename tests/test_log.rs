@@ -3,7 +3,7 @@
 use hypervisor::log::{log_buffer, LogBuffer, LogLevel, LogWriter};
 
 pub fn run_log_test() {
-    hypervisor::uart_puts(b"\n=== Test: Log Module ===\n");
+    hypervisor::log_info!("\n=== Test: Log Module ===\n");
     let mut pass: u64 = 0;
     let mut fail: u64 = 0;
 
@@ -11,10 +11,10 @@ pub fn run_log_test() {
     {
         let buf = LogBuffer::new();
         if buf.available() == 0 {
-            hypervisor::uart_puts(b"  [PASS] LogBuffer empty state\n");
+            hypervisor::log_info!("  [PASS] LogBuffer empty state\n");
             pass += 1;
         } else {
-            hypervisor::uart_puts(b"  [FAIL] LogBuffer should be empty initially\n");
+            hypervisor::log_info!("  [FAIL] LogBuffer should be empty initially\n");
             fail += 1;
         }
     }
@@ -26,10 +26,10 @@ pub fn run_log_test() {
         let mut out = [0u8; 16];
         let n = buf.read(&mut out);
         if n == 5 && &out[..5] == b"hello" {
-            hypervisor::uart_puts(b"  [PASS] write + read roundtrip\n");
+            hypervisor::log_info!("  [PASS] write + read roundtrip\n");
             pass += 1;
         } else {
-            hypervisor::uart_puts(b"  [FAIL] write + read roundtrip\n");
+            hypervisor::log_info!("  [FAIL] write + read roundtrip\n");
             fail += 1;
         }
     }
@@ -48,10 +48,10 @@ pub fn run_log_test() {
         let n = buf.read(&mut out);
         let ok = n > 5 && &out[n - 5..n] == b"XYZWV" && avail <= 8192;
         if ok {
-            hypervisor::uart_puts(b"  [PASS] Overflow preserves latest data\n");
+            hypervisor::log_info!("  [PASS] Overflow preserves latest data\n");
             pass += 1;
         } else {
-            hypervisor::uart_puts(b"  [FAIL] Overflow should preserve latest data\n");
+            hypervisor::log_info!("  [FAIL] Overflow should preserve latest data\n");
             fail += 1;
         }
     }
@@ -64,10 +64,10 @@ pub fn run_log_test() {
         hypervisor::log_info!("test msg {}", 42);
         let avail = buf.available();
         if avail > 0 {
-            hypervisor::uart_puts(b"  [PASS] log_info! writes to buffer\n");
+            hypervisor::log_info!("  [PASS] log_info! writes to buffer\n");
             pass += 1;
         } else {
-            hypervisor::uart_puts(b"  [FAIL] log_info! should write to buffer\n");
+            hypervisor::log_info!("  [FAIL] log_info! should write to buffer\n");
             fail += 1;
         }
     }
@@ -84,10 +84,10 @@ pub fn run_log_test() {
         let mut out = [0u8; 32];
         let n = buf.read(&mut out);
         if n == 12 && &out[..12] == b"direct write" {
-            hypervisor::uart_puts(b"  [PASS] LogWriter writes to buffer and UART\n");
+            hypervisor::log_info!("  [PASS] LogWriter writes to buffer and UART\n");
             pass += 1;
         } else {
-            hypervisor::uart_puts(b"  [FAIL] LogWriter should write to buffer\n");
+            hypervisor::log_info!("  [FAIL] LogWriter should write to buffer\n");
             fail += 1;
         }
     }
@@ -101,10 +101,10 @@ pub fn run_log_test() {
         buf0.write(b"cpu0");
         buf1.write(b"cpu1data");
         if buf0.available() == 4 && buf1.available() == 8 {
-            hypervisor::uart_puts(b"  [PASS] Per-CPU buffer isolation\n");
+            hypervisor::log_info!("  [PASS] Per-CPU buffer isolation\n");
             pass += 1;
         } else {
-            hypervisor::uart_puts(b"  [FAIL] Per-CPU buffers should be independent\n");
+            hypervisor::log_info!("  [FAIL] Per-CPU buffers should be independent\n");
             fail += 1;
         }
         // Clean up
@@ -118,10 +118,10 @@ pub fn run_log_test() {
         let mut out = [0u8; 16];
         let n = buf.read(&mut out);
         if n == 0 {
-            hypervisor::uart_puts(b"  [PASS] Read from empty buffer returns 0\n");
+            hypervisor::log_info!("  [PASS] Read from empty buffer returns 0\n");
             pass += 1;
         } else {
-            hypervisor::uart_puts(b"  [FAIL] Read from empty buffer should return 0\n");
+            hypervisor::log_info!("  [FAIL] Read from empty buffer should return 0\n");
             fail += 1;
         }
     }
@@ -135,18 +135,14 @@ pub fn run_log_test() {
         let mut out = [0u8; 16];
         let n = buf.read(&mut out);
         if n == 9 && &out[..9] == b"aaabbbccc" {
-            hypervisor::uart_puts(b"  [PASS] Multiple writes accumulate\n");
+            hypervisor::log_info!("  [PASS] Multiple writes accumulate\n");
             pass += 1;
         } else {
-            hypervisor::uart_puts(b"  [FAIL] Multiple writes should accumulate\n");
+            hypervisor::log_info!("  [FAIL] Multiple writes should accumulate\n");
             fail += 1;
         }
     }
 
-    hypervisor::uart_puts(b"  Results: ");
-    hypervisor::uart_put_u64(pass);
-    hypervisor::uart_puts(b" passed, ");
-    hypervisor::uart_put_u64(fail);
-    hypervisor::uart_puts(b" failed\n");
+    hypervisor::log_info!("  Results: {} passed, {} failed\n", pass, fail);
     assert!(fail == 0, "Log module tests failed");
 }

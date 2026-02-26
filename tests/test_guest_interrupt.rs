@@ -1,4 +1,3 @@
-use hypervisor::uart_puts;
 ///! Test guest interrupt injection
 ///!
 ///! This test creates a guest that:
@@ -49,11 +48,11 @@ static mut GUEST_IRQ_STACK: GuestInterruptStack = GuestInterruptStack { stack: [
 
 /// Run guest interrupt injection test
 pub fn run_guest_interrupt_test() {
-    uart_puts(b"\n========================================\n");
-    uart_puts(b"  Guest Interrupt Injection Test\n");
-    uart_puts(b"========================================\n\n");
+    hypervisor::log_info!("\n========================================\n");
+    hypervisor::log_info!("  Guest Interrupt Injection Test\n");
+    hypervisor::log_info!("========================================\n\n");
 
-    uart_puts(b"[IRQ TEST] Creating VM...\n");
+    hypervisor::log_info!("[IRQ TEST] Creating VM...\n");
 
     // Create VM
     let mut vm = Vm::new(0);
@@ -63,9 +62,7 @@ pub fn run_guest_interrupt_test() {
     let guest_stack =
         unsafe { (&raw const GUEST_IRQ_STACK.stack as *const [u8; 16384]) as u64 + 16384 };
 
-    uart_puts(b"[IRQ TEST] Guest entry: 0x");
-    print_hex(guest_entry);
-    uart_puts(b"\n");
+    hypervisor::log_info!("[IRQ TEST] Guest entry: {:#018x}\n", guest_entry);
 
     // Initialize memory mapping
     let mem_start = guest_entry & !(2 * 1024 * 1024 - 1);
@@ -77,61 +74,36 @@ pub fn run_guest_interrupt_test() {
     // Add vCPU
     match vm.add_vcpu(guest_entry, guest_stack) {
         Ok(vcpu_id) => {
-            uart_puts(b"[IRQ TEST] Created vCPU ");
-            print_digit(vcpu_id as u8);
-            uart_puts(b"\n");
+            hypervisor::log_info!("[IRQ TEST] Created vCPU {}\n", vcpu_id);
         }
         Err(e) => {
-            uart_puts(b"[ERROR] Failed to create vCPU: ");
-            uart_puts(e.as_bytes());
-            uart_puts(b"\n");
+            hypervisor::log_info!("[ERROR] Failed to create vCPU: {}\n", e);
             return;
         }
     }
 
-    uart_puts(b"[IRQ TEST] Guest will enable interrupts and check for pending IRQ...\n");
-    uart_puts(b"[IRQ TEST] If HCR_EL2.VI is set, guest should see virtual IRQ pending...\n");
+    hypervisor::log_info!("[IRQ TEST] Guest will enable interrupts and check for pending IRQ...\n");
+    hypervisor::log_info!("[IRQ TEST] If HCR_EL2.VI is set, guest should see virtual IRQ pending...\n");
 
     // Inject a virtual IRQ before running
     // In a real scenario, this would be done when a physical interrupt arrives
     if let Some(vcpu) = vm.vcpu_mut(0) {
         vcpu.inject_irq(27); // Virtual timer IRQ
-        uart_puts(b"[IRQ TEST] Injected IRQ 27 into vCPU\n");
+        hypervisor::log_info!("[IRQ TEST] Injected IRQ 27 into vCPU\n");
     }
 
     // Run the VM
-    uart_puts(b"[IRQ TEST] Starting guest...\n");
+    hypervisor::log_info!("[IRQ TEST] Starting guest...\n");
 
     match vm.run() {
         Ok(()) => {
-            uart_puts(b"[IRQ TEST] Guest handled interrupt and exited successfully!\n");
+            hypervisor::log_info!("[IRQ TEST] Guest handled interrupt and exited successfully!\n");
         }
         Err(e) => {
-            uart_puts(b"[ERROR] Guest failed: ");
-            uart_puts(e.as_bytes());
-            uart_puts(b"\n");
+            hypervisor::log_info!("[ERROR] Guest failed: {}\n", e);
         }
     }
 
-    uart_puts(b"\n[IRQ TEST] Test complete!\n");
-    uart_puts(b"========================================\n\n");
-}
-
-/// Print a 64-bit hex value
-fn print_hex(value: u64) {
-    const HEX_CHARS: &[u8; 16] = b"0123456789abcdef";
-    let mut buffer = [0u8; 16];
-
-    for i in 0..16 {
-        let nibble = ((value >> ((15 - i) * 4)) & 0xF) as usize;
-        buffer[i] = HEX_CHARS[nibble];
-    }
-
-    uart_puts(&buffer);
-}
-
-/// Print a single digit
-fn print_digit(digit: u8) {
-    let ch = b'0' + digit;
-    uart_puts(&[ch]);
+    hypervisor::log_info!("\n[IRQ TEST] Test complete!\n");
+    hypervisor::log_info!("========================================\n\n");
 }

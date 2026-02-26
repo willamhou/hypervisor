@@ -11,7 +11,7 @@ fn zero_req(fid: u64) -> SmcResult8 {
 }
 
 pub fn run_tests() {
-    crate::uart_puts(b"  test_spmc_handler...\n");
+    hypervisor::log_info!("  test_spmc_handler...\n");
     let mut pass = 0u32;
 
     // Test 1: FFA_VERSION returns v1.1
@@ -387,7 +387,5 @@ pub fn run_tests() {
         pass += 1;
     }
 
-    crate::uart_puts(b"    ");
-    crate::print_u32(pass);
-    crate::uart_puts(b" assertions passed\n");
+    hypervisor::log_info!("    {} assertions passed\n", pass);
 }

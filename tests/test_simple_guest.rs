@@ -4,7 +4,6 @@
 //! 1. Prints a character via UART
 //! 2. Exits via HVC
 
-use hypervisor::uart_puts;
 use hypervisor::vm::Vm;
 
 /// Simple guest code that writes to UART then exits
@@ -33,13 +32,11 @@ static SIMPLE_GUEST: SimpleGuest = SimpleGuest {
 
 /// Run simple guest test
 pub fn run_test() {
-    uart_puts(b"\n[TEST] Simple Guest Test\n");
-    uart_puts(b"[TEST] ========================\n");
+    hypervisor::log_info!("\n[TEST] Simple Guest Test\n");
+    hypervisor::log_info!("[TEST] ========================\n");
 
     let guest_addr = &SIMPLE_GUEST.code as *const _ as u64;
-    uart_puts(b"[TEST] Guest code at: 0x");
-    print_hex(guest_addr);
-    uart_puts(b"\n");
+    hypervisor::log_info!("[TEST] Guest code at: {:#018x}\n", guest_addr);
 
     // Create VM
     let mut vm = Vm::new(1);
@@ -55,36 +52,20 @@ pub fn run_test() {
             vcpu.context_mut().sp = guest_addr + 0x10000; // Arbitrary stack
         }
         Err(e) => {
-            uart_puts(b"[TEST] Failed to create vCPU: ");
-            uart_puts(e.as_bytes());
-            uart_puts(b"\n");
+            hypervisor::log_info!("[TEST] Failed to create vCPU: {}\n", e);
             return;
         }
     }
 
     // Run guest
-    uart_puts(b"[TEST] Running guest (expect 'Z'): ");
+    hypervisor::log_info!("[TEST] Running guest (expect 'Z'): ");
 
     match vm.run() {
         Ok(()) => {
-            uart_puts(b"\n[TEST] Simple Guest Test PASSED\n\n");
+            hypervisor::log_info!("\n[TEST] Simple Guest Test PASSED\n\n");
         }
         Err(e) => {
-            uart_puts(b"\n[TEST] Guest error: ");
-            uart_puts(e.as_bytes());
-            uart_puts(b"\n");
+            hypervisor::log_info!("\n[TEST] Guest error: {}\n", e);
         }
     }
-}
-
-fn print_hex(value: u64) {
-    const HEX_CHARS: &[u8; 16] = b"0123456789abcdef";
-    let mut buffer = [0u8; 16];
-
-    for i in 0..16 {
-        let nibble = ((value >> ((15 - i) * 4)) & 0xF) as usize;
-        buffer[i] = HEX_CHARS[nibble];
-    }
-
-    uart_puts(&buffer);
 }

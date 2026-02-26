@@ -4,7 +4,7 @@ use hypervisor::devices::pl031::VirtualPl031;
 use hypervisor::devices::MmioDevice;
 
 pub fn run_pl031_test() {
-    hypervisor::uart_puts(b"\n=== Test: PL031 RTC Emulation ===\n");
+    hypervisor::log_info!("\n=== Test: PL031 RTC Emulation ===\n");
     let mut pass: u64 = 0;
     let mut fail: u64 = 0;
 
@@ -14,10 +14,10 @@ pub fn run_pl031_test() {
     {
         let val = rtc.read(0x000, 4);
         if val.is_some() {
-            hypervisor::uart_puts(b"  [PASS] RTCDR readable\n");
+            hypervisor::log_info!("  [PASS] RTCDR readable\n");
             pass += 1;
         } else {
-            hypervisor::uart_puts(b"  [FAIL] RTCDR should be readable\n");
+            hypervisor::log_info!("  [FAIL] RTCDR should be readable\n");
             fail += 1;
         }
     }
@@ -28,10 +28,10 @@ pub fn run_pl031_test() {
         rtc.write(0x00C, 1, 4); // enable
         let val = rtc.read(0x000, 4).unwrap();
         if val >= 1000 {
-            hypervisor::uart_puts(b"  [PASS] RTCLR write + RTCDR readback\n");
+            hypervisor::log_info!("  [PASS] RTCLR write + RTCDR readback\n");
             pass += 1;
         } else {
-            hypervisor::uart_puts(b"  [FAIL] RTCLR write + RTCDR readback\n");
+            hypervisor::log_info!("  [FAIL] RTCLR write + RTCDR readback\n");
             fail += 1;
         }
     }
@@ -44,10 +44,10 @@ pub fn run_pl031_test() {
         let pcell0 = rtc.read(0xFF0, 4).unwrap();
         let pcell1 = rtc.read(0xFF4, 4).unwrap();
         if id0 == 0x31 && id1 == 0x10 && id2 == 0x04 && pcell0 == 0x0D && pcell1 == 0xF0 {
-            hypervisor::uart_puts(b"  [PASS] PeriphID/PrimeCellID correct\n");
+            hypervisor::log_info!("  [PASS] PeriphID/PrimeCellID correct\n");
             pass += 1;
         } else {
-            hypervisor::uart_puts(b"  [FAIL] PeriphID/PrimeCellID mismatch\n");
+            hypervisor::log_info!("  [FAIL] PeriphID/PrimeCellID mismatch\n");
             fail += 1;
         }
     }
@@ -56,18 +56,14 @@ pub fn run_pl031_test() {
     {
         let val = rtc.read(0x100, 4).unwrap();
         if val == 0 {
-            hypervisor::uart_puts(b"  [PASS] Unknown offset returns 0\n");
+            hypervisor::log_info!("  [PASS] Unknown offset returns 0\n");
             pass += 1;
         } else {
-            hypervisor::uart_puts(b"  [FAIL] Unknown offset should return 0\n");
+            hypervisor::log_info!("  [FAIL] Unknown offset should return 0\n");
             fail += 1;
         }
     }
 
-    hypervisor::uart_puts(b"  Results: ");
-    hypervisor::uart_put_u64(pass);
-    hypervisor::uart_puts(b" passed, ");
-    hypervisor::uart_put_u64(fail);
-    hypervisor::uart_puts(b" failed\n");
+    hypervisor::log_info!("  Results: {} passed, {} failed\n", pass, fail);
     assert!(fail == 0, "PL031 RTC tests failed");
 }

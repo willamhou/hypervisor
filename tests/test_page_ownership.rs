@@ -4,7 +4,7 @@ use hypervisor::arch::aarch64::mm::mmu::{DynamicIdentityMapper, MemoryAttribute}
 use hypervisor::ffa::stage2_walker::Stage2Walker;
 
 pub fn run_page_ownership_test() {
-    hypervisor::uart_puts(b"\n=== Test: Page Ownership (SW bits) ===\n");
+    hypervisor::log_info!("\n=== Test: Page Ownership (SW bits) ===\n");
     let mut pass: u64 = 0;
     let mut fail: u64 = 0;
 
@@ -18,10 +18,10 @@ pub fn run_page_ownership_test() {
     {
         let bits = mapper.read_sw_bits(0x5000_0000);
         if bits == Some(0) {
-            hypervisor::uart_puts(b"  [PASS] Default SW bits = 0 (OWNED)\n");
+            hypervisor::log_info!("  [PASS] Default SW bits = 0 (OWNED)\n");
             pass += 1;
         } else {
-            hypervisor::uart_puts(b"  [FAIL] Default SW bits\n");
+            hypervisor::log_info!("  [FAIL] Default SW bits\n");
             fail += 1;
         }
     }
@@ -31,10 +31,10 @@ pub fn run_page_ownership_test() {
         mapper.write_sw_bits(0x5000_0000, 0b01).unwrap();
         let bits = mapper.read_sw_bits(0x5000_0000);
         if bits == Some(0b01) {
-            hypervisor::uart_puts(b"  [PASS] Write/read SHARED_OWNED\n");
+            hypervisor::log_info!("  [PASS] Write/read SHARED_OWNED\n");
             pass += 1;
         } else {
-            hypervisor::uart_puts(b"  [FAIL] Write/read SHARED_OWNED\n");
+            hypervisor::log_info!("  [FAIL] Write/read SHARED_OWNED\n");
             fail += 1;
         }
     }
@@ -44,10 +44,10 @@ pub fn run_page_ownership_test() {
         mapper.write_sw_bits(0x5000_0000, 0b00).unwrap();
         let bits = mapper.read_sw_bits(0x5000_0000);
         if bits == Some(0b00) {
-            hypervisor::uart_puts(b"  [PASS] Restore to OWNED\n");
+            hypervisor::log_info!("  [PASS] Restore to OWNED\n");
             pass += 1;
         } else {
-            hypervisor::uart_puts(b"  [FAIL] Restore to OWNED\n");
+            hypervisor::log_info!("  [FAIL] Restore to OWNED\n");
             fail += 1;
         }
     }
@@ -56,10 +56,10 @@ pub fn run_page_ownership_test() {
     {
         let bits = mapper.read_sw_bits(0x9000_0000);
         if bits.is_none() {
-            hypervisor::uart_puts(b"  [PASS] Unmapped IPA returns None\n");
+            hypervisor::log_info!("  [PASS] Unmapped IPA returns None\n");
             pass += 1;
         } else {
-            hypervisor::uart_puts(b"  [FAIL] Unmapped IPA should be None\n");
+            hypervisor::log_info!("  [FAIL] Unmapped IPA should be None\n");
             fail += 1;
         }
     }
@@ -78,10 +78,10 @@ pub fn run_page_ownership_test() {
         // Before split: both pages should be OWNED (0b00)
         let bits_before = walker.read_sw_bits(0x6000_0000);
         if bits_before == Some(0b00) {
-            hypervisor::uart_puts(b"  [PASS] Pre-split: base page SW=OWNED\n");
+            hypervisor::log_info!("  [PASS] Pre-split: base page SW=OWNED\n");
             pass += 1;
         } else {
-            hypervisor::uart_puts(b"  [FAIL] Pre-split: base page SW bits\n");
+            hypervisor::log_info!("  [FAIL] Pre-split: base page SW bits\n");
             fail += 1;
         }
 
@@ -91,20 +91,20 @@ pub fn run_page_ownership_test() {
         // Target page should be SharedOwned
         let target_bits = walker.read_sw_bits(0x6000_1000);
         if target_bits == Some(0b01) {
-            hypervisor::uart_puts(b"  [PASS] Post-split: target page SW=SHARED_OWNED\n");
+            hypervisor::log_info!("  [PASS] Post-split: target page SW=SHARED_OWNED\n");
             pass += 1;
         } else {
-            hypervisor::uart_puts(b"  [FAIL] Post-split: target page SW bits\n");
+            hypervisor::log_info!("  [FAIL] Post-split: target page SW bits\n");
             fail += 1;
         }
 
         // Neighboring pages should still be OWNED (block split preserves attributes)
         let base_bits = walker.read_sw_bits(0x6000_0000);
         if base_bits == Some(0b00) {
-            hypervisor::uart_puts(b"  [PASS] Post-split: base page SW=OWNED (unchanged)\n");
+            hypervisor::log_info!("  [PASS] Post-split: base page SW=OWNED (unchanged)\n");
             pass += 1;
         } else {
-            hypervisor::uart_puts(b"  [FAIL] Post-split: base page should be OWNED\n");
+            hypervisor::log_info!("  [FAIL] Post-split: base page should be OWNED\n");
             fail += 1;
         }
 
@@ -112,19 +112,19 @@ pub fn run_page_ownership_test() {
         walker.set_s2ap(0x6000_1000, 0b01).unwrap(); // RO
         let target_s2ap = walker.read_s2ap(0x6000_1000);
         if target_s2ap == Some(0b01) {
-            hypervisor::uart_puts(b"  [PASS] Post-split: target S2AP=RO\n");
+            hypervisor::log_info!("  [PASS] Post-split: target S2AP=RO\n");
             pass += 1;
         } else {
-            hypervisor::uart_puts(b"  [FAIL] Post-split: target S2AP\n");
+            hypervisor::log_info!("  [FAIL] Post-split: target S2AP\n");
             fail += 1;
         }
 
         let base_s2ap = walker.read_s2ap(0x6000_0000);
         if base_s2ap == Some(0b11) {
-            hypervisor::uart_puts(b"  [PASS] Post-split: base S2AP=RW (unchanged)\n");
+            hypervisor::log_info!("  [PASS] Post-split: base S2AP=RW (unchanged)\n");
             pass += 1;
         } else {
-            hypervisor::uart_puts(b"  [FAIL] Post-split: base S2AP should be RW\n");
+            hypervisor::log_info!("  [FAIL] Post-split: base S2AP should be RW\n");
             fail += 1;
         }
 
@@ -132,10 +132,6 @@ pub fn run_page_ownership_test() {
         core::mem::forget(mapper2);
     }
 
-    hypervisor::uart_puts(b"  Results: ");
-    hypervisor::uart_put_u64(pass);
-    hypervisor::uart_puts(b" passed, ");
-    hypervisor::uart_put_u64(fail);
-    hypervisor::uart_puts(b" failed\n");
+    hypervisor::log_info!("  Results: {} passed, {} failed\n", pass, fail);
     assert!(fail == 0, "Page ownership tests failed");
 }

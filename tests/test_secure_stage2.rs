@@ -3,7 +3,7 @@
 use hypervisor::secure_stage2::SecureStage2Config;
 
 pub fn run_tests() {
-    crate::uart_puts(b"  test_secure_stage2...\n");
+    hypervisor::log_info!("  test_secure_stage2...\n");
     let mut pass = 0u32;
 
     // Test 1: VSTTBR contains page table address (masked to valid bits)
@@ -25,7 +25,5 @@ pub fn run_tests() {
     assert_eq!(config3.vsttbr, 0xABCD_0000);
     pass += 1;
 
-    crate::uart_puts(b"    ");
-    crate::print_u32(pass);
-    crate::uart_puts(b" assertions passed\n");
+    hypervisor::log_info!("    {} assertions passed\n", pass);
 }

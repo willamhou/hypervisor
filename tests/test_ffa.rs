@@ -7,7 +7,7 @@ use hypervisor::arch::aarch64::regs::VcpuContext;
 use hypervisor::ffa;
 
 pub fn run_ffa_test() {
-    hypervisor::uart_puts(b"\n=== Test: FF-A Proxy ===\n");
+    hypervisor::log_info!("\n=== Test: FF-A Proxy ===\n");
     let mut pass: u64 = 0;
     let mut fail: u64 = 0;
 
@@ -26,10 +26,10 @@ pub fn run_ffa_test() {
         ctx.gp_regs.x1 = ffa::FFA_VERSION_1_1 as u64;
         let cont = ffa::proxy::handle_ffa_call(&mut ctx);
         if cont && ctx.gp_regs.x0 == ffa::FFA_VERSION_1_1 as u64 {
-            hypervisor::uart_puts(b"  [PASS] FFA_VERSION returns 0x00010001\n");
+            hypervisor::log_info!("  [PASS] FFA_VERSION returns 0x00010001\n");
             pass += 1;
         } else {
-            hypervisor::uart_puts(b"  [FAIL] FFA_VERSION\n");
+            hypervisor::log_info!("  [FAIL] FFA_VERSION\n");
             fail += 1;
         }
     }
@@ -40,10 +40,10 @@ pub fn run_ffa_test() {
         ctx.gp_regs.x0 = ffa::FFA_ID_GET;
         let cont = ffa::proxy::handle_ffa_call(&mut ctx);
         if cont && ctx.gp_regs.x0 == ffa::FFA_SUCCESS_32 && ctx.gp_regs.x2 == 1 {
-            hypervisor::uart_puts(b"  [PASS] FFA_ID_GET returns partition ID 1\n");
+            hypervisor::log_info!("  [PASS] FFA_ID_GET returns partition ID 1\n");
             pass += 1;
         } else {
-            hypervisor::uart_puts(b"  [FAIL] FFA_ID_GET\n");
+            hypervisor::log_info!("  [FAIL] FFA_ID_GET\n");
             fail += 1;
         }
     }
@@ -55,10 +55,10 @@ pub fn run_ffa_test() {
         ctx.gp_regs.x1 = ffa::FFA_VERSION;
         let cont = ffa::proxy::handle_ffa_call(&mut ctx);
         if cont && ctx.gp_regs.x0 == ffa::FFA_SUCCESS_32 {
-            hypervisor::uart_puts(b"  [PASS] FFA_FEATURES(FFA_VERSION) = supported\n");
+            hypervisor::log_info!("  [PASS] FFA_FEATURES(FFA_VERSION) = supported\n");
             pass += 1;
         } else {
-            hypervisor::uart_puts(b"  [FAIL] FFA_FEATURES(FFA_VERSION)\n");
+            hypervisor::log_info!("  [FAIL] FFA_FEATURES(FFA_VERSION)\n");
             fail += 1;
         }
     }
@@ -70,10 +70,10 @@ pub fn run_ffa_test() {
         ctx.gp_regs.x1 = 0x84000099;
         let cont = ffa::proxy::handle_ffa_call(&mut ctx);
         if cont && ctx.gp_regs.x0 == ffa::FFA_ERROR {
-            hypervisor::uart_puts(b"  [PASS] FFA_FEATURES(unknown) = NOT_SUPPORTED\n");
+            hypervisor::log_info!("  [PASS] FFA_FEATURES(unknown) = NOT_SUPPORTED\n");
             pass += 1;
         } else {
-            hypervisor::uart_puts(b"  [FAIL] FFA_FEATURES(unknown)\n");
+            hypervisor::log_info!("  [FAIL] FFA_FEATURES(unknown)\n");
             fail += 1;
         }
     }
@@ -84,10 +84,10 @@ pub fn run_ffa_test() {
         ctx.gp_regs.x0 = ffa::FFA_MEM_DONATE_32;
         let cont = ffa::proxy::handle_ffa_call(&mut ctx);
         if cont && ctx.gp_regs.x0 == ffa::FFA_ERROR {
-            hypervisor::uart_puts(b"  [PASS] FFA_MEM_DONATE blocked\n");
+            hypervisor::log_info!("  [PASS] FFA_MEM_DONATE blocked\n");
             pass += 1;
         } else {
-            hypervisor::uart_puts(b"  [FAIL] FFA_MEM_DONATE not blocked\n");
+            hypervisor::log_info!("  [FAIL] FFA_MEM_DONATE not blocked\n");
             fail += 1;
         }
     }
@@ -101,10 +101,10 @@ pub fn run_ffa_test() {
         ctx.gp_regs.x3 = 1; // 1 page
         let cont = ffa::proxy::handle_ffa_call(&mut ctx);
         if cont && ctx.gp_regs.x0 == ffa::FFA_SUCCESS_32 {
-            hypervisor::uart_puts(b"  [PASS] FFA_RXTX_MAP success\n");
+            hypervisor::log_info!("  [PASS] FFA_RXTX_MAP success\n");
             pass += 1;
         } else {
-            hypervisor::uart_puts(b"  [FAIL] FFA_RXTX_MAP\n");
+            hypervisor::log_info!("  [FAIL] FFA_RXTX_MAP\n");
             fail += 1;
         }
     }
@@ -118,10 +118,10 @@ pub fn run_ffa_test() {
         ctx.gp_regs.x3 = 1;
         let cont = ffa::proxy::handle_ffa_call(&mut ctx);
         if cont && ctx.gp_regs.x0 == ffa::FFA_ERROR {
-            hypervisor::uart_puts(b"  [PASS] FFA_RXTX_MAP duplicate denied\n");
+            hypervisor::log_info!("  [PASS] FFA_RXTX_MAP duplicate denied\n");
             pass += 1;
         } else {
-            hypervisor::uart_puts(b"  [FAIL] FFA_RXTX_MAP duplicate\n");
+            hypervisor::log_info!("  [FAIL] FFA_RXTX_MAP duplicate\n");
             fail += 1;
         }
     }
@@ -132,10 +132,10 @@ pub fn run_ffa_test() {
         ctx.gp_regs.x0 = ffa::FFA_RXTX_UNMAP;
         let cont = ffa::proxy::handle_ffa_call(&mut ctx);
         if cont && ctx.gp_regs.x0 == ffa::FFA_SUCCESS_32 {
-            hypervisor::uart_puts(b"  [PASS] FFA_RXTX_UNMAP success\n");
+            hypervisor::log_info!("  [PASS] FFA_RXTX_UNMAP success\n");
             pass += 1;
         } else {
-            hypervisor::uart_puts(b"  [FAIL] FFA_RXTX_UNMAP\n");
+            hypervisor::log_info!("  [FAIL] FFA_RXTX_UNMAP\n");
             fail += 1;
         }
     }
@@ -159,10 +159,10 @@ pub fn run_ffa_test() {
             && ctx.gp_regs.x4 == 0xDEAD_BEEF
             && ctx.gp_regs.x5 == 0xCAFE_BABE
         {
-            hypervisor::uart_puts(b"  [PASS] FFA_MSG_SEND_DIRECT_REQ echo\n");
+            hypervisor::log_info!("  [PASS] FFA_MSG_SEND_DIRECT_REQ echo\n");
             pass += 1;
         } else {
-            hypervisor::uart_puts(b"  [FAIL] FFA_MSG_SEND_DIRECT_REQ\n");
+            hypervisor::log_info!("  [FAIL] FFA_MSG_SEND_DIRECT_REQ\n");
             fail += 1;
         }
     }
@@ -175,10 +175,10 @@ pub fn run_ffa_test() {
         ctx.gp_regs.x1 = (1u64 << 16) | 0x9999; // Invalid SP
         let cont = ffa::proxy::handle_ffa_call(&mut ctx);
         if cont && ctx.gp_regs.x0 == ffa::FFA_ERROR {
-            hypervisor::uart_puts(b"  [PASS] Direct req to invalid SP rejected\n");
+            hypervisor::log_info!("  [PASS] Direct req to invalid SP rejected\n");
             pass += 1;
         } else {
-            hypervisor::uart_puts(b"  [FAIL] Direct req to invalid SP\n");
+            hypervisor::log_info!("  [FAIL] Direct req to invalid SP\n");
             fail += 1;
         }
     }
@@ -193,7 +193,7 @@ pub fn run_ffa_test() {
         let cont = ffa::proxy::handle_ffa_call(&mut ctx);
         let handle = ctx.gp_regs.x2;
         if cont && ctx.gp_regs.x0 == ffa::FFA_SUCCESS_32 && handle > 0 {
-            hypervisor::uart_puts(b"  [PASS] FFA_MEM_SHARE returns handle\n");
+            hypervisor::log_info!("  [PASS] FFA_MEM_SHARE returns handle\n");
             pass += 1;
 
             // Test 12: FFA_MEM_RECLAIM with valid handle
@@ -203,14 +203,14 @@ pub fn run_ffa_test() {
             ctx2.gp_regs.x2 = 0; // handle high
             let cont2 = ffa::proxy::handle_ffa_call(&mut ctx2);
             if cont2 && ctx2.gp_regs.x0 == ffa::FFA_SUCCESS_32 {
-                hypervisor::uart_puts(b"  [PASS] FFA_MEM_RECLAIM success\n");
+                hypervisor::log_info!("  [PASS] FFA_MEM_RECLAIM success\n");
                 pass += 1;
             } else {
-                hypervisor::uart_puts(b"  [FAIL] FFA_MEM_RECLAIM\n");
+                hypervisor::log_info!("  [FAIL] FFA_MEM_RECLAIM\n");
                 fail += 1;
             }
         } else {
-            hypervisor::uart_puts(b"  [FAIL] FFA_MEM_SHARE\n");
+            hypervisor::log_info!("  [FAIL] FFA_MEM_SHARE\n");
             fail += 2; // Skip reclaim test too
         }
     }
@@ -223,10 +223,10 @@ pub fn run_ffa_test() {
         ctx.gp_regs.x2 = 0;
         let cont = ffa::proxy::handle_ffa_call(&mut ctx);
         if cont && ctx.gp_regs.x0 == ffa::FFA_ERROR {
-            hypervisor::uart_puts(b"  [PASS] FFA_MEM_RECLAIM invalid handle rejected\n");
+            hypervisor::log_info!("  [PASS] FFA_MEM_RECLAIM invalid handle rejected\n");
             pass += 1;
         } else {
-            hypervisor::uart_puts(b"  [FAIL] FFA_MEM_RECLAIM invalid\n");
+            hypervisor::log_info!("  [FAIL] FFA_MEM_RECLAIM invalid\n");
             fail += 1;
         }
     }
@@ -248,14 +248,14 @@ pub fn run_ffa_test() {
                 && p.ranges[0] == (0x5000_0000, 2)
                 && p.total_page_count == 2
             {
-                hypervisor::uart_puts(b"  [PASS] Parse valid FfaMemRegion\n");
+                hypervisor::log_info!("  [PASS] Parse valid FfaMemRegion\n");
                 pass += 1;
             } else {
-                hypervisor::uart_puts(b"  [FAIL] Parse valid FfaMemRegion: wrong fields\n");
+                hypervisor::log_info!("  [FAIL] Parse valid FfaMemRegion: wrong fields\n");
                 fail += 1;
             }
         } else {
-            hypervisor::uart_puts(b"  [FAIL] Parse valid FfaMemRegion: error\n");
+            hypervisor::log_info!("  [FAIL] Parse valid FfaMemRegion: error\n");
             fail += 1;
         }
     }
@@ -274,14 +274,14 @@ pub fn run_ffa_test() {
                 && p.ranges[1] == (0x6000_0000, 3)
                 && p.total_page_count == 4
             {
-                hypervisor::uart_puts(b"  [PASS] Parse multi-range descriptor\n");
+                hypervisor::log_info!("  [PASS] Parse multi-range descriptor\n");
                 pass += 1;
             } else {
-                hypervisor::uart_puts(b"  [FAIL] Parse multi-range: wrong fields\n");
+                hypervisor::log_info!("  [FAIL] Parse multi-range: wrong fields\n");
                 fail += 1;
             }
         } else {
-            hypervisor::uart_puts(b"  [FAIL] Parse multi-range: error\n");
+            hypervisor::log_info!("  [FAIL] Parse multi-range: error\n");
             fail += 1;
         }
     }
@@ -292,14 +292,14 @@ pub fn run_ffa_test() {
         let parsed = unsafe { ffa::descriptors::parse_mem_region(buf.as_ptr(), 16) };
         if let Err(code) = parsed {
             if code == ffa::FFA_INVALID_PARAMETERS {
-                hypervisor::uart_puts(b"  [PASS] Parse undersized -> INVALID_PARAMS\n");
+                hypervisor::log_info!("  [PASS] Parse undersized -> INVALID_PARAMS\n");
                 pass += 1;
             } else {
-                hypervisor::uart_puts(b"  [FAIL] Parse undersized: wrong error code\n");
+                hypervisor::log_info!("  [FAIL] Parse undersized: wrong error code\n");
                 fail += 1;
             }
         } else {
-            hypervisor::uart_puts(b"  [FAIL] Parse undersized: should fail\n");
+            hypervisor::log_info!("  [FAIL] Parse undersized: should fail\n");
             fail += 1;
         }
     }
@@ -314,14 +314,10 @@ pub fn run_ffa_test() {
         );
         // QEMU firmware always implements PSCI — should return version (not -1)
         if result.x0 != 0xFFFF_FFFF_FFFF_FFFF && result.x0 != 0 {
-            hypervisor::uart_puts(b"  [PASS] SMC forward PSCI_VERSION returns ");
-            hypervisor::uart_put_hex(result.x0);
-            hypervisor::uart_puts(b"\n");
+            hypervisor::log_info!("  [PASS] SMC forward PSCI_VERSION returns {:#018x}\n", result.x0);
             pass += 1;
         } else {
-            hypervisor::uart_puts(b"  [FAIL] SMC forward PSCI_VERSION: ");
-            hypervisor::uart_put_hex(result.x0);
-            hypervisor::uart_puts(b"\n");
+            hypervisor::log_info!("  [FAIL] SMC forward PSCI_VERSION: {:#018x}\n", result.x0);
             fail += 1;
         }
     }
@@ -337,10 +333,10 @@ pub fn run_ffa_test() {
         ctx.gp_regs.x0 = 0x8400009F; // Unknown FF-A function ID
         let cont = ffa::proxy::handle_ffa_call(&mut ctx);
         if cont && ctx.gp_regs.x0 == ffa::FFA_ERROR {
-            hypervisor::uart_puts(b"  [PASS] Unknown FFA -> NOT_SUPPORTED\n");
+            hypervisor::log_info!("  [PASS] Unknown FFA -> NOT_SUPPORTED\n");
             pass += 1;
         } else {
-            hypervisor::uart_puts(b"  [FAIL] Unknown FFA call\n");
+            hypervisor::log_info!("  [FAIL] Unknown FFA call\n");
             fail += 1;
         }
     }
@@ -354,10 +350,10 @@ pub fn run_ffa_test() {
         let ok_sp = ffa::is_valid_receiver(0x8001); // SP1
         let bad = ffa::is_valid_receiver(0x9999); // Invalid
         if ok_vm && ok_vm2 && ok_sp && !bad {
-            hypervisor::uart_puts(b"  [PASS] is_valid_receiver accepts VMs and SPs\n");
+            hypervisor::log_info!("  [PASS] is_valid_receiver accepts VMs and SPs\n");
             pass += 1;
         } else {
-            hypervisor::uart_puts(b"  [FAIL] is_valid_receiver\n");
+            hypervisor::log_info!("  [FAIL] is_valid_receiver\n");
             fail += 1;
         }
     }
@@ -372,10 +368,10 @@ pub fn run_ffa_test() {
         let cont = ffa::proxy::handle_ffa_call(&mut ctx);
         let handle = ctx.gp_regs.x2 | (ctx.gp_regs.x3 << 32);
         if cont && ctx.gp_regs.x0 == ffa::FFA_SUCCESS_32 && handle > 0 {
-            hypervisor::uart_puts(b"  [PASS] MEM_SHARE to VM1 returns handle\n");
+            hypervisor::log_info!("  [PASS] MEM_SHARE to VM1 returns handle\n");
             pass += 1;
         } else {
-            hypervisor::uart_puts(b"  [FAIL] MEM_SHARE to VM1\n");
+            hypervisor::log_info!("  [FAIL] MEM_SHARE to VM1\n");
             fail += 1;
         }
     }
@@ -405,10 +401,10 @@ pub fn run_ffa_test() {
         hypervisor::global::CURRENT_VM_ID.store(0, core::sync::atomic::Ordering::Relaxed);
 
         if cont && ctx2.gp_regs.x0 == ffa::FFA_MEM_RETRIEVE_RESP {
-            hypervisor::uart_puts(b"  [PASS] MEM_RETRIEVE_REQ by VM1 succeeds\n");
+            hypervisor::log_info!("  [PASS] MEM_RETRIEVE_REQ by VM1 succeeds\n");
             pass += 1;
         } else {
-            hypervisor::uart_puts(b"  [FAIL] MEM_RETRIEVE_REQ by VM1\n");
+            hypervisor::log_info!("  [FAIL] MEM_RETRIEVE_REQ by VM1\n");
             fail += 1;
         }
     }
@@ -441,10 +437,10 @@ pub fn run_ffa_test() {
         hypervisor::global::CURRENT_VM_ID.store(0, core::sync::atomic::Ordering::Relaxed);
 
         if cont && ctx3.gp_regs.x0 == ffa::FFA_ERROR {
-            hypervisor::uart_puts(b"  [PASS] Double RETRIEVE denied\n");
+            hypervisor::log_info!("  [PASS] Double RETRIEVE denied\n");
             pass += 1;
         } else {
-            hypervisor::uart_puts(b"  [FAIL] Double RETRIEVE\n");
+            hypervisor::log_info!("  [FAIL] Double RETRIEVE\n");
             fail += 1;
         }
     }
@@ -476,10 +472,10 @@ pub fn run_ffa_test() {
         hypervisor::global::CURRENT_VM_ID.store(0, core::sync::atomic::Ordering::Relaxed);
 
         if cont && ctx3.gp_regs.x0 == ffa::FFA_SUCCESS_32 {
-            hypervisor::uart_puts(b"  [PASS] MEM_RELINQUISH by VM1 succeeds\n");
+            hypervisor::log_info!("  [PASS] MEM_RELINQUISH by VM1 succeeds\n");
             pass += 1;
         } else {
-            hypervisor::uart_puts(b"  [FAIL] MEM_RELINQUISH by VM1\n");
+            hypervisor::log_info!("  [FAIL] MEM_RELINQUISH by VM1\n");
             fail += 1;
         }
     }
@@ -519,10 +515,10 @@ pub fn run_ffa_test() {
         let cont = ffa::proxy::handle_ffa_call(&mut ctx4);
 
         if cont && ctx4.gp_regs.x0 == ffa::FFA_SUCCESS_32 {
-            hypervisor::uart_puts(b"  [PASS] MEM_RECLAIM after RELINQUISH succeeds\n");
+            hypervisor::log_info!("  [PASS] MEM_RECLAIM after RELINQUISH succeeds\n");
             pass += 1;
         } else {
-            hypervisor::uart_puts(b"  [FAIL] MEM_RECLAIM after RELINQUISH\n");
+            hypervisor::log_info!("  [FAIL] MEM_RECLAIM after RELINQUISH\n");
             fail += 1;
         }
     }
@@ -555,10 +551,10 @@ pub fn run_ffa_test() {
         let cont = ffa::proxy::handle_ffa_call(&mut ctx3);
 
         if cont && ctx3.gp_regs.x0 == ffa::FFA_ERROR {
-            hypervisor::uart_puts(b"  [PASS] RECLAIM while retrieved denied\n");
+            hypervisor::log_info!("  [PASS] RECLAIM while retrieved denied\n");
             pass += 1;
         } else {
-            hypervisor::uart_puts(b"  [FAIL] RECLAIM while retrieved\n");
+            hypervisor::log_info!("  [FAIL] RECLAIM while retrieved\n");
             fail += 1;
         }
     }
@@ -582,10 +578,10 @@ pub fn run_ffa_test() {
         let cont = ffa::proxy::handle_ffa_call(&mut ctx2);
 
         if cont && ctx2.gp_regs.x0 == ffa::FFA_ERROR {
-            hypervisor::uart_puts(b"  [PASS] RETRIEVE by wrong VM denied\n");
+            hypervisor::log_info!("  [PASS] RETRIEVE by wrong VM denied\n");
             pass += 1;
         } else {
-            hypervisor::uart_puts(b"  [FAIL] RETRIEVE by wrong VM\n");
+            hypervisor::log_info!("  [FAIL] RETRIEVE by wrong VM\n");
             fail += 1;
         }
     }
@@ -611,10 +607,10 @@ pub fn run_ffa_test() {
         }
 
         if ok {
-            hypervisor::uart_puts(b"  [PASS] FEATURES: RETRIEVE/RELINQUISH supported\n");
+            hypervisor::log_info!("  [PASS] FEATURES: RETRIEVE/RELINQUISH supported\n");
             pass += 1;
         } else {
-            hypervisor::uart_puts(b"  [FAIL] FEATURES: RETRIEVE/RELINQUISH\n");
+            hypervisor::log_info!("  [FAIL] FEATURES: RETRIEVE/RELINQUISH\n");
             fail += 1;
         }
     }
@@ -627,10 +623,10 @@ pub fn run_ffa_test() {
         ctx.gp_regs.x0 = ffa::FFA_SPM_ID_GET;
         let cont = ffa::proxy::handle_ffa_call(&mut ctx);
         if cont && ctx.gp_regs.x0 == ffa::FFA_SUCCESS_32 && ctx.gp_regs.x2 == 0x8000 {
-            hypervisor::uart_puts(b"  [PASS] FFA_SPM_ID_GET returns 0x8000\n");
+            hypervisor::log_info!("  [PASS] FFA_SPM_ID_GET returns 0x8000\n");
             pass += 1;
         } else {
-            hypervisor::uart_puts(b"  [FAIL] FFA_SPM_ID_GET\n");
+            hypervisor::log_info!("  [FAIL] FFA_SPM_ID_GET\n");
             fail += 1;
         }
     }
@@ -642,10 +638,10 @@ pub fn run_ffa_test() {
         ctx.gp_regs.x1 = (0x8001u64 << 16) | 0; // SP1, vCPU 0
         let cont = ffa::proxy::handle_ffa_call(&mut ctx);
         if cont && ctx.gp_regs.x0 == ffa::FFA_ERROR {
-            hypervisor::uart_puts(b"  [PASS] FFA_RUN returns NOT_SUPPORTED\n");
+            hypervisor::log_info!("  [PASS] FFA_RUN returns NOT_SUPPORTED\n");
             pass += 1;
         } else {
-            hypervisor::uart_puts(b"  [FAIL] FFA_RUN\n");
+            hypervisor::log_info!("  [FAIL] FFA_RUN\n");
             fail += 1;
         }
     }
@@ -657,10 +653,10 @@ pub fn run_ffa_test() {
         ctx.gp_regs.x1 = ffa::FFA_SPM_ID_GET;
         let cont = ffa::proxy::handle_ffa_call(&mut ctx);
         if cont && ctx.gp_regs.x0 == ffa::FFA_SUCCESS_32 {
-            hypervisor::uart_puts(b"  [PASS] FEATURES(SPM_ID_GET) supported\n");
+            hypervisor::log_info!("  [PASS] FEATURES(SPM_ID_GET) supported\n");
             pass += 1;
         } else {
-            hypervisor::uart_puts(b"  [FAIL] FEATURES(SPM_ID_GET)\n");
+            hypervisor::log_info!("  [FAIL] FEATURES(SPM_ID_GET)\n");
             fail += 1;
         }
     }
@@ -675,10 +671,10 @@ pub fn run_ffa_test() {
         ctx.gp_regs.x2 = 1; // 1 vCPU
         let cont = ffa::proxy::handle_ffa_call(&mut ctx);
         if cont && ctx.gp_regs.x0 == ffa::FFA_SUCCESS_32 {
-            hypervisor::uart_puts(b"  [PASS] BITMAP_CREATE for VM0\n");
+            hypervisor::log_info!("  [PASS] BITMAP_CREATE for VM0\n");
             pass += 1;
         } else {
-            hypervisor::uart_puts(b"  [FAIL] BITMAP_CREATE\n");
+            hypervisor::log_info!("  [FAIL] BITMAP_CREATE\n");
             fail += 1;
         }
     }
@@ -693,10 +689,10 @@ pub fn run_ffa_test() {
         ctx.gp_regs.x4 = 0;
         let cont = ffa::proxy::handle_ffa_call(&mut ctx);
         if cont && ctx.gp_regs.x0 == ffa::FFA_SUCCESS_32 {
-            hypervisor::uart_puts(b"  [PASS] NOTIFICATION_BIND SP1->VM0\n");
+            hypervisor::log_info!("  [PASS] NOTIFICATION_BIND SP1->VM0\n");
             pass += 1;
         } else {
-            hypervisor::uart_puts(b"  [FAIL] NOTIFICATION_BIND\n");
+            hypervisor::log_info!("  [FAIL] NOTIFICATION_BIND\n");
             fail += 1;
         }
     }
@@ -711,10 +707,10 @@ pub fn run_ffa_test() {
         ctx.gp_regs.x4 = 0;
         let cont = ffa::proxy::handle_ffa_call(&mut ctx);
         if cont && ctx.gp_regs.x0 == ffa::FFA_SUCCESS_32 {
-            hypervisor::uart_puts(b"  [PASS] NOTIFICATION_SET SP1->VM0\n");
+            hypervisor::log_info!("  [PASS] NOTIFICATION_SET SP1->VM0\n");
             pass += 1;
         } else {
-            hypervisor::uart_puts(b"  [FAIL] NOTIFICATION_SET\n");
+            hypervisor::log_info!("  [FAIL] NOTIFICATION_SET\n");
             fail += 1;
         }
     }
@@ -727,10 +723,10 @@ pub fn run_ffa_test() {
         ctx.gp_regs.x2 = 0x3; // flags: SP + VM
         let cont = ffa::proxy::handle_ffa_call(&mut ctx);
         if cont && ctx.gp_regs.x0 == ffa::FFA_SUCCESS_32 && ctx.gp_regs.x2 == 0x1 {
-            hypervisor::uart_puts(b"  [PASS] NOTIFICATION_GET returns 0x1\n");
+            hypervisor::log_info!("  [PASS] NOTIFICATION_GET returns 0x1\n");
             pass += 1;
         } else {
-            hypervisor::uart_puts(b"  [FAIL] NOTIFICATION_GET\n");
+            hypervisor::log_info!("  [FAIL] NOTIFICATION_GET\n");
             fail += 1;
         }
     }
@@ -743,10 +739,10 @@ pub fn run_ffa_test() {
         ctx.gp_regs.x2 = 0x3;
         let cont = ffa::proxy::handle_ffa_call(&mut ctx);
         if cont && ctx.gp_regs.x0 == ffa::FFA_SUCCESS_32 && ctx.gp_regs.x2 == 0 {
-            hypervisor::uart_puts(b"  [PASS] NOTIFICATION_GET cleared\n");
+            hypervisor::log_info!("  [PASS] NOTIFICATION_GET cleared\n");
             pass += 1;
         } else {
-            hypervisor::uart_puts(b"  [FAIL] NOTIFICATION_GET cleared\n");
+            hypervisor::log_info!("  [FAIL] NOTIFICATION_GET cleared\n");
             fail += 1;
         }
     }
@@ -760,10 +756,10 @@ pub fn run_ffa_test() {
         ctx.gp_regs.x4 = 0;
         let cont = ffa::proxy::handle_ffa_call(&mut ctx);
         if cont && ctx.gp_regs.x0 == ffa::FFA_SUCCESS_32 {
-            hypervisor::uart_puts(b"  [PASS] NOTIFICATION_UNBIND\n");
+            hypervisor::log_info!("  [PASS] NOTIFICATION_UNBIND\n");
             pass += 1;
         } else {
-            hypervisor::uart_puts(b"  [FAIL] NOTIFICATION_UNBIND\n");
+            hypervisor::log_info!("  [FAIL] NOTIFICATION_UNBIND\n");
             fail += 1;
         }
     }
@@ -778,10 +774,10 @@ pub fn run_ffa_test() {
         ctx.gp_regs.x4 = 0;
         let cont = ffa::proxy::handle_ffa_call(&mut ctx);
         if cont && ctx.gp_regs.x0 == ffa::FFA_ERROR {
-            hypervisor::uart_puts(b"  [PASS] SET after UNBIND denied\n");
+            hypervisor::log_info!("  [PASS] SET after UNBIND denied\n");
             pass += 1;
         } else {
-            hypervisor::uart_puts(b"  [FAIL] SET after UNBIND\n");
+            hypervisor::log_info!("  [FAIL] SET after UNBIND\n");
             fail += 1;
         }
     }
@@ -793,10 +789,10 @@ pub fn run_ffa_test() {
         ctx.gp_regs.x1 = ffa::FFA_NOTIFICATION_BIND;
         let cont = ffa::proxy::handle_ffa_call(&mut ctx);
         if cont && ctx.gp_regs.x0 == ffa::FFA_SUCCESS_32 {
-            hypervisor::uart_puts(b"  [PASS] FEATURES(NOTIFICATION_BIND)\n");
+            hypervisor::log_info!("  [PASS] FEATURES(NOTIFICATION_BIND)\n");
             pass += 1;
         } else {
-            hypervisor::uart_puts(b"  [FAIL] FEATURES(NOTIFICATION_BIND)\n");
+            hypervisor::log_info!("  [FAIL] FEATURES(NOTIFICATION_BIND)\n");
             fail += 1;
         }
     }
@@ -811,10 +807,10 @@ pub fn run_ffa_test() {
         ctx.gp_regs.x1 = 0; // flags
         let cont = ffa::proxy::handle_ffa_call(&mut ctx);
         if cont && ctx.gp_regs.x0 == ffa::FFA_ERROR {
-            hypervisor::uart_puts(b"  [PASS] MSG_SEND2 no mailbox denied\n");
+            hypervisor::log_info!("  [PASS] MSG_SEND2 no mailbox denied\n");
             pass += 1;
         } else {
-            hypervisor::uart_puts(b"  [FAIL] MSG_SEND2 no mailbox\n");
+            hypervisor::log_info!("  [FAIL] MSG_SEND2 no mailbox\n");
             fail += 1;
         }
     }
@@ -872,10 +868,10 @@ pub fn run_ffa_test() {
                 ctx.gp_regs.x1 = 0;
                 let cont = ffa::proxy::handle_ffa_call(&mut ctx);
                 if cont && ctx.gp_regs.x0 == ffa::FFA_SUCCESS_32 {
-                    hypervisor::uart_puts(b"  [PASS] MSG_SEND2 VM0->VM1\n");
+                    hypervisor::log_info!("  [PASS] MSG_SEND2 VM0->VM1\n");
                     pass += 1;
                 } else {
-                    hypervisor::uart_puts(b"  [FAIL] MSG_SEND2 VM0->VM1\n");
+                    hypervisor::log_info!("  [FAIL] MSG_SEND2 VM0->VM1\n");
                     fail += 1;
                 }
             }
@@ -886,10 +882,10 @@ pub fn run_ffa_test() {
                 ctx.gp_regs.x0 = ffa::FFA_MSG_WAIT;
                 let cont = ffa::proxy::handle_ffa_call(&mut ctx);
                 if cont && ctx.gp_regs.x0 == ffa::FFA_SUCCESS_32 && ctx.gp_regs.x1 == 1 {
-                    hypervisor::uart_puts(b"  [PASS] MSG_WAIT returns sender=VM0\n");
+                    hypervisor::log_info!("  [PASS] MSG_WAIT returns sender=VM0\n");
                     pass += 1;
                 } else {
-                    hypervisor::uart_puts(b"  [FAIL] MSG_WAIT\n");
+                    hypervisor::log_info!("  [FAIL] MSG_WAIT\n");
                     fail += 1;
                 }
             }
@@ -908,10 +904,10 @@ pub fn run_ffa_test() {
             ctx.gp_regs.x0 = ffa::FFA_MSG_WAIT;
             let cont = ffa::proxy::handle_ffa_call(&mut ctx);
             if cont && ctx.gp_regs.x0 == ffa::FFA_ERROR {
-                hypervisor::uart_puts(b"  [PASS] MSG_WAIT no msg -> NO_DATA\n");
+                hypervisor::log_info!("  [PASS] MSG_WAIT no msg -> NO_DATA\n");
                 pass += 1;
             } else {
-                hypervisor::uart_puts(b"  [FAIL] MSG_WAIT no msg\n");
+                hypervisor::log_info!("  [FAIL] MSG_WAIT no msg\n");
                 fail += 1;
             }
         }
@@ -934,10 +930,10 @@ pub fn run_ffa_test() {
             ctx2.gp_regs.x0 = ffa::FFA_MSG_SEND2;
             let cont = ffa::proxy::handle_ffa_call(&mut ctx2);
             if cont && ctx2.gp_regs.x0 == ffa::FFA_ERROR {
-                hypervisor::uart_puts(b"  [PASS] MSG_SEND2 RX busy\n");
+                hypervisor::log_info!("  [PASS] MSG_SEND2 RX busy\n");
                 pass += 1;
             } else {
-                hypervisor::uart_puts(b"  [FAIL] MSG_SEND2 RX busy\n");
+                hypervisor::log_info!("  [FAIL] MSG_SEND2 RX busy\n");
                 fail += 1;
             }
         }
@@ -949,10 +945,10 @@ pub fn run_ffa_test() {
             ctx.gp_regs.x1 = ffa::FFA_MSG_SEND2;
             let cont = ffa::proxy::handle_ffa_call(&mut ctx);
             if cont && ctx.gp_regs.x0 == ffa::FFA_SUCCESS_32 {
-                hypervisor::uart_puts(b"  [PASS] FEATURES(MSG_SEND2)\n");
+                hypervisor::log_info!("  [PASS] FEATURES(MSG_SEND2)\n");
                 pass += 1;
             } else {
-                hypervisor::uart_puts(b"  [FAIL] FEATURES(MSG_SEND2)\n");
+                hypervisor::log_info!("  [FAIL] FEATURES(MSG_SEND2)\n");
                 fail += 1;
             }
         }
@@ -972,10 +968,6 @@ pub fn run_ffa_test() {
         hypervisor::global::CURRENT_VM_ID.store(0, core::sync::atomic::Ordering::Relaxed);
     }
 
-    hypervisor::uart_puts(b"  Results: ");
-    hypervisor::uart_put_u64(pass);
-    hypervisor::uart_puts(b" passed, ");
-    hypervisor::uart_put_u64(fail);
-    hypervisor::uart_puts(b" failed\n");
+    hypervisor::log_info!("  Results: {} passed, {} failed\n", pass, fail);
     assert!(fail == 0, "FF-A proxy tests failed");
 }

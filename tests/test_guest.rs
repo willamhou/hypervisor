@@ -3,7 +3,6 @@
 //! This module provides a simple guest program that can be used
 //! to test the vCPU framework.
 
-use hypervisor::uart_puts;
 use hypervisor::vm::Vm;
 
 /// Guest code area - simple assembly instructions
@@ -53,7 +52,7 @@ static mut GUEST_STACK: GuestStack = GuestStack { stack: [0; 16384] };
 
 /// Run a simple guest test
 pub fn run_test() {
-    uart_puts(b"\n[TEST] Starting guest execution test...\n");
+    hypervisor::log_info!("\n[TEST] Starting guest execution test...\n");
 
     // Create VM
     let mut vm = Vm::new(0);
@@ -63,13 +62,8 @@ pub fn run_test() {
     let guest_stack =
         unsafe { (&raw const GUEST_STACK.stack as *const [u8; 16384]) as u64 + 16384 };
 
-    uart_puts(b"[TEST] Guest entry point: 0x");
-    print_hex(guest_entry);
-    uart_puts(b"\n");
-
-    uart_puts(b"[TEST] Guest stack: 0x");
-    print_hex(guest_stack);
-    uart_puts(b"\n");
+    hypervisor::log_info!("[TEST] Guest entry point: {:#018x}\n", guest_entry);
+    hypervisor::log_info!("[TEST] Guest stack: {:#018x}\n", guest_stack);
 
     // Initialize memory mapping
     // Map the region containing guest code and stack
@@ -82,51 +76,26 @@ pub fn run_test() {
     // Add vCPU with guest entry point
     match vm.add_vcpu(guest_entry, guest_stack) {
         Ok(vcpu_id) => {
-            uart_puts(b"[TEST] Created vCPU ");
-            print_digit(vcpu_id as u8);
-            uart_puts(b"\n");
+            hypervisor::log_info!("[TEST] Created vCPU {}\n", vcpu_id);
         }
         Err(e) => {
-            uart_puts(b"[ERROR] Failed to create vCPU: ");
-            uart_puts(e.as_bytes());
-            uart_puts(b"\n");
+            hypervisor::log_info!("[ERROR] Failed to create vCPU: {}\n", e);
             return;
         }
     }
 
     // Run the VM
-    uart_puts(b"[TEST] Entering guest...\n");
-    uart_puts(b"[GUEST] "); // Guest will print 'G!\n' after this
+    hypervisor::log_info!("[TEST] Entering guest...\n");
+    hypervisor::log_info!("[GUEST] "); // Guest will print 'G!\n' after this
 
     match vm.run() {
         Ok(()) => {
-            uart_puts(b"[TEST] Guest exited successfully\n");
+            hypervisor::log_info!("[TEST] Guest exited successfully\n");
         }
         Err(e) => {
-            uart_puts(b"[ERROR] Guest failed: ");
-            uart_puts(e.as_bytes());
-            uart_puts(b"\n");
+            hypervisor::log_info!("[ERROR] Guest failed: {}\n", e);
         }
     }
 
-    uart_puts(b"[TEST] Guest test complete!\n\n");
-}
-
-/// Print a 64-bit hex value
-fn print_hex(value: u64) {
-    const HEX_CHARS: &[u8; 16] = b"0123456789abcdef";
-    let mut buffer = [0u8; 16];
-
-    for i in 0..16 {
-        let nibble = ((value >> ((15 - i) * 4)) & 0xF) as usize;
-        buffer[i] = HEX_CHARS[nibble];
-    }
-
-    uart_puts(&buffer);
-}
-
-/// Print a single digit
-fn print_digit(digit: u8) {
-    let ch = b'0' + digit;
-    uart_puts(&[ch]);
+    hypervisor::log_info!("[TEST] Guest test complete!\n\n");
 }

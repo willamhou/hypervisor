@@ -3,7 +3,7 @@
 use hypervisor::sp_context::{SpContext, SpState};
 
 pub fn run_tests() {
-    crate::uart_puts(b"  test_sp_context...\n");
+    hypervisor::log_info!("  test_sp_context...\n");
     let mut pass = 0u32;
 
     // Test 1-3: New SpContext has correct initial state
@@ -130,7 +130,5 @@ pub fn run_tests() {
         pass += 4;
     }
 
-    crate::uart_puts(b"    ");
-    crate::print_u32(pass);
-    crate::uart_puts(b" assertions passed\n");
+    hypervisor::log_info!("    {} assertions passed\n", pass);
 }

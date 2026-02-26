@@ -1,4 +1,3 @@
-use hypervisor::uart_puts;
 ///! Test MMIO device emulation
 ///!
 ///! This test creates a guest that directly accesses UART via MMIO
@@ -46,11 +45,11 @@ static mut GUEST_STACK_MMIO: GuestStackMmio = GuestStackMmio { stack: [0; 16384]
 
 /// Run MMIO test
 pub fn run_mmio_test() {
-    uart_puts(b"\n========================================\n");
-    uart_puts(b"  MMIO Device Emulation Test\n");
-    uart_puts(b"========================================\n\n");
+    hypervisor::log_info!("\n========================================\n");
+    hypervisor::log_info!("  MMIO Device Emulation Test\n");
+    hypervisor::log_info!("========================================\n\n");
 
-    uart_puts(b"[MMIO TEST] Creating VM...\n");
+    hypervisor::log_info!("[MMIO TEST] Creating VM...\n");
 
     // Create VM
     let mut vm = Vm::new(1);
@@ -60,9 +59,7 @@ pub fn run_mmio_test() {
     let guest_stack =
         unsafe { (&raw const GUEST_STACK_MMIO.stack as *const [u8; 16384]) as u64 + 16384 };
 
-    uart_puts(b"[MMIO TEST] Guest entry: 0x");
-    print_hex(guest_entry);
-    uart_puts(b"\n");
+    hypervisor::log_info!("[MMIO TEST] Guest entry: {:#018x}\n", guest_entry);
 
     // Initialize memory mapping
     let mem_start = guest_entry & !(2 * 1024 * 1024 - 1);
@@ -74,52 +71,27 @@ pub fn run_mmio_test() {
     // Add vCPU
     match vm.add_vcpu(guest_entry, guest_stack) {
         Ok(vcpu_id) => {
-            uart_puts(b"[MMIO TEST] Created vCPU ");
-            print_digit(vcpu_id as u8);
-            uart_puts(b"\n");
+            hypervisor::log_info!("[MMIO TEST] Created vCPU {}\n", vcpu_id);
         }
         Err(e) => {
-            uart_puts(b"[ERROR] Failed to create vCPU: ");
-            uart_puts(e.as_bytes());
-            uart_puts(b"\n");
+            hypervisor::log_info!("[ERROR] Failed to create vCPU: {}\n", e);
             return;
         }
     }
 
     // Run the VM
-    uart_puts(b"[MMIO TEST] Starting guest...\n");
-    uart_puts(b"[GUEST OUTPUT] ");
+    hypervisor::log_info!("[MMIO TEST] Starting guest...\n");
+    hypervisor::log_info!("[GUEST OUTPUT] ");
 
     match vm.run() {
         Ok(()) => {
-            uart_puts(b"[MMIO TEST] Guest exited successfully\n");
+            hypervisor::log_info!("[MMIO TEST] Guest exited successfully\n");
         }
         Err(e) => {
-            uart_puts(b"[ERROR] Guest failed: ");
-            uart_puts(e.as_bytes());
-            uart_puts(b"\n");
+            hypervisor::log_info!("[ERROR] Guest failed: {}\n", e);
         }
     }
 
-    uart_puts(b"\n[MMIO TEST] Test complete!\n");
-    uart_puts(b"========================================\n\n");
-}
-
-/// Print a 64-bit hex value
-fn print_hex(value: u64) {
-    const HEX_CHARS: &[u8; 16] = b"0123456789abcdef";
-    let mut buffer = [0u8; 16];
-
-    for i in 0..16 {
-        let nibble = ((value >> ((15 - i) * 4)) & 0xF) as usize;
-        buffer[i] = HEX_CHARS[nibble];
-    }
-
-    uart_puts(&buffer);
-}
-
-/// Print a single digit
-fn print_digit(digit: u8) {
-    let ch = b'0' + digit;
-    uart_puts(&[ch]);
+    hypervisor::log_info!("\n[MMIO TEST] Test complete!\n");
+    hypervisor::log_info!("========================================\n\n");
 }
