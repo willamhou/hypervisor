@@ -1,0 +1,93 @@
+#!/bin/sh
+# FF-A end-to-end test init script for pKVM
+# Runs FF-A sysfs inspection + loads ffa_test.ko for DIRECT_REQ test
+
+mkdir -p /proc /sys /dev /mnt /lib/modules
+mount -t proc proc /proc
+mount -t sysfs sysfs /sys
+mount -t devtmpfs devtmpfs /dev 2>/dev/null
+
+echo "============================================"
+echo "  pKVM FF-A End-to-End Test"
+echo "============================================"
+echo ""
+echo "Kernel: $(cat /proc/version 2>/dev/null)"
+echo "CPUs:   $(nproc 2>/dev/null || grep -c ^processor /proc/cpuinfo 2>/dev/null)"
+echo ""
+
+# Wait for FF-A driver init
+sleep 1
+
+echo "=== FF-A Bus Devices ==="
+if [ -d /sys/bus/arm_ffa/devices ]; then
+    for d in /sys/bus/arm_ffa/devices/*/; do
+        [ -d "$d" ] || continue
+        DEV="${d##*/devices/}"
+        DEV="${DEV%/}"
+        echo "--- $DEV ---"
+        for f in ${d}*; do
+            [ -f "$f" ] || continue
+            ATTR="${f##*/}"
+            VAL=$(cat "$f" 2>/dev/null || echo "<unreadable>")
+            echo "  $ATTR = $VAL"
+        done
+    done
+else
+    echo "  ERROR: /sys/bus/arm_ffa/devices not found!"
+fi
+echo ""
+
+echo "=== Partition Discovery ==="
+SP_COUNT=0
+for d in /sys/bus/arm_ffa/devices/*/; do
+    [ -d "$d" ] && SP_COUNT=$((SP_COUNT + 1))
+done
+echo "  Discovered partitions: $SP_COUNT"
+if [ "$SP_COUNT" -ge 2 ]; then
+    echo "  PASS: Both SP1 and SP2 discovered"
+else
+    echo "  FAIL: Expected 2 SPs, found $SP_COUNT"
+fi
+echo ""
+
+echo "=== pKVM Status ==="
+dmesg | grep -i "Protected KVM\|Protected hVHE" | head -3
+echo ""
+
+echo "=== FF-A Kernel Messages ==="
+dmesg | grep -i "ffa\|FF-A" | head -10
+echo ""
+
+# Load FF-A DIRECT_REQ test module
+echo "=== FF-A DIRECT_REQ Test (kernel module) ==="
+if [ -f /lib/modules/ffa_test.ko ]; then
+    echo "  Loading ffa_test.ko..."
+    insmod /lib/modules/ffa_test.ko 2>&1
+    INSMOD_RC=$?
+    echo "  insmod exit code: $INSMOD_RC"
+    sleep 1
+
+    echo ""
+    echo "  --- dmesg ffa_test output ---"
+    dmesg | grep "ffa_test" | tail -30
+    echo "  --- end ---"
+
+    # Try to unload (module stays loaded if probe returned 0)
+    rmmod ffa_test 2>/dev/null
+
+    echo ""
+    echo "  --- post-rmmod dmesg ---"
+    dmesg | grep "ffa_test" | tail -5
+    echo "  --- end ---"
+else
+    echo "  SKIP: ffa_test.ko not found in /lib/modules/"
+    echo "  Files in /lib/modules/:"
+    ls -la /lib/modules/ 2>/dev/null
+fi
+echo ""
+
+echo "============================================"
+echo "  FF-A Test Complete"
+echo "============================================"
+
+exec /bin/sh
