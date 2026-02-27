@@ -134,22 +134,42 @@ static struct ffa_driver ffa_test_driver = {
 	.id_table = ffa_test_ids,
 };
 
-static void raw_smc_diag(void)
+static void raw_hvc_diag(void)
 {
 	struct arm_smccc_res res;
 
-	/* Test 1: Raw FFA_VERSION SMC — should return version 1.1 */
-	arm_smccc_1_1_smc(0x84000063, 0x00010001, 0, 0, 0, 0, 0, 0, &res);
+	/* Test 1: Raw FFA_VERSION — should return version 1.1
+	 * Under pKVM, guest FF-A calls MUST use HVC (not SMC).
+	 * pKVM's kvm_handle_pvm_hvc64 routes FF-A to kvm_guest_ffa_handler.
+	 * SMC falls through to host kernel and hangs on DIRECT_REQ.
+	 */
+	arm_smccc_1_1_hvc(0x84000063, 0x00010001, 0, 0, 0, 0, 0, 0, &res);
 	pr_info("ffa_test: [RAW] FFA_VERSION: x0=0x%lx\n", res.a0);
 
-	/* Test 2: Raw FFA_ID_GET SMC — should return our ID */
-	arm_smccc_1_1_smc(0x84000069, 0, 0, 0, 0, 0, 0, 0, &res);
+	/* Test 2: Raw FFA_ID_GET — should return our VM's FFA ID */
+	arm_smccc_1_1_hvc(0x84000069, 0, 0, 0, 0, 0, 0, 0, &res);
 	pr_info("ffa_test: [RAW] FFA_ID_GET: x0=0x%lx x2=0x%lx\n",
 		res.a0, res.a2);
 
-	/* NOTE: Do NOT send raw SMC DIRECT_REQ from NS-EL1 under pKVM.
-	 * Raw SMCs bypass pKVM's hyp FF-A proxy, causing the response
-	 * to be misrouted. Use the kernel FF-A driver API instead. */
+	/* Test 3: Raw HVC DIRECT_REQ to SP 0x8001.
+	 * Under pKVM, this goes through kvm_handle_pvm_hvc64 →
+	 * kvm_guest_ffa_handler → do_ffa_direct_msg → nvhe_arm_smccc_1_2_smc.
+	 * x1 = src(vm_ffa_id) | dst(0x8001), x3=0xaaaa, x4=0xbbbb
+	 *
+	 * NOTE: The source ID in x1[31:16] MUST match our VM's FFA handle
+	 * (returned by FFA_ID_GET in x2). pKVM validates this.
+	 */
+	{
+		u16 our_id = (u16)res.a2;  /* from FFA_ID_GET above */
+		u32 endpoints = ((u32)our_id << 16) | 0x8001;
+
+		pr_info("ffa_test: [RAW] Our FFA ID = 0x%04x\n", our_id);
+		pr_warn("ffa_test: [RAW] About to send raw DIRECT_REQ to SP 0x8001...\n");
+		arm_smccc_1_1_hvc(0x8400006f, endpoints, 0, 0xaaaa, 0xbbbb,
+				  0xcccc, 0xdddd, 0xeeee, &res);
+		pr_warn("ffa_test: [RAW] DIRECT_REQ result: x0=0x%lx x1=0x%lx x2=0x%lx x3=0x%lx\n",
+			res.a0, res.a1, res.a2, res.a3);
+	}
 }
 
 static int __init ffa_test_init(void)
@@ -160,10 +180,10 @@ static int __init ffa_test_init(void)
 	pr_info("ffa_test:   FF-A DIRECT_REQ End-to-End Test\n");
 	pr_info("ffa_test: ============================================\n");
 
-	/* Run raw SMC diagnostics first */
-	pr_info("ffa_test: --- Raw SMC diagnostics ---\n");
-	raw_smc_diag();
-	pr_info("ffa_test: --- End raw SMC diagnostics ---\n");
+	/* Run raw HVC diagnostics first (pKVM requires HVC, not SMC) */
+	pr_info("ffa_test: --- Raw HVC diagnostics ---\n");
+	raw_hvc_diag();
+	pr_info("ffa_test: --- End raw HVC diagnostics ---\n");
 
 	tests_run = 0;
 	tests_pass = 0;

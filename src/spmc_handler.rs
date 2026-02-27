@@ -348,9 +348,7 @@ fn post_enter_guest() -> &'static mut crate::sp_context::SpContext {
 pub fn run_event_loop(first_request: SmcResult8) -> ! {
     let mut request = first_request;
     loop {
-        crate::log_debug!("[SPMC] req x0={:#x} x1={:#x}\n", request.x0, request.x1);
         let response = dispatch_request(&request);
-        crate::log_debug!("[SPMC] rsp x0={:#x} x1={:#x}\n", response.x0, response.x1);
 
         // Disable Secure Group 1 interrupt delivery before SMC to SPMD.
         unsafe {
@@ -450,10 +448,10 @@ fn dispatch_to_sp(req: &SmcResult8, sp_id: u16) -> SmcResult8 {
 
     pre_enter_guest(sp);
 
+    let ctx_ptr = sp.vcpu_ctx_mut() as *mut crate::arch::aarch64::regs::VcpuContext;
+
     let _exit = unsafe {
-        crate::arch::aarch64::enter_guest(
-            sp.vcpu_ctx_mut() as *mut crate::arch::aarch64::regs::VcpuContext,
-        )
+        crate::arch::aarch64::enter_guest(ctx_ptr)
     };
 
     let sp = post_enter_guest();
@@ -474,13 +472,12 @@ fn dispatch_to_sp(req: &SmcResult8, sp_id: u16) -> SmcResult8 {
 
 /// Clear Secure Stage-2 state after SP execution.
 ///
-/// Zeroes VSTTBR_EL2 and clears HCR_EL2.{VM,VI,VF} so SPMC runs without
-/// Clear Secure Stage-2 state after SP execution.
-///
-/// Zeroes VSTTBR_EL2/VSTCR_EL2 and clears HCR_EL2.{VM,VI,VF}.
-/// Preserves TSC, FMO, IMO, AMO, RW and other trap bits that must remain
-/// set for the SPMC event loop (TSC is critical: without it SP's SMC
-/// bypasses S-EL2 and goes directly to EL3).
+/// Zeroes VSTTBR_EL2/VSTCR_EL2 and clears HCR_EL2.{VI,VF}.
+/// Preserves HCR_EL2.VM — SPMD saves/restores HCR_EL2 across world
+/// switches and expects VM to remain set. Clearing VM causes
+/// forward_smc8() to hang because SPMD never returns to S-EL2.
+/// With VSTTBR_EL2=0, VM=1 is harmless (no Stage-2 translation occurs).
+/// Preserves TSC, FMO, IMO, AMO, RW and other trap bits.
 #[cfg(feature = "sel2")]
 fn clear_secure_stage2() {
     unsafe {
@@ -492,12 +489,10 @@ fn clear_secure_stage2() {
             options(nostack, nomem),
         );
 
-        // Clear only VM, VI, VF bits from HCR_EL2 — leave TSC, FMO, IMO,
-        // AMO, RW, and other trap bits intact. SPMD saves HCR_EL2 when we
-        // call forward_smc8; without TSC, SP's next SMC bypasses S-EL2.
+        // Clear only VI, VF bits from HCR_EL2.
+        // Do NOT clear VM (bit 0) — SPMD expects it to remain set.
         core::arch::asm!(
             "mrs {tmp}, hcr_el2",
-            "bic {tmp}, {tmp}, #(1 << 0)",  // clear VM  (bit 0)
             "bic {tmp}, {tmp}, #(1 << 6)",  // clear VF  (bit 6)
             "bic {tmp}, {tmp}, #(1 << 7)",  // clear VI  (bit 7)
             "msr hcr_el2, {tmp}",
