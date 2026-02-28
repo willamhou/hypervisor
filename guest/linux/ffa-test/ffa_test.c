@@ -180,10 +180,49 @@ static int __init ffa_test_init(void)
 	pr_info("ffa_test:   FF-A DIRECT_REQ End-to-End Test\n");
 	pr_info("ffa_test: ============================================\n");
 
-	/* Run raw HVC diagnostics first (pKVM requires HVC, not SMC) */
-	pr_info("ffa_test: --- Raw HVC diagnostics ---\n");
+	/* Run raw diagnostics first */
+	pr_info("ffa_test: --- Raw diagnostics ---\n");
 	raw_hvc_diag();
-	pr_info("ffa_test: --- End raw HVC diagnostics ---\n");
+
+	/* Bypass test: send DIRECT_REQ with x3=0xDEAD0001.
+	 * SPMC returns fake DIRECT_RESP without entering the SP.
+	 * If this works but real DIRECT_REQ hangs, the issue is in SP entry/exit.
+	 * If this also hangs, the issue is in the DIRECT_RESP world switch itself.
+	 */
+	{
+		struct arm_smccc_res smc_res;
+		u32 ep = (0u << 16) | 0x8001;
+
+		/* Must negotiate FFA version via SMC first — pKVM's host FFA handler
+		 * blocks all non-VERSION SMC calls until has_version_negotiated is set.
+		 * This is per-CPU, so must run on the same CPU as DIRECT_REQ.
+		 */
+		arm_smccc_1_1_smc(0x84000063, 0x00010001, 0, 0, 0, 0, 0, 0, &smc_res);
+		pr_info("ffa_test: [SMC] FFA_VERSION: x0=0x%lx\n", smc_res.a0);
+
+		pr_warn("ffa_test: [BYPASS] Sending DIRECT_REQ with x3=0xDEAD0001 (no SP entry)...\n");
+		arm_smccc_1_1_smc(0x8400006f, ep, 0, 0xDEAD0001, 0, 0, 0, 0, &smc_res);
+		pr_info("ffa_test: [BYPASS] Result: x0=0x%lx x1=0x%lx x2=0x%lx x3=0x%lx\n",
+			smc_res.a0, smc_res.a1, smc_res.a2, smc_res.a3);
+
+		if (smc_res.a0 == 0x84000070) {
+			pr_info("ffa_test: [BYPASS] SUCCESS — world switch works without SP entry\n");
+
+			/* Skip MINI test (DEAD0002) — it corrupts NWd EL1 state because
+			 * it enters SP without saving/restoring EL1 registers.
+			 * Go straight to REAL DIRECT_REQ which uses full dispatch_to_sp().
+			 */
+			pr_warn("ffa_test: [REAL] Now testing FULL DIRECT_REQ to SP 0x8001...\n");
+			arm_smccc_1_1_smc(0x8400006f, ep, 0, 0xaaaa, 0xbbbb,
+					  0xcccc, 0xdddd, 0xeeee, &smc_res);
+			pr_info("ffa_test: [REAL] Result: x0=0x%lx x1=0x%lx x3=0x%lx\n",
+				smc_res.a0, smc_res.a1, smc_res.a3);
+		} else {
+			pr_err("ffa_test: [BYPASS] FAILED — x0=0x%lx (even bypass hangs/fails)\n",
+			       smc_res.a0);
+		}
+	}
+	pr_info("ffa_test: --- End raw diagnostics ---\n");
 
 	tests_run = 0;
 	tests_pass = 0;

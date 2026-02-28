@@ -79,6 +79,25 @@ static CURRENT_RUNNING_SP: [core::sync::atomic::AtomicU16; MAX_SMP_CPUS] = {
     [INIT; MAX_SMP_CPUS]
 };
 
+/// Per-CPU saved SPMC host EL1 state. When we enter an SP, we overwrite
+/// EL1 sysregs with the SP's state. We must save the host's EL1 state
+/// before and restore it after, because SPMD doesn't save/restore EL1
+/// for the SPMC (only EL2). Without this, the NWd's EL1 state gets
+/// corrupted on return to pKVM.
+#[cfg(feature = "sel2")]
+struct PerCpuEl1State([UnsafeCell<crate::sp_context::SpEl1State>; MAX_SMP_CPUS]);
+
+// Safety: each CPU only accesses its own index, no concurrent access.
+#[cfg(feature = "sel2")]
+unsafe impl Sync for PerCpuEl1State {}
+
+#[cfg(feature = "sel2")]
+static HOST_EL1_STATE: PerCpuEl1State = {
+    const INIT: UnsafeCell<crate::sp_context::SpEl1State> =
+        UnsafeCell::new(crate::sp_context::SpEl1State::new());
+    PerCpuEl1State([INIT; MAX_SMP_CPUS])
+};
+
 /// Get the currently running SP ID on this CPU (0 if none).
 #[cfg(feature = "sel2")]
 pub fn current_running_sp() -> u16 {
@@ -283,9 +302,10 @@ fn restore_host_el2_state(elr: u64, spsr: u64) {
 }
 
 /// Common preamble before enter_guest: clear FMO, mask PSTATE.F, save host state.
+/// Returns the CPU index used for per-CPU save slots.
 #[cfg(feature = "sel2")]
 #[inline(always)]
-fn pre_enter_guest(sp: &mut crate::sp_context::SpContext) {
+fn pre_enter_guest(sp: &mut crate::sp_context::SpContext) -> usize {
     // Clear HCR_EL2.FMO so NS FIQ doesn't trap to S-EL2 during SP execution.
     // Mask FIQ in PSTATE.F at S-EL2 to prevent FIQ during enter_guest asm.
     unsafe {
@@ -304,14 +324,14 @@ fn pre_enter_guest(sp: &mut crate::sp_context::SpContext) {
     SAVED_HOST_ELR[cpu].store(saved_elr, Ordering::Relaxed);
     SAVED_HOST_SPSR[cpu].store(saved_spsr, Ordering::Relaxed);
     SAVED_SP_PTR[cpu].store(sp as *mut _ as u64, Ordering::Relaxed);
+    cpu
 }
 
 /// Common postamble after enter_guest: restore host state, re-enable FMO.
-/// Returns the reloaded SP reference (safe from stack corruption).
+/// Returns the reloaded SP reference from the caller-provided CPU slot.
 #[cfg(feature = "sel2")]
 #[inline(always)]
-fn post_enter_guest() -> &'static mut crate::sp_context::SpContext {
-    let cpu = sel2_cpu_id();
+fn post_enter_guest(cpu: usize) -> &'static mut crate::sp_context::SpContext {
     let sp = unsafe {
         &mut *(SAVED_SP_PTR[cpu].load(Ordering::Relaxed)
             as *mut crate::sp_context::SpContext)
@@ -338,17 +358,65 @@ fn post_enter_guest() -> &'static mut crate::sp_context::SpContext {
     sp
 }
 
+/// Dump critical S-EL2 registers for debugging world-switch.
+#[cfg(feature = "sel2")]
+fn dump_sel2_regs(label: &str) {
+    let hcr: u64;
+    let sctlr_el1: u64;
+    let vbar_el1: u64;
+    let sp_el1: u64;
+    unsafe {
+        core::arch::asm!("mrs {}, hcr_el2", out(reg) hcr, options(nostack, nomem));
+        core::arch::asm!("mrs {}, sctlr_el1", out(reg) sctlr_el1, options(nostack, nomem));
+        core::arch::asm!("mrs {}, vbar_el1", out(reg) vbar_el1, options(nostack, nomem));
+        core::arch::asm!("mrs {}, sp_el1", out(reg) sp_el1, options(nostack, nomem));
+    }
+    crate::log_info!("[D:{}] HCR={:#x} SCTLR1={:#x} VBAR1={:#x} SP1={:#x}\n",
+        label, hcr, sctlr_el1, vbar_el1, sp_el1);
+}
+
 /// SPMC event loop — dispatches FF-A requests from SPMD (EL3) forever.
 ///
 /// `first_request` is the SmcResult8 returned by the initial FFA_MSG_WAIT
 /// SMC (sent during SPMC boot). Each iteration dispatches the request,
 /// sends the response back to SPMD via forward_smc8(), and receives the
 /// next request in the return value.
+///
+/// HOST_EL1_STATE save/restore happens HERE at the event loop level:
+/// - Save host EL1 immediately after forward_smc8() returns (captures the
+///   NWd EL1 state that SPMD left in hardware when entering S-EL2)
+/// - Restore host EL1 immediately before forward_smc8() call (restores
+///   NWd EL1 state so SPMD returns to NWd with correct EL1 regs)
+///
+/// This placement is critical: restoring pKVM's EL1 state (SCTLR_EL1.M=1
+/// with pKVM's page tables) during SPMC Rust code execution would crash
+/// because our code runs with the SPMC's own S-EL2 Stage-1 MMU. The
+/// restore must happen right before we SMC back to SPMD.
 #[cfg(feature = "sel2")]
 pub fn run_event_loop(first_request: SmcResult8) -> ! {
+    let cpu = sel2_cpu_id();
     let mut request = first_request;
+
+    // Save host EL1 state from the initial entry (FFA_MSG_WAIT return).
+    // At this point, hardware EL1 regs contain whatever SPMD left — save them.
+    unsafe { (*HOST_EL1_STATE.0[cpu].get()).save(); }
+
     loop {
+        crate::log_info!("[EVT] rx x0={:#010x} x1={:#010x} x3={:#x}\n",
+            request.x0, request.x1, request.x3);
         let response = dispatch_request(&request);
+        crate::log_info!("[EVT] tx x0={:#010x} x1={:#010x} x3={:#x}\n",
+            response.x0, response.x1, response.x3);
+
+        // Dump registers before forward_smc8 for DIRECT_RESP debugging
+        if response.x0 == ffa::FFA_MSG_SEND_DIRECT_RESP_32
+            || response.x0 == ffa::FFA_MSG_SEND_DIRECT_RESP_64
+        {
+            let label = if response.x3 == 0xDEAD0001 { "BYPASS" } else { "REAL" };
+            dump_sel2_regs(label);
+            crate::log_info!("[DIAG:{}] resp x0={:#018x} x1={:#018x} x3={:#018x} x4={:#018x}\n",
+                label, response.x0, response.x1, response.x3, response.x4);
+        }
 
         // Disable Secure Group 1 interrupt delivery before SMC to SPMD.
         unsafe {
@@ -358,6 +426,10 @@ pub fn run_event_loop(first_request: SmcResult8) -> ! {
                 options(nostack, nomem),
             );
         }
+
+        // Restore host (NWd) EL1 state right before SMC to SPMD.
+        // This is the critical timing: SPMD will return to NWd with these EL1 regs.
+        unsafe { (*HOST_EL1_STATE.0[cpu].get()).restore(); }
 
         request = crate::ffa::smc_forward::forward_smc8(
             response.x0,
@@ -369,6 +441,10 @@ pub fn run_event_loop(first_request: SmcResult8) -> ! {
             response.x6,
             response.x7,
         );
+
+        // Save host EL1 state immediately after SPMD returns to S-EL2.
+        // Hardware EL1 regs now contain whatever SPMD left (NWd's EL1 state).
+        unsafe { (*HOST_EL1_STATE.0[cpu].get()).save(); }
 
         // Re-enable Secure Group 1 for IRQ handling during SP execution
         unsafe {
@@ -389,6 +465,29 @@ fn dispatch_request(req: &SmcResult8) -> SmcResult8 {
     if req.x0 == ffa::FFA_MSG_SEND_DIRECT_REQ_32
         || req.x0 == ffa::FFA_MSG_SEND_DIRECT_REQ_64
     {
+        // Bypass mode: x3=0xDEAD0001 → return fake DIRECT_RESP without entering SP.
+        // Used to isolate whether the world-switch hang is caused by SP entry/exit.
+        if req.x3 == 0xDEAD0001 {
+            let src = ((req.x1 >> 16) & 0xFFFF) as u64;
+            let dst = (req.x1 & 0xFFFF) as u64;
+            let resp_fid = if req.x0 == ffa::FFA_MSG_SEND_DIRECT_REQ_64 {
+                ffa::FFA_MSG_SEND_DIRECT_RESP_64
+            } else {
+                ffa::FFA_MSG_SEND_DIRECT_RESP_32
+            };
+            crate::log_debug!("[SPMC] BYPASS: fake RESP without SP entry\n");
+            return SmcResult8 {
+                x0: resp_fid,
+                x1: (dst << 16) | src, // swap src/dst
+                x2: 0,
+                x3: 0xDEAD0001, // echo magic
+                x4: 0xBEEF,     // proof of bypass
+                x5: 0,
+                x6: 0,
+                x7: 0,
+            };
+        }
+
         let dest = (req.x1 & 0xFFFF) as u16;
         if crate::sp_context::is_registered_sp(dest) {
             return dispatch_to_sp(req, dest);
@@ -450,11 +549,13 @@ fn dispatch_to_sp(req: &SmcResult8, sp_id: u16) -> SmcResult8 {
 
     let ctx_ptr = sp.vcpu_ctx_mut() as *mut crate::arch::aarch64::regs::VcpuContext;
 
+    crate::log_info!("[SP] ERET...\n");
     let _exit = unsafe {
         crate::arch::aarch64::enter_guest(ctx_ptr)
     };
+    crate::log_info!("[SP] back from enter_guest\n");
 
-    let sp = post_enter_guest();
+    let sp = post_enter_guest(cpu);
 
     sp.save_el1_state();
 
@@ -545,6 +646,25 @@ fn handle_sp_exit(
 
         // SP exited normally — check what it called
         let (x0, x1, x2, x3, x4, x5, x6, x7) = sp.get_args();
+        if x0 != ffa::FFA_MSG_SEND_DIRECT_RESP_32
+            && x0 != ffa::FFA_MSG_SEND_DIRECT_RESP_64
+            && x0 != ffa::FFA_MSG_WAIT
+            && x0 != ffa::FFA_MEM_RETRIEVE_REQ_32
+            && x0 != ffa::FFA_MEM_RETRIEVE_REQ_64
+            && x0 != ffa::FFA_MEM_RELINQUISH
+        {
+            let ctx = sp.vcpu_ctx();
+            let esr = ctx.sys_regs.esr_el2;
+            let ec = (esr >> 26) & 0x3f;
+            crate::log_warn!(
+                "[SPMC] unexpected SP exit sp={:#06x} x0={:#018x} x1={:#018x} x3={:#018x} x4={:#018x}\n",
+                sp_id, x0, x1, x3, x4
+            );
+            crate::log_warn!(
+                "[SPMC] exit detail ec={:#x} esr={:#018x} pc={:#018x} elr_el1={:#018x}\n",
+                ec, esr, ctx.pc, ctx.sys_regs.elr_el1
+            );
+        }
 
         match x0 {
             ffa::FFA_MEM_RETRIEVE_REQ_32 | ffa::FFA_MEM_RETRIEVE_REQ_64 => {
@@ -597,7 +717,7 @@ fn handle_sp_exit(
             )
         };
 
-        let sp = post_enter_guest();
+        let sp = post_enter_guest(cpu);
         sp.save_el1_state();
 
         CURRENT_RUNNING_SP[sel2_cpu_id()].store(0, Ordering::Release);
@@ -643,7 +763,7 @@ fn resume_preempted_sp(sp_id: u16) -> SmcResult8 {
         )
     };
 
-    let sp = post_enter_guest();
+    let sp = post_enter_guest(cpu);
     sp.save_el1_state();
 
     CURRENT_RUNNING_SP[sel2_cpu_id()].store(0, Ordering::Release);
@@ -704,6 +824,8 @@ fn dispatch_interrupt_to_sp(sp_id: u16) {
     let s2 = crate::secure_stage2::SecureStage2Config::new_from_vsttbr(sp.vsttbr());
     s2.install();
 
+    let cpu = sel2_cpu_id();
+
     sp.restore_el1_state();
     crate::arch::aarch64::peripherals::timer::arm_preemption_timer();
     pre_enter_guest(sp);
@@ -714,7 +836,7 @@ fn dispatch_interrupt_to_sp(sp_id: u16) {
         )
     };
 
-    let sp = post_enter_guest();
+    let sp = post_enter_guest(cpu);
     sp.save_el1_state();
 
     crate::arch::aarch64::peripherals::timer::disarm_preemption_timer();
@@ -976,7 +1098,9 @@ fn handle_partition_info_get() -> SmcResult8 {
                     core::ptr::write_unaligned(ptr as *mut u16, sp.sp_id());
                     // exec_ctx_count (u16 LE)
                     core::ptr::write_unaligned(ptr.add(2) as *mut u16, 1);
-                    // properties (u32 LE) — bit 0: supports DIRECT_REQ
+                    // properties (u32 LE) — bit 0: DIRECT_REQ recv
+                    // Note: Do NOT set AARCH64_EXEC (bit 8) — kernel driver would
+                    // use 64-bit DIRECT_REQ but SPMD may not forward it correctly.
                     core::ptr::write_unaligned(ptr.add(4) as *mut u32, 0x1);
                     // UUID (16 bytes) — read from SpContext
                     core::ptr::copy_nonoverlapping(

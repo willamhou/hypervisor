@@ -19,13 +19,13 @@ pub static STUB_PARTITIONS: [StubPartition; 2] = [
         id: 0x8001,
         uuid: [0x12345678, 0x9ABC_DEF0, 0x1111_2222, 0x3333_4444],
         exec_ctx_count: 1,
-        properties: 1, // Supports direct messaging
+        properties: 0x101, // bit 0: DIRECT_REQ, bit 8: AARCH64_EXEC
     },
     StubPartition {
         id: 0x8002,
         uuid: [0x87654321, 0x0FED_CBA9, 0x5555_6666, 0x7777_8888],
         exec_ctx_count: 1,
-        properties: 1, // Supports direct messaging
+        properties: 0x101, // bit 0: DIRECT_REQ, bit 8: AARCH64_EXEC
     },
 ];
 

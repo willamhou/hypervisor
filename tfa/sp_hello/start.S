@@ -21,6 +21,8 @@
 .equ FFA_MSG_WAIT,              0x8400006B
 .equ FFA_DIRECT_REQ_32,         0x8400006F
 .equ FFA_DIRECT_RESP_32,        0x84000070
+.equ FFA_DIRECT_REQ_64,         0xC400006F
+.equ FFA_DIRECT_RESP_64,        0xC4000070
 .equ FFA_MEM_RETRIEVE_REQ_32,   0x84000074
 .equ FFA_MEM_RETRIEVE_RESP,     0x84000075
 .equ FFA_MEM_RELINQUISH,        0x84000076
@@ -53,10 +55,20 @@ _start:
      * Fall through to message loop. */
 
 .Lmsg_loop:
-    /* Check if this is a DIRECT_REQ_32 */
+    /* Check if this is a DIRECT_REQ_32 or DIRECT_REQ_64 */
     ldr     x8, =FFA_DIRECT_REQ_32
     cmp     x0, x8
+    b.eq    .Ldirect_req
+    ldr     x8, =FFA_DIRECT_REQ_64
+    cmp     x0, x8
     b.ne    .Lunknown_msg
+
+.Ldirect_req:
+    /* Save incoming function ID to determine response type.
+     * x15 = 0 for 32-bit REQ, 1 for 64-bit REQ */
+    ldr     x8, =FFA_DIRECT_REQ_64
+    cmp     x0, x8
+    cset    x15, eq
 
     /* Swap source/dest in x1 for the response.
      * x1 = (source << 16) | dest → response: (dest << 16) | source */
@@ -81,7 +93,7 @@ _start:
     cbnz    x8, .Lslow_loop
 
     /* Slow-path response: x4 += 0x2000 (distinguishes from fast path) */
-    ldr     x0, =FFA_DIRECT_RESP_32
+    bl      .Lload_resp_id       /* x0 = matching RESP function ID */
     mov     x2, xzr
     add     x4, x4, #0x2000
     smc     #0
@@ -89,7 +101,7 @@ _start:
 
 .Lfast_path:
     /* Build DIRECT_RESP: echo x3,x5,x6,x7; modify x4 += 0x1000 as proof */
-    ldr     x0, =FFA_DIRECT_RESP_32
+    bl      .Lload_resp_id       /* x0 = matching RESP function ID */
     mov     x2, xzr
     /* x3 passed through unchanged */
     add     x4, x4, #0x1000     /* SP signature: x4 += 0x1000 */
@@ -99,6 +111,15 @@ _start:
     /* After ERET from SPMC with next request */
     b       .Lmsg_loop
 
+/* Helper: load matching DIRECT_RESP function ID based on x15 (0=32bit, 1=64bit) */
+.Lload_resp_id:
+    cbz     x15, 1f
+    ldr     x0, =FFA_DIRECT_RESP_64
+    ret
+1:
+    ldr     x0, =FFA_DIRECT_RESP_32
+    ret
+
 .Lmem_test:
     /* Memory test: DIRECT_REQ with x3=MEM_TEST_MAGIC, x4=handle_lo, x5=handle_hi, x6=shared_page_ipa.
      *
@@ -107,11 +128,12 @@ _start:
      * 3. Call FFA_MEM_RELINQUISH with handle
      * 4. Respond with DIRECT_RESP: x4 += 0x4000 (memory test signature)
      */
-    /* Save response x1 (swapped src/dest) and handle + IPA across SMC calls */
+    /* Save response x1 (swapped src/dest), req type, handle + IPA across SMC calls */
     mov     x19, x1                 /* response x1 (already swapped above) */
     mov     x20, x4                 /* handle_lo */
     mov     x21, x5                 /* handle_hi */
     mov     x22, x6                 /* shared page IPA */
+    mov     x23, x15                /* req type (0=32bit, 1=64bit) — save in callee-saved */
 
     /* Step 1: FFA_MEM_RETRIEVE_REQ_32(handle_lo, handle_hi) */
     ldr     x0, =FFA_MEM_RETRIEVE_REQ_32
@@ -145,7 +167,8 @@ _start:
     smc     #0
 
     /* Step 4: Respond with DIRECT_RESP, x4 += 0x4000 as memory test signature */
-    ldr     x0, =FFA_DIRECT_RESP_32
+    mov     x15, x23                /* restore req type from callee-saved */
+    bl      .Lload_resp_id          /* x0 = matching RESP function ID */
     mov     x1, x19                 /* response x1 */
     mov     x2, xzr
     ldr     x3, =MEM_TEST_MAGIC    /* echo magic back */
@@ -158,8 +181,8 @@ _start:
 
 .Lmem_test_error:
     /* RETRIEVE failed — respond with error in x4 */
-    ldr     x8, =FFA_DIRECT_RESP_32
-    mov     x0, x8
+    mov     x15, x23                /* restore req type from callee-saved */
+    bl      .Lload_resp_id          /* x0 = matching RESP function ID */
     mov     x1, x19                 /* response x1 */
     mov     x2, xzr
     mov     x3, xzr

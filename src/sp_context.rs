@@ -28,6 +28,7 @@ pub struct SpEl1State {
     pub tpidr_el0: u64,
     pub par_el1: u64,
     pub cntkctl_el1: u64,
+    pub sp_el1: u64,
     pub sp_el0: u64,
     pub afsr0_el1: u64,
     pub afsr1_el1: u64,
@@ -51,6 +52,7 @@ impl SpEl1State {
             tpidr_el0: 0,
             par_el1: 0,
             cntkctl_el1: 0,
+            sp_el1: 0,
             sp_el0: 0,
             afsr0_el1: 0,
             afsr1_el1: 0,
@@ -75,6 +77,7 @@ impl SpEl1State {
             asm!("mrs {}, tpidr_el0", out(reg) self.tpidr_el0, options(nostack, nomem));
             asm!("mrs {}, par_el1", out(reg) self.par_el1, options(nostack, nomem));
             asm!("mrs {}, cntkctl_el1", out(reg) self.cntkctl_el1, options(nostack, nomem));
+            asm!("mrs {}, sp_el1", out(reg) self.sp_el1, options(nostack, nomem));
             asm!("mrs {}, sp_el0", out(reg) self.sp_el0, options(nostack, nomem));
             asm!("mrs {}, afsr0_el1", out(reg) self.afsr0_el1, options(nostack, nomem));
             asm!("mrs {}, afsr1_el1", out(reg) self.afsr1_el1, options(nostack, nomem));
@@ -99,6 +102,7 @@ impl SpEl1State {
             asm!("msr tpidr_el0, {}", in(reg) self.tpidr_el0, options(nostack, nomem));
             asm!("msr par_el1, {}", in(reg) self.par_el1, options(nostack, nomem));
             asm!("msr cntkctl_el1, {}", in(reg) self.cntkctl_el1, options(nostack, nomem));
+            asm!("msr sp_el1, {}", in(reg) self.sp_el1, options(nostack, nomem));
             asm!("msr sp_el0, {}", in(reg) self.sp_el0, options(nostack, nomem));
             asm!("msr afsr0_el1, {}", in(reg) self.afsr0_el1, options(nostack, nomem));
             asm!("msr afsr1_el1, {}", in(reg) self.afsr1_el1, options(nostack, nomem));

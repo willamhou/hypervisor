@@ -3,6 +3,12 @@
 
 set -e
 
+# 尝试加载 Rust/Cargo 环境（如果存在）
+if [ -f "$HOME/.cargo/env" ]; then
+    # shellcheck disable=SC1090
+    source "$HOME/.cargo/env"
+fi
+
 echo "=========================================="
 echo "  ARM64 Hypervisor 环境检查"
 echo "=========================================="
