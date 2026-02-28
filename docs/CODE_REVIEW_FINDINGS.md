@@ -238,6 +238,80 @@ Magic numbers needing named constants:
 
 16. Add `reset_all()` to global state modules
 17. Convert `test_ffa.rs` to `assert_eq!` pattern
+
+---
+
+## Incremental Review Update (2026-02-28)
+
+Focused review target: S-EL2 SPMC preemption/resume paths in `spmc_handler.rs` and global SP context handling in `sp_context.rs`, including cross-CPU `FFA_RUN` behavior.
+
+### New Findings
+
+#### CRITICAL
+
+| ID | File | Description | Impact | Recommendation |
+|----|------|-------------|--------|----------------|
+| R1 | `src/spmc_handler.rs:808` | `dispatch_interrupt_to_sp()` enters an SP without setting/clearing `CURRENT_RUNNING_SP[cpu]`. | During SP execution, `current_running_sp()` can read `0`, breaking `HF_INTERRUPT_GET` and interrupt routing assumptions. | Mirror `dispatch_to_sp()`/`resume_preempted_sp()` semantics: set `CURRENT_RUNNING_SP[cpu]=sp_id` before `enter_guest()`, clear with the same `cpu` after return. |
+
+#### HIGH
+
+| ID | File | Description | Impact | Recommendation |
+|----|------|-------------|--------|----------------|
+| R2 | `src/sp_context.rs:314-350` | `SP_STORE` uses `UnsafeCell` and returns `&'static mut SpContext` without synchronization. | Concurrent access on different pCPUs is data-race/UB territory (state transitions, pending IRQ updates, mutable aliasing). | Add locking (global spinlock or per-SP lock) and avoid unconstrained `&'static mut` publication. |
+| R3 | `src/spmc_handler.rs:733-775` | `resume_preempted_sp()` lacks CPU ownership/affinity checks and atomic ownership transfer. | A preempted SP can be resumed from another CPU with no serialization guarantees; possible concurrent resume races. | Short-term: enforce same-CPU resume (`preempted_cpu` check). Long-term: add `owner_cpu` CAS + explicit migration protocol. |
+
+#### MEDIUM
+
+| ID | File | Description | Impact | Recommendation |
+|----|------|-------------|--------|----------------|
+| R4 | `src/spmc_handler.rs:562,723,769` | Clears `CURRENT_RUNNING_SP` via fresh `sel2_cpu_id()` read instead of captured `cpu`. | Potential slot mismatch in edge cases; stale per-CPU running-SP markers. | Clear the slot using the previously captured `cpu` variable consistently. |
+
+### Scenario Note: CPU2 Preempted, `FFA_RUN` on CPU3
+
+Current code saves SP EL1 context per partition (including `sp_el1`), so register payload is not inherently tied to CPU2. However, the implementation currently lacks safe cross-CPU resume guarantees (ownership + synchronization), so CPU3 resume is not robustly defined.
+
+Recommended policy:
+1. Immediate safety policy: require resume on the original preempted CPU, otherwise return `FFA_BUSY`/`FFA_DENIED`.
+2. If cross-CPU resume is required, implement explicit migration with atomic ownership (`owner_cpu`) and locked SP-context access.
+
+### Remediation Breakdown (R1-R4)
+
+#### Phase 0 (P0): Correctness Guardrails
+
+| Task ID | Priority | Scope | Files | Acceptance Criteria | Validation |
+|---------|----------|-------|-------|---------------------|------------|
+| T1 (R1) | P0 | Fix running-SP tracking in cross-SP dispatch path | `src/spmc_handler.rs` | `dispatch_interrupt_to_sp()` sets `CURRENT_RUNNING_SP[cpu]=sp_id` before `enter_guest()` and clears the same slot after return | Existing FF-A suites pass; add log/assert that `current_running_sp()!=0` while SP is running |
+| T2 (R4) | P0 | Eliminate mixed CPU-slot clear pattern | `src/spmc_handler.rs` | All clear operations use captured `cpu` variable (no fresh `sel2_cpu_id()` for clear) | Grep check for stale pattern removed; regression tests pass |
+
+#### Phase 1 (P1): Concurrency Safety
+
+| Task ID | Priority | Scope | Files | Acceptance Criteria | Validation |
+|---------|----------|-------|-------|---------------------|------------|
+| T3 (R2) | P1 | Serialize SP_STORE mutable access | `src/sp_context.rs` (+ small helper in `src/sync.rs` if needed) | `get_sp_mut`/pending-IRQ/state transitions protected by lock or per-SP lock; no unsynchronized mutable aliasing | Stress run with multi-CPU FF-A scenarios; code review confirms no unlocked mutable global SP access |
+| T4 (R3-short) | P1 | Enforce same-CPU resume policy | `src/sp_context.rs`, `src/spmc_handler.rs` | On preemption, record `preempted_cpu`; `FFA_RUN` from other CPU returns `FFA_BUSY`/`FFA_DENIED` | Add targeted test for CPU mismatch resume path |
+
+#### Phase 2 (P2, Optional): Cross-CPU Resume/Migration
+
+| Task ID | Priority | Scope | Files | Acceptance Criteria | Validation |
+|---------|----------|-------|-------|---------------------|------------|
+| T5 (R3-long) | P2 | Safe cross-CPU SP migration protocol | `src/sp_context.rs`, `src/spmc_handler.rs`, `src/arch/aarch64/hypervisor/exception.rs` | `owner_cpu` uses atomic CAS; only one CPU can own/resume an SP at a time; migration has explicit state transitions | New migration-focused tests + long-run preemption stress |
+
+### Suggested Execution Order
+
+1. T1 + T2 first (small changes, immediate correctness gain).
+2. T3 next (remove UB/data-race class risk).
+3. T4 to lock down behavior contract for current product scope.
+4. T5 only if product requirement explicitly needs cross-CPU SP resume.
+
+### Test Matrix Update For This Batch
+
+| Test Item | Purpose | Required For |
+|-----------|---------|--------------|
+| `make run-spmc` | Baseline SPMC FF-A behavior | T1-T5 |
+| `make run-tfa-linux-ffa` | NWd + SPMC integration | T1-T5 |
+| `make run-pkvm-ffa-test` | pKVM preemption/return path | T1-T5 |
+| New targeted test: `FFA_RUN` wrong CPU | Verify same-CPU policy / busy-denied path | T4 |
+| Optional stress: repeated FIQ preemption with CPU migration attempts | Validate ownership CAS and no dual-resume | T5 |
 18. Add VcpuContext offset compile-time assertions
 19. Dual-target build for host-side `cargo test` (longer-term)
 
