@@ -111,6 +111,40 @@ impl SpEl1State {
             asm!("isb", options(nostack, nomem));
         }
     }
+
+    /// Restore EL1 system registers to hardware, EXCEPT SP_EL0.
+    ///
+    /// At S-EL2, the SPMC uses SP_EL0 as its current stack pointer (SPSel=0).
+    /// Restoring NWd's SP_EL0 during SPMC execution would corrupt the SPMC's
+    /// stack. SP_EL1 is safe to restore (it's EL1's banked SP, not our stack).
+    ///
+    /// Used by the SPMC event loop to restore NWd EL1 state before forwarding
+    /// responses to SPMD. SPMD does NOT save/restore EL1 when SPMD_SPM_AT_SEL2=1
+    /// (it only saves/restores EL2), so the SPMC must manage EL1 state itself.
+    pub fn restore_except_sp_el0(&self) {
+        unsafe {
+            asm!("msr sctlr_el1, {}", in(reg) self.sctlr_el1, options(nostack, nomem));
+            asm!("msr ttbr0_el1, {}", in(reg) self.ttbr0_el1, options(nostack, nomem));
+            asm!("msr ttbr1_el1, {}", in(reg) self.ttbr1_el1, options(nostack, nomem));
+            asm!("msr tcr_el1, {}", in(reg) self.tcr_el1, options(nostack, nomem));
+            asm!("msr mair_el1, {}", in(reg) self.mair_el1, options(nostack, nomem));
+            asm!("msr vbar_el1, {}", in(reg) self.vbar_el1, options(nostack, nomem));
+            asm!("msr cpacr_el1, {}", in(reg) self.cpacr_el1, options(nostack, nomem));
+            asm!("msr contextidr_el1, {}", in(reg) self.contextidr_el1, options(nostack, nomem));
+            asm!("msr tpidr_el1, {}", in(reg) self.tpidr_el1, options(nostack, nomem));
+            asm!("msr tpidrro_el0, {}", in(reg) self.tpidrro_el0, options(nostack, nomem));
+            asm!("msr tpidr_el0, {}", in(reg) self.tpidr_el0, options(nostack, nomem));
+            asm!("msr par_el1, {}", in(reg) self.par_el1, options(nostack, nomem));
+            asm!("msr cntkctl_el1, {}", in(reg) self.cntkctl_el1, options(nostack, nomem));
+            asm!("msr sp_el1, {}", in(reg) self.sp_el1, options(nostack, nomem));
+            // Skip SP_EL0 — SPMC uses it as current stack pointer at S-EL2
+            asm!("msr afsr0_el1, {}", in(reg) self.afsr0_el1, options(nostack, nomem));
+            asm!("msr afsr1_el1, {}", in(reg) self.afsr1_el1, options(nostack, nomem));
+            asm!("msr amair_el1, {}", in(reg) self.amair_el1, options(nostack, nomem));
+            asm!("msr mdscr_el1, {}", in(reg) self.mdscr_el1, options(nostack, nomem));
+            asm!("isb", options(nostack, nomem));
+        }
+    }
 }
 
 /// SP lifecycle states.
