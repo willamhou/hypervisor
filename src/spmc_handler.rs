@@ -13,16 +13,16 @@
 use crate::ffa;
 use crate::ffa::smc_forward::SmcResult8;
 use core::cell::UnsafeCell;
-use core::sync::atomic::{AtomicBool, AtomicU64};
 #[cfg(feature = "sel2")]
 use core::sync::atomic::Ordering;
+use core::sync::atomic::{AtomicBool, AtomicU64};
 
 // ── Per-CPU SPMC state ──────────────────────────────────────────────────
 //
 // With pKVM at NS-EL2, SPMD is per-CPU: each physical CPU can independently
 // enter S-EL2 via SMC. These globals MUST be per-CPU arrays indexed by
 // MPIDR_EL1.Aff0 to prevent concurrent CPUs from corrupting each other's
-// saved state (the root cause of the SAVED_SP_PTR=0x20002569 crash).
+// saved state.
 
 use crate::platform::MAX_SMP_CPUS;
 
@@ -51,8 +51,8 @@ static FIQ_PREEMPT_COUNT: [core::sync::atomic::AtomicU32; MAX_SMP_CPUS] = {
 };
 
 /// Per-CPU saved host ELR_EL2/SPSR_EL2 across enter_guest() calls.
-/// Using per-CPU globals instead of stack locals because debug-mode stack slots
-/// can get corrupted by the enter_guest/exception_handler/guest_exit stack sequence.
+/// Using per-CPU globals because these hardware registers get clobbered
+/// by the exception handler and must be restored after enter_guest returns.
 #[cfg(feature = "sel2")]
 static SAVED_HOST_ELR: [AtomicU64; MAX_SMP_CPUS] = {
     const INIT: AtomicU64 = AtomicU64::new(0);
@@ -60,12 +60,6 @@ static SAVED_HOST_ELR: [AtomicU64; MAX_SMP_CPUS] = {
 };
 #[cfg(feature = "sel2")]
 static SAVED_HOST_SPSR: [AtomicU64; MAX_SMP_CPUS] = {
-    const INIT: AtomicU64 = AtomicU64::new(0);
-    [INIT; MAX_SMP_CPUS]
-};
-/// Per-CPU SP context pointer saved before enter_guest().
-#[cfg(feature = "sel2")]
-static SAVED_SP_PTR: [AtomicU64; MAX_SMP_CPUS] = {
     const INIT: AtomicU64 = AtomicU64::new(0);
     [INIT; MAX_SMP_CPUS]
 };
@@ -177,8 +171,8 @@ static SPMC_SHARES: SpmcShareArray = SpmcShareArray(UnsafeCell::new({
         retrieved: false,
     };
     [
-        EMPTY, EMPTY, EMPTY, EMPTY, EMPTY, EMPTY, EMPTY, EMPTY,
-        EMPTY, EMPTY, EMPTY, EMPTY, EMPTY, EMPTY, EMPTY, EMPTY,
+        EMPTY, EMPTY, EMPTY, EMPTY, EMPTY, EMPTY, EMPTY, EMPTY, EMPTY, EMPTY, EMPTY, EMPTY, EMPTY,
+        EMPTY, EMPTY, EMPTY,
     ]
 }));
 
@@ -221,7 +215,9 @@ fn record_spmc_share(
 }
 
 /// Look up a share record by handle (immutable).
-fn lookup_spmc_share(handle: u64) -> Option<(u16, u16, [(u64, u32); MAX_SHARE_RANGES], usize, bool, bool)> {
+fn lookup_spmc_share(
+    handle: u64,
+) -> Option<(u16, u16, [(u64, u32); MAX_SHARE_RANGES], usize, bool, bool)> {
     let records = unsafe { &*SPMC_SHARES.0.get() };
     for record in records.iter() {
         if record.active && record.handle == handle {
@@ -303,9 +299,15 @@ fn restore_host_el2_state(elr: u64, spsr: u64) {
 
 /// Common preamble before enter_guest: clear FMO, mask PSTATE.F, save host state.
 /// Returns the CPU index used for per-CPU save slots.
+///
+/// The SP reference (`&mut SpContext`) is preserved across `enter_guest()` by the
+/// C calling convention — `enter_guest` saves/restores callee-saved registers
+/// (x19-x28), so the compiler can safely keep the SP pointer in one of these regs.
+/// This eliminates the need for a global `SAVED_SP_PTR` array which was vulnerable
+/// to corruption during multi-CPU dispatch.
 #[cfg(feature = "sel2")]
 #[inline(always)]
-fn pre_enter_guest(sp: &mut crate::sp_context::SpContext) -> usize {
+fn pre_enter_guest(_sp: &mut crate::sp_context::SpContext) -> usize {
     // Clear HCR_EL2.FMO so NS FIQ doesn't trap to S-EL2 during SP execution.
     // Mask FIQ in PSTATE.F at S-EL2 to prevent FIQ during enter_guest asm.
     unsafe {
@@ -323,19 +325,17 @@ fn pre_enter_guest(sp: &mut crate::sp_context::SpContext) -> usize {
     let (saved_elr, saved_spsr) = save_host_el2_state();
     SAVED_HOST_ELR[cpu].store(saved_elr, Ordering::Relaxed);
     SAVED_HOST_SPSR[cpu].store(saved_spsr, Ordering::Relaxed);
-    SAVED_SP_PTR[cpu].store(sp as *mut _ as u64, Ordering::Relaxed);
     cpu
 }
 
 /// Common postamble after enter_guest: restore host state, re-enable FMO.
-/// Returns the reloaded SP reference from the caller-provided CPU slot.
+///
+/// The SP reference is passed in by the caller (preserved in callee-saved register
+/// across `enter_guest()`), not reloaded from a global. This eliminates a class of
+/// multi-CPU corruption where SAVED_SP_PTR could be overwritten by another CPU.
 #[cfg(feature = "sel2")]
 #[inline(always)]
-fn post_enter_guest(cpu: usize) -> &'static mut crate::sp_context::SpContext {
-    let sp = unsafe {
-        &mut *(SAVED_SP_PTR[cpu].load(Ordering::Relaxed)
-            as *mut crate::sp_context::SpContext)
-    };
+fn post_enter_guest(cpu: usize) {
     restore_host_el2_state(
         SAVED_HOST_ELR[cpu].load(Ordering::Relaxed),
         SAVED_HOST_SPSR[cpu].load(Ordering::Relaxed),
@@ -355,7 +355,6 @@ fn post_enter_guest(cpu: usize) -> &'static mut crate::sp_context::SpContext {
             options(nostack, nomem),
         );
     }
-    sp
 }
 
 /// SPMC event loop — dispatches FF-A requests from SPMD (EL3) forever.
@@ -384,18 +383,16 @@ pub fn run_event_loop(first_request: SmcResult8) -> ! {
     // SPMD does NOT save/restore EL1 when SPMD_SPM_AT_SEL2=1 (only EL2),
     // so hardware EL1 regs contain whatever NWd (pKVM) left. We must save
     // them before dispatch_to_sp() overwrites them with SP's EL1 state.
-    unsafe { (*HOST_EL1_STATE.0[cpu].get()).save(); }
+    unsafe {
+        (*HOST_EL1_STATE.0[cpu].get()).save();
+    }
 
     loop {
         let response = dispatch_request(&request);
 
         // Disable Secure Group 1 interrupt delivery before SMC to SPMD.
         unsafe {
-            core::arch::asm!(
-                "msr ICC_IGRPEN1_EL1, xzr",
-                "isb",
-                options(nostack, nomem),
-            );
+            core::arch::asm!("msr ICC_IGRPEN1_EL1, xzr", "isb", options(nostack, nomem),);
         }
 
         // Restore NWd EL1 state before SMC to SPMD. SPMD_SPM_AT_SEL2=1 means
@@ -405,7 +402,9 @@ pub fn run_event_loop(first_request: SmcResult8) -> ! {
         //
         // Uses restore_except_sp_el0() because at S-EL2 (SPSel=0), SP_EL0 is
         // our current stack pointer — overwriting it would corrupt the stack.
-        unsafe { (*HOST_EL1_STATE.0[cpu].get()).restore_except_sp_el0(); }
+        unsafe {
+            (*HOST_EL1_STATE.0[cpu].get()).restore_except_sp_el0();
+        }
 
         request = crate::ffa::smc_forward::forward_smc8(
             response.x0,
@@ -420,7 +419,9 @@ pub fn run_event_loop(first_request: SmcResult8) -> ! {
 
         // Save NWd EL1 state immediately after SPMD returns to S-EL2.
         // Hardware EL1 regs now contain NWd's state (passed through by SPMD).
-        unsafe { (*HOST_EL1_STATE.0[cpu].get()).save(); }
+        unsafe {
+            (*HOST_EL1_STATE.0[cpu].get()).save();
+        }
 
         // Re-enable Secure Group 1 for IRQ handling during SP execution
         unsafe {
@@ -438,9 +439,7 @@ pub fn run_event_loop(first_request: SmcResult8) -> ! {
 /// Dispatch an FF-A request. Routes to SP or local SPMC handling.
 #[cfg(feature = "sel2")]
 fn dispatch_request(req: &SmcResult8) -> SmcResult8 {
-    if req.x0 == ffa::FFA_MSG_SEND_DIRECT_REQ_32
-        || req.x0 == ffa::FFA_MSG_SEND_DIRECT_REQ_64
-    {
+    if req.x0 == ffa::FFA_MSG_SEND_DIRECT_REQ_32 || req.x0 == ffa::FFA_MSG_SEND_DIRECT_REQ_64 {
         let dest = (req.x1 & 0xFFFF) as u16;
         if crate::sp_context::is_registered_sp(dest) {
             return dispatch_to_sp(req, dest);
@@ -464,19 +463,31 @@ fn dispatch_request(req: &SmcResult8) -> SmcResult8 {
 /// Before each ERET, injects any pending virtual interrupt via GIC List Register.
 #[cfg(feature = "sel2")]
 fn dispatch_to_sp(req: &SmcResult8, sp_id: u16) -> SmcResult8 {
-    let sp = match crate::sp_context::get_sp_mut(sp_id) {
-        Some(sp) => sp,
-        None => return make_error(ffa::FFA_INVALID_PARAMETERS as u64),
+    // Acquire per-SP dispatch lock to prevent two CPUs from simultaneously
+    // entering the same SP context (data race on VcpuContext fields).
+    let slot = match crate::sp_context::try_lock_sp(sp_id) {
+        Some(s) => s,
+        None => return make_error(ffa::FFA_BUSY as u64),
     };
 
-    if sp.state() != crate::sp_context::SpState::Idle {
+    let sp = crate::sp_context::get_sp_by_slot(slot);
+
+    // Atomically claim SP: Idle→Running.
+    if sp
+        .try_transition(
+            crate::sp_context::SpState::Idle,
+            crate::sp_context::SpState::Running,
+        )
+        .is_err()
+    {
+        crate::sp_context::unlock_sp(slot);
         return make_error(ffa::FFA_BUSY as u64);
     }
 
     // Set up SP registers with the DIRECT_REQ args
-    sp.set_args(req.x0, req.x1, req.x2, req.x3, req.x4, req.x5, req.x6, req.x7);
-    sp.transition_to(crate::sp_context::SpState::Running)
-        .expect("SP Running transition failed");
+    sp.set_args(
+        req.x0, req.x1, req.x2, req.x3, req.x4, req.x5, req.x6, req.x7,
+    );
 
     // Clear preemption flag before SP entry
     SP_IRQ_PREEMPTED[sel2_cpu_id()].store(false, Ordering::Release);
@@ -502,11 +513,10 @@ fn dispatch_to_sp(req: &SmcResult8, sp_id: u16) -> SmcResult8 {
 
     let ctx_ptr = sp.vcpu_ctx_mut() as *mut crate::arch::aarch64::regs::VcpuContext;
 
-    let _exit = unsafe {
-        crate::arch::aarch64::enter_guest(ctx_ptr)
-    };
+    let _exit = unsafe { crate::arch::aarch64::enter_guest(ctx_ptr) };
 
-    let sp = post_enter_guest(cpu);
+    // sp reference is preserved across enter_guest() via callee-saved register
+    post_enter_guest(cpu);
 
     sp.save_el1_state();
 
@@ -518,6 +528,9 @@ fn dispatch_to_sp(req: &SmcResult8, sp_id: u16) -> SmcResult8 {
 
     // Clear Secure Stage-2 and HCR_EL2 bits before returning to SPMD.
     clear_secure_stage2();
+
+    // Release per-SP dispatch lock
+    crate::sp_context::unlock_sp(slot);
 
     result
 }
@@ -563,16 +576,16 @@ fn clear_secure_stage2() {
 ///
 /// Used by both `dispatch_to_sp()` and `resume_preempted_sp()` to avoid duplication.
 #[cfg(feature = "sel2")]
-fn handle_sp_exit(
-    sp: &mut crate::sp_context::SpContext,
-    sp_id: u16,
-) -> SmcResult8 {
+fn handle_sp_exit(sp: &mut crate::sp_context::SpContext, sp_id: u16) -> SmcResult8 {
     loop {
         // Check if SP was preempted by a physical IRQ (NS FIQ at S-EL2)
         let cpu = sel2_cpu_id();
         if SP_IRQ_PREEMPTED[cpu].swap(false, Ordering::Acquire) {
-            crate::log_debug!("[SPMC] preempted sp={:#06x} fiq_count={}\n",
-                sp_id, FIQ_PREEMPT_COUNT[cpu].load(Ordering::Relaxed));
+            crate::log_debug!(
+                "[SPMC] preempted sp={:#06x} fiq_count={}\n",
+                sp_id,
+                FIQ_PREEMPT_COUNT[cpu].load(Ordering::Relaxed)
+            );
             sp.transition_to(crate::sp_context::SpState::Preempted)
                 .expect("SP Preempted transition failed");
 
@@ -613,34 +626,64 @@ fn handle_sp_exit(
             );
             crate::log_warn!(
                 "[SPMC] exit detail ec={:#x} esr={:#018x} pc={:#018x} elr_el1={:#018x}\n",
-                ec, esr, ctx.pc, ctx.sys_regs.elr_el1
+                ec,
+                esr,
+                ctx.pc,
+                ctx.sys_regs.elr_el1
             );
         }
 
         match x0 {
             ffa::FFA_MEM_RETRIEVE_REQ_32 | ffa::FFA_MEM_RETRIEVE_REQ_64 => {
                 // SP-initiated MEM_RETRIEVE: build request, call handler, re-enter SP
-                let sp_req = SmcResult8 { x0, x1, x2, x3, x4, x5, x6, x7 };
-                let result = handle_spmc_mem_retrieve(&sp_req);
+                let sp_req = SmcResult8 {
+                    x0,
+                    x1,
+                    x2,
+                    x3,
+                    x4,
+                    x5,
+                    x6,
+                    x7,
+                };
+                let result = handle_spmc_mem_retrieve(&sp_req, Some((sp.sp_id(), sp.vsttbr())));
                 sp.set_args(
-                    result.x0, result.x1, result.x2, result.x3,
-                    result.x4, result.x5, result.x6, result.x7,
+                    result.x0, result.x1, result.x2, result.x3, result.x4, result.x5, result.x6,
+                    result.x7,
                 );
             }
             ffa::FFA_MEM_RELINQUISH => {
                 // SP-initiated MEM_RELINQUISH: build request, call handler, re-enter SP
-                let sp_req = SmcResult8 { x0, x1, x2, x3, x4, x5, x6, x7 };
-                let result = handle_spmc_mem_relinquish(&sp_req);
+                let sp_req = SmcResult8 {
+                    x0,
+                    x1,
+                    x2,
+                    x3,
+                    x4,
+                    x5,
+                    x6,
+                    x7,
+                };
+                let result = handle_spmc_mem_relinquish(&sp_req, Some((sp.sp_id(), sp.vsttbr())));
                 sp.set_args(
-                    result.x0, result.x1, result.x2, result.x3,
-                    result.x4, result.x5, result.x6, result.x7,
+                    result.x0, result.x1, result.x2, result.x3, result.x4, result.x5, result.x6,
+                    result.x7,
                 );
             }
             _ => {
                 // Normal exit (FFA_DIRECT_RESP, FFA_MSG_WAIT, etc.)
                 sp.transition_to(crate::sp_context::SpState::Idle)
                     .expect("SP Idle transition failed");
-                return SmcResult8 { x0, x1, x2, x3, x4, x5, x6, x7 };
+                return SmcResult8 {
+                    x0,
+                    x1,
+                    x2,
+                    x3,
+                    x4,
+                    x5,
+                    x6,
+                    x7,
+                };
             }
         }
 
@@ -664,11 +707,12 @@ fn handle_sp_exit(
 
         let _exit = unsafe {
             crate::arch::aarch64::enter_guest(
-                sp.vcpu_ctx_mut() as *mut crate::arch::aarch64::regs::VcpuContext,
+                sp.vcpu_ctx_mut() as *mut crate::arch::aarch64::regs::VcpuContext
             )
         };
 
-        let sp = post_enter_guest(cpu);
+        // sp reference preserved across enter_guest() via callee-saved register
+        post_enter_guest(cpu);
         sp.save_el1_state();
 
         CURRENT_RUNNING_SP[sel2_cpu_id()].store(0, Ordering::Release);
@@ -683,17 +727,25 @@ fn handle_sp_exit(
 #[cfg(feature = "sel2")]
 fn resume_preempted_sp(sp_id: u16) -> SmcResult8 {
     crate::log_debug!("[SPMC] resume sp={:#06x}\n", sp_id);
-    let sp = match crate::sp_context::get_sp_mut(sp_id) {
-        Some(sp) => sp,
-        None => return make_error(ffa::FFA_INVALID_PARAMETERS as u64),
+
+    let slot = match crate::sp_context::try_lock_sp(sp_id) {
+        Some(s) => s,
+        None => return make_error(ffa::FFA_DENIED as u64),
     };
 
-    if sp.state() != crate::sp_context::SpState::Preempted {
+    let sp = crate::sp_context::get_sp_by_slot(slot);
+
+    // Atomically claim: Preempted→Running
+    if sp
+        .try_transition(
+            crate::sp_context::SpState::Preempted,
+            crate::sp_context::SpState::Running,
+        )
+        .is_err()
+    {
+        crate::sp_context::unlock_sp(slot);
         return make_error(ffa::FFA_DENIED as u64);
     }
-
-    sp.transition_to(crate::sp_context::SpState::Running)
-        .expect("SP Running transition failed");
 
     let cpu = sel2_cpu_id();
     SP_IRQ_PREEMPTED[cpu].store(false, Ordering::Release);
@@ -710,11 +762,12 @@ fn resume_preempted_sp(sp_id: u16) -> SmcResult8 {
 
     let _exit = unsafe {
         crate::arch::aarch64::enter_guest(
-            sp.vcpu_ctx_mut() as *mut crate::arch::aarch64::regs::VcpuContext,
+            sp.vcpu_ctx_mut() as *mut crate::arch::aarch64::regs::VcpuContext
         )
     };
 
-    let sp = post_enter_guest(cpu);
+    // sp reference preserved across enter_guest() via callee-saved register
+    post_enter_guest(cpu);
     sp.save_el1_state();
 
     CURRENT_RUNNING_SP[sel2_cpu_id()].store(0, Ordering::Release);
@@ -722,6 +775,8 @@ fn resume_preempted_sp(sp_id: u16) -> SmcResult8 {
 
     let result = handle_sp_exit(sp, sp_id);
     clear_secure_stage2();
+
+    crate::sp_context::unlock_sp(slot);
     result
 }
 
@@ -757,18 +812,24 @@ fn inject_pending_virq(sp: &mut crate::sp_context::SpContext) {
 /// preempt SP1 → dispatch interrupt to SP2 → SP2 returns → resume SP1.
 #[cfg(feature = "sel2")]
 fn dispatch_interrupt_to_sp(sp_id: u16) {
-    let sp = match crate::sp_context::get_sp_mut(sp_id) {
-        Some(sp) => sp,
+    let slot = match crate::sp_context::try_lock_sp(sp_id) {
+        Some(s) => s,
         None => return,
     };
 
-    // Only dispatch to Idle SPs
-    if sp.state() != crate::sp_context::SpState::Idle {
+    let sp = crate::sp_context::get_sp_by_slot(slot);
+
+    // Atomically claim: Idle→Running
+    if sp
+        .try_transition(
+            crate::sp_context::SpState::Idle,
+            crate::sp_context::SpState::Running,
+        )
+        .is_err()
+    {
+        crate::sp_context::unlock_sp(slot);
         return;
     }
-
-    sp.transition_to(crate::sp_context::SpState::Running)
-        .expect("SP Running transition failed");
 
     inject_pending_virq(sp);
 
@@ -783,16 +844,19 @@ fn dispatch_interrupt_to_sp(sp_id: u16) {
 
     let _exit = unsafe {
         crate::arch::aarch64::enter_guest(
-            sp.vcpu_ctx_mut() as *mut crate::arch::aarch64::regs::VcpuContext,
+            sp.vcpu_ctx_mut() as *mut crate::arch::aarch64::regs::VcpuContext
         )
     };
 
-    let sp = post_enter_guest(cpu);
+    // sp reference preserved across enter_guest() via callee-saved register
+    post_enter_guest(cpu);
     sp.save_el1_state();
 
     crate::arch::aarch64::peripherals::timer::disarm_preemption_timer();
     sp.transition_to(crate::sp_context::SpState::Idle)
         .expect("SP Idle transition failed");
+
+    crate::sp_context::unlock_sp(slot);
 }
 
 /// Dispatch an FF-A request and return the appropriate response.
@@ -888,8 +952,11 @@ pub fn dispatch_ffa(req: &SmcResult8) -> SmcResult8 {
             if !crate::sp_context::is_registered_sp(sp_id) {
                 return make_error(ffa::FFA_INVALID_PARAMETERS as u64);
             }
-            let sp = crate::sp_context::get_sp_mut(sp_id).unwrap();
-            if sp.state() != crate::sp_context::SpState::Preempted {
+            let state = match crate::sp_context::state_of(sp_id) {
+                Some(s) => s,
+                None => return make_error(ffa::FFA_INVALID_PARAMETERS as u64),
+            };
+            if state != crate::sp_context::SpState::Preempted {
                 return make_error(ffa::FFA_DENIED as u64);
             }
             // In sel2 mode, dispatch_request() handles this before we get here.
@@ -901,13 +968,9 @@ pub fn dispatch_ffa(req: &SmcResult8) -> SmcResult8 {
         ffa::FFA_RXTX_UNMAP => handle_rxtx_unmap(),
         ffa::FFA_RX_RELEASE => handle_rx_release(),
 
-        ffa::FFA_PARTITION_INFO_GET => {
-            handle_partition_info_get()
-        }
+        ffa::FFA_PARTITION_INFO_GET => handle_partition_info_get(),
 
-        ffa::FFA_MSG_SEND_DIRECT_REQ_32 => {
-            handle_direct_req_32(req)
-        }
+        ffa::FFA_MSG_SEND_DIRECT_REQ_32 => handle_direct_req_32(req),
 
         ffa::FFA_MSG_SEND_DIRECT_REQ_64 => {
             // Echo x3-x7 back, swap source/dest in x1
@@ -927,10 +990,14 @@ pub fn dispatch_ffa(req: &SmcResult8) -> SmcResult8 {
 
         ffa::FFA_MEM_SHARE_32 | ffa::FFA_MEM_SHARE_64 => handle_spmc_mem_share(req, false),
         ffa::FFA_MEM_LEND_32 | ffa::FFA_MEM_LEND_64 => handle_spmc_mem_share(req, true),
-        ffa::FFA_MEM_RETRIEVE_REQ_32 | ffa::FFA_MEM_RETRIEVE_REQ_64 => handle_spmc_mem_retrieve(req),
-        ffa::FFA_MEM_RELINQUISH => handle_spmc_mem_relinquish(req),
+        ffa::FFA_MEM_RETRIEVE_REQ_32 | ffa::FFA_MEM_RETRIEVE_REQ_64 => {
+            handle_spmc_mem_retrieve(req, None)
+        }
+        ffa::FFA_MEM_RELINQUISH => handle_spmc_mem_relinquish(req, None),
         ffa::FFA_MEM_RECLAIM => handle_spmc_mem_reclaim(req),
-        ffa::FFA_MEM_DONATE_32 | ffa::FFA_MEM_DONATE_64 => make_error(ffa::FFA_NOT_SUPPORTED as u64),
+        ffa::FFA_MEM_DONATE_32 | ffa::FFA_MEM_DONATE_64 => {
+            make_error(ffa::FFA_NOT_SUPPORTED as u64)
+        }
 
         _ => make_error(ffa::FFA_NOT_SUPPORTED as u64),
     }
@@ -1054,11 +1121,7 @@ fn handle_partition_info_get() -> SmcResult8 {
                     // use 64-bit DIRECT_REQ but SPMD may not forward it correctly.
                     core::ptr::write_unaligned(ptr.add(4) as *mut u32, 0x1);
                     // UUID (16 bytes) — read from SpContext
-                    core::ptr::copy_nonoverlapping(
-                        sp.uuid().as_ptr() as *const u8,
-                        ptr.add(8),
-                        16,
-                    );
+                    core::ptr::copy_nonoverlapping(sp.uuid().as_ptr() as *const u8, ptr.add(8), 16);
                 }
             }
             count += 1;
@@ -1207,10 +1270,11 @@ fn handle_spmc_mem_share(req: &SmcResult8, is_lend: bool) -> SmcResult8 {
 }
 
 /// Handle FFA_MEM_RETRIEVE_REQ — maps pages into receiver SP's Secure Stage-2.
-fn handle_spmc_mem_retrieve(req: &SmcResult8) -> SmcResult8 {
+fn handle_spmc_mem_retrieve(req: &SmcResult8, _current_sp: Option<(u16, u64)>) -> SmcResult8 {
     let handle = (req.x1 & 0xFFFF_FFFF) | (req.x2 << 32);
 
-    let (_sender, receiver_id, ranges, range_count, _, retrieved) = match lookup_spmc_share(handle) {
+    let (_sender, receiver_id, ranges, range_count, _, retrieved) = match lookup_spmc_share(handle)
+    {
         Some(info) => info,
         None => return make_error(ffa::FFA_INVALID_PARAMETERS as u64),
     };
@@ -1222,16 +1286,38 @@ fn handle_spmc_mem_retrieve(req: &SmcResult8) -> SmcResult8 {
     // In sel2 mode, map pages into the receiver SP's Secure Stage-2
     #[cfg(feature = "sel2")]
     {
-        if let Some(sp) = crate::sp_context::get_sp_mut(receiver_id) {
-            let vsttbr = sp.vsttbr();
-            let l0_addr = vsttbr & 0x0000_FFFF_FFFF_F000;
-            let walker = crate::ffa::stage2_walker::Stage2Walker::new(l0_addr);
-            for i in 0..range_count {
-                let (base_ipa, page_count) = ranges[i];
-                for p in 0..page_count as u64 {
-                    let ipa = base_ipa + p * 4096;
-                    walker.map_page(ipa, 0b11, 0b10); // S2AP_RW, SW=SHARED_BORROWED
+        let mut mapped = false;
+        if let Some((current_sp_id, current_vsttbr)) = _current_sp {
+            if current_sp_id == receiver_id {
+                let vsttbr = current_vsttbr;
+                let l0_addr = vsttbr & 0x0000_FFFF_FFFF_F000;
+                let walker = crate::ffa::stage2_walker::Stage2Walker::new(l0_addr);
+                for i in 0..range_count {
+                    let (base_ipa, page_count) = ranges[i];
+                    for p in 0..page_count as u64 {
+                        let ipa = base_ipa + p * 4096;
+                        walker.map_page(ipa, 0b11, 0b10); // S2AP_RW, SW=SHARED_BORROWED
+                    }
                 }
+                mapped = true;
+            }
+        }
+
+        if !mapped {
+            let ok = crate::sp_context::with_sp_locked(receiver_id, |sp| {
+                let vsttbr = sp.vsttbr();
+                let l0_addr = vsttbr & 0x0000_FFFF_FFFF_F000;
+                let walker = crate::ffa::stage2_walker::Stage2Walker::new(l0_addr);
+                for i in 0..range_count {
+                    let (base_ipa, page_count) = ranges[i];
+                    for p in 0..page_count as u64 {
+                        let ipa = base_ipa + p * 4096;
+                        walker.map_page(ipa, 0b11, 0b10); // S2AP_RW, SW=SHARED_BORROWED
+                    }
+                }
+            });
+            if ok.is_none() {
+                return make_error(ffa::FFA_BUSY as u64);
             }
         }
     }
@@ -1252,10 +1338,11 @@ fn handle_spmc_mem_retrieve(req: &SmcResult8) -> SmcResult8 {
 }
 
 /// Handle FFA_MEM_RELINQUISH — unmaps pages from receiver SP's Secure Stage-2.
-fn handle_spmc_mem_relinquish(req: &SmcResult8) -> SmcResult8 {
+fn handle_spmc_mem_relinquish(req: &SmcResult8, _current_sp: Option<(u16, u64)>) -> SmcResult8 {
     let handle = (req.x1 & 0xFFFF_FFFF) | (req.x2 << 32);
 
-    let (_sender, receiver_id, ranges, range_count, _, retrieved) = match lookup_spmc_share(handle) {
+    let (_sender, receiver_id, ranges, range_count, _, retrieved) = match lookup_spmc_share(handle)
+    {
         Some(info) => info,
         None => return make_error(ffa::FFA_INVALID_PARAMETERS as u64),
     };
@@ -1267,16 +1354,38 @@ fn handle_spmc_mem_relinquish(req: &SmcResult8) -> SmcResult8 {
     // In sel2 mode, unmap pages from the receiver SP's Secure Stage-2
     #[cfg(feature = "sel2")]
     {
-        if let Some(sp) = crate::sp_context::get_sp_mut(receiver_id) {
-            let vsttbr = sp.vsttbr();
-            let l0_addr = vsttbr & 0x0000_FFFF_FFFF_F000;
-            let walker = crate::ffa::stage2_walker::Stage2Walker::new(l0_addr);
-            for i in 0..range_count {
-                let (base_ipa, page_count) = ranges[i];
-                for p in 0..page_count as u64 {
-                    let ipa = base_ipa + p * 4096;
-                    walker.unmap_page(ipa);
+        let mut unmapped = false;
+        if let Some((current_sp_id, current_vsttbr)) = _current_sp {
+            if current_sp_id == receiver_id {
+                let vsttbr = current_vsttbr;
+                let l0_addr = vsttbr & 0x0000_FFFF_FFFF_F000;
+                let walker = crate::ffa::stage2_walker::Stage2Walker::new(l0_addr);
+                for i in 0..range_count {
+                    let (base_ipa, page_count) = ranges[i];
+                    for p in 0..page_count as u64 {
+                        let ipa = base_ipa + p * 4096;
+                        walker.unmap_page(ipa);
+                    }
                 }
+                unmapped = true;
+            }
+        }
+
+        if !unmapped {
+            let ok = crate::sp_context::with_sp_locked(receiver_id, |sp| {
+                let vsttbr = sp.vsttbr();
+                let l0_addr = vsttbr & 0x0000_FFFF_FFFF_F000;
+                let walker = crate::ffa::stage2_walker::Stage2Walker::new(l0_addr);
+                for i in 0..range_count {
+                    let (base_ipa, page_count) = ranges[i];
+                    for p in 0..page_count as u64 {
+                        let ipa = base_ipa + p * 4096;
+                        walker.unmap_page(ipa);
+                    }
+                }
+            });
+            if ok.is_none() {
+                return make_error(ffa::FFA_BUSY as u64);
             }
         }
     }

@@ -1,4 +1,4 @@
-.PHONY: all build run debug clean build-qemu build-bl32-bl33 build-tfa build-tfa-bl33 build-spmc build-sp-hello build-sp-irq build-tfa-spmc build-tfa-full build-tfa-pkvm build-pkvm-kernel run-sel2 run-tfa-linux run-tfa-linux-ffa run-spmc build-pkvm-dtb run-pkvm
+.PHONY: all build run debug clean check clippy fmt test test-suite-check build-qemu build-bl32-bl33 build-tfa build-tfa-bl33 build-spmc build-sp-hello build-sp-irq build-tfa-spmc build-tfa-full build-tfa-pkvm build-pkvm-kernel run-sel2 run-tfa-linux run-tfa-linux-ffa run-spmc build-pkvm-dtb run-pkvm
 
 # Auto-load Cargo environment
 SHELL := /bin/bash
@@ -168,6 +168,13 @@ clippy:
 # Format code
 fmt:
 	cargo fmt
+
+# Unified static test entrypoint
+test: check clippy
+
+# Validate integration test logs (expects logs already generated)
+test-suite-check:
+	./scripts/check_test_suite.sh
 
 # === S-EL2 / TF-A targets (Phase 4) ===
 
@@ -491,3 +498,5 @@ help:
 	@echo "  check     - Check code without building"
 	@echo "  clippy    - Run clippy linter"
 	@echo "  fmt       - Format code"
+	@echo "  test      - Run static test suite (check + clippy)"
+	@echo "  test-suite-check - Validate run-spmc / run-tfa-linux-ffa / run-pkvm-ffa-test logs"
