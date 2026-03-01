@@ -181,6 +181,7 @@ impl Stage2Config {
 
     /// Install this configuration to hardware registers
     pub fn install(&self) {
+        // SAFETY: programs EL2 stage-2 translation registers for current CPU.
         unsafe {
             core::arch::asm!(
                 "msr vtcr_el2, {vtcr}",
@@ -329,11 +330,31 @@ pub struct DynamicIdentityMapper {
 }
 
 impl DynamicIdentityMapper {
+    #[inline(always)]
+    fn entry_ptr(table: u64, idx: usize) -> *mut u64 {
+        // SAFETY: `table` is a page-table base address and `idx` is derived
+        // from masked 9-bit IPA index fields.
+        unsafe { (table as *mut u64).add(idx) }
+    }
+
+    #[inline(always)]
+    fn read_pte(ptr: *const u64) -> u64 {
+        // SAFETY: page-table entries are observed via volatile loads.
+        unsafe { core::ptr::read_volatile(ptr) }
+    }
+
+    #[inline(always)]
+    fn write_pte(ptr: *mut u64, val: u64) {
+        // SAFETY: caller guarantees exclusive write to target entry.
+        unsafe { core::ptr::write_volatile(ptr, val) }
+    }
+
     /// Create a new dynamic identity mapper
     pub fn new() -> Self {
         let l0 = crate::mm::heap::alloc_page().expect("Failed to allocate L0 table");
         let l1 = crate::mm::heap::alloc_page().expect("Failed to allocate L1 table");
 
+        // SAFETY: `l0`/`l1` are freshly allocated page-aligned writable pages.
         unsafe {
             core::ptr::write_bytes(l0 as *mut u8, 0, PAGE_SIZE);
             core::ptr::write_bytes(l1 as *mut u8, 0, PAGE_SIZE);
@@ -366,10 +387,8 @@ impl DynamicIdentityMapper {
             let l2_idx = ((current_ipa >> 21) & PT_INDEX_MASK) as usize;
             let entry = self.make_block_entry(current_ipa, attr);
 
-            unsafe {
-                let l2_ptr = l2_table as *mut u64;
-                *l2_ptr.add(l2_idx) = entry;
-            }
+            let l2_ptr = Self::entry_ptr(l2_table, l2_idx);
+            Self::write_pte(l2_ptr, entry);
 
             offset += BLOCK_SIZE_2MB;
         }
@@ -378,10 +397,7 @@ impl DynamicIdentityMapper {
 
     /// Get or create L2 table for given L1 index
     fn get_or_create_l2(&mut self, l1_idx: usize) -> Result<u64, &'static str> {
-        let l1_entry = unsafe {
-            let l1_ptr = self.l1_table as *const u64;
-            *l1_ptr.add(l1_idx)
-        };
+        let l1_entry = Self::read_pte(Self::entry_ptr(self.l1_table, l1_idx));
 
         // Check if valid table entry already exists
         if l1_entry & (PTE_VALID | PTE_TABLE) == (PTE_VALID | PTE_TABLE) {
@@ -395,19 +411,15 @@ impl DynamicIdentityMapper {
 
         let l2 = crate::mm::heap::alloc_page().ok_or("Failed to allocate L2 table")?;
 
-        unsafe {
-            core::ptr::write_bytes(l2 as *mut u8, 0, PAGE_SIZE);
-        }
+        // SAFETY: `l2` is a newly allocated writable 4KB page table.
+        unsafe { core::ptr::write_bytes(l2 as *mut u8, 0, PAGE_SIZE) }
 
         self.l2_tables[self.l2_count] = l2;
         self.l2_count += 1;
 
         // Create table descriptor and write to L1
         let l1_entry = l2 | (PTE_VALID | PTE_TABLE);
-        unsafe {
-            let l1_ptr = self.l1_table as *mut u64;
-            *l1_ptr.add(l1_idx) = l1_entry;
-        }
+        Self::write_pte(Self::entry_ptr(self.l1_table, l1_idx), l1_entry);
 
         Ok(l2)
     }
@@ -432,7 +444,7 @@ impl DynamicIdentityMapper {
         let l2_idx = ((ipa >> 21) & PT_INDEX_MASK) as usize;
         let l3_idx = ((ipa >> 12) & PT_INDEX_MASK) as usize;
 
-        let l2_entry = unsafe { *(l2_table as *const u64).add(l2_idx) };
+        let l2_entry = Self::read_pte(Self::entry_ptr(l2_table, l2_idx));
 
         let l3_table = if l2_entry & PTE_VALID != 0 && l2_entry & PTE_TABLE == 0 {
             // L2 entry is a 2MB block — split into L3 table
@@ -443,13 +455,10 @@ impl DynamicIdentityMapper {
         } else {
             // L2 entry invalid — create fresh L3 table (all invalid entries)
             let l3 = crate::mm::heap::alloc_page().ok_or("Failed to allocate L3 table")?;
-            unsafe {
-                core::ptr::write_bytes(l3 as *mut u8, 0, PAGE_SIZE);
-            }
+            // SAFETY: `l3` is a newly allocated writable 4KB page table.
+            unsafe { core::ptr::write_bytes(l3 as *mut u8, 0, PAGE_SIZE) }
             let l3_desc = l3 | PTE_VALID | PTE_TABLE;
-            unsafe {
-                *(l2_table as *mut u64).add(l2_idx) = l3_desc;
-            }
+            Self::write_pte(Self::entry_ptr(l2_table, l2_idx), l3_desc);
             l3
         };
 
@@ -457,17 +466,15 @@ impl DynamicIdentityMapper {
         // Break-before-make: if old L3 entry is valid, invalidate it and flush TLB
         // before writing the new entry (ARMv8-A D5.10.1 requires this to avoid TLB
         // conflict aborts when replacing one valid entry with another).
-        let l3_ptr = unsafe { (l3_table as *mut u64).add(l3_idx) };
-        let old_l3 = unsafe { core::ptr::read_volatile(l3_ptr) };
+        let l3_ptr = Self::entry_ptr(l3_table, l3_idx);
+        let old_l3 = Self::read_pte(l3_ptr);
         if old_l3 & PTE_VALID != 0 {
-            unsafe { core::ptr::write_volatile(l3_ptr, 0) };
+            Self::write_pte(l3_ptr, 0);
             Self::tlbi_ipa(ipa);
         }
 
         let page_entry = self.make_page_entry(ipa & !PAGE_MASK_4KB, attr);
-        unsafe {
-            core::ptr::write_volatile(l3_ptr, page_entry);
-        }
+        Self::write_pte(l3_ptr, page_entry);
         Self::tlbi_ipa(ipa);
 
         Ok(())
@@ -477,13 +484,13 @@ impl DynamicIdentityMapper {
     /// If the L2 entry is a 2MB block, it is first split into an L3 table.
     pub fn unmap_4kb_page(&mut self, ipa: u64) -> Result<(), &'static str> {
         let l1_idx = ((ipa >> 30) & PT_INDEX_MASK) as usize;
-        let l1_entry = unsafe { *(self.l1_table as *const u64).add(l1_idx) };
+        let l1_entry = Self::read_pte(Self::entry_ptr(self.l1_table, l1_idx));
         if l1_entry & (PTE_VALID | PTE_TABLE) != (PTE_VALID | PTE_TABLE) {
             return Err("L1 entry not valid");
         }
         let l2_table = l1_entry & PTE_ADDR_MASK;
         let l2_idx = ((ipa >> 21) & PT_INDEX_MASK) as usize;
-        let l2_entry = unsafe { *(l2_table as *const u64).add(l2_idx) };
+        let l2_entry = Self::read_pte(Self::entry_ptr(l2_table, l2_idx));
 
         let l3_table = if l2_entry & PTE_VALID != 0 && l2_entry & PTE_TABLE == 0 {
             // L2 entry is a 2MB block — split into L3 first
@@ -496,9 +503,7 @@ impl DynamicIdentityMapper {
         };
 
         let l3_idx = ((ipa >> 12) & PT_INDEX_MASK) as usize;
-        unsafe {
-            *(l3_table as *mut u64).add(l3_idx) = 0;
-        }
+        Self::write_pte(Self::entry_ptr(l3_table, l3_idx), 0);
         Self::tlbi_ipa(ipa);
         Ok(())
     }
@@ -520,6 +525,8 @@ impl DynamicIdentityMapper {
 
         // Fill L3 with 512 page entries preserving original attributes.
         // L3 page descriptor: [PA | attrs | bit1=1(page) | bit0=1(valid)]
+        // SAFETY: `l3` points to a newly allocated L3 table page and the loop
+        // writes exactly 512 entries within bounds.
         unsafe {
             let l3_ptr = l3 as *mut u64;
             for i in 0..512u64 {
@@ -531,16 +538,12 @@ impl DynamicIdentityMapper {
         }
 
         // Break-before-make: invalidate old L2 entry
-        unsafe {
-            *(l2_table as *mut u64).add(l2_idx) = 0;
-        }
+        Self::write_pte(Self::entry_ptr(l2_table, l2_idx), 0);
         Self::tlbi_all();
 
         // Write new L2 table descriptor pointing to L3
         let l2_desc = l3 | PTE_VALID | PTE_TABLE;
-        unsafe {
-            *(l2_table as *mut u64).add(l2_idx) = l2_desc;
-        }
+        Self::write_pte(Self::entry_ptr(l2_table, l2_idx), l2_desc);
         Self::tlbi_all();
 
         Ok(l3)
@@ -559,6 +562,7 @@ impl DynamicIdentityMapper {
 
     /// Invalidate all Stage-2 TLB entries.
     fn tlbi_all() {
+        // SAFETY: invalidates stage-2 TLB entries for current CPU context.
         unsafe {
             core::arch::asm!(
                 "dsb ishst",
@@ -573,6 +577,7 @@ impl DynamicIdentityMapper {
     /// Invalidate a single IPA from Stage-2 TLB.
     fn tlbi_ipa(ipa: u64) {
         let ipa_shifted = (ipa >> 12) & 0x0000_00FF_FFFF_FFFF;
+        // SAFETY: `ipa_shifted` uses architected TLBI operand encoding.
         unsafe {
             core::arch::asm!(
                 "dsb ishst",
@@ -617,11 +622,9 @@ impl DynamicIdentityMapper {
     /// Returns Err if the IPA is not mapped.
     pub fn write_sw_bits(&mut self, ipa: u64, bits: u8) -> Result<(), &'static str> {
         let leaf_ptr = self.walk_to_leaf_ptr(ipa).ok_or("IPA not mapped")?;
-        unsafe {
-            let mut pte = core::ptr::read_volatile(leaf_ptr);
-            pte = (pte & !PTE_SW_MASK) | (((bits as u64) & 0x3) << PTE_SW_SHIFT);
-            core::ptr::write_volatile(leaf_ptr, pte);
-        }
+        let mut pte = Self::read_pte(leaf_ptr);
+        pte = (pte & !PTE_SW_MASK) | (((bits as u64) & 0x3) << PTE_SW_SHIFT);
+        Self::write_pte(leaf_ptr, pte);
         // No TLB invalidation needed — SW bits don't affect hardware translation
         Ok(())
     }
@@ -629,14 +632,14 @@ impl DynamicIdentityMapper {
     /// Walk page table to the leaf PTE value for a given IPA.
     fn walk_to_leaf(&self, ipa: u64) -> Option<u64> {
         let ptr = self.walk_to_leaf_ptr(ipa)?;
-        Some(unsafe { core::ptr::read_volatile(ptr) })
+        Some(Self::read_pte(ptr))
     }
 
     /// Walk page table to the leaf PTE pointer for a given IPA.
     fn walk_to_leaf_ptr(&self, ipa: u64) -> Option<*mut u64> {
         // L0
         let l0_idx = ((ipa >> 39) & PT_INDEX_MASK) as usize;
-        let l0_entry = unsafe { *(self.l0_table as *const u64).add(l0_idx) };
+        let l0_entry = Self::read_pte(Self::entry_ptr(self.l0_table, l0_idx));
         if l0_entry & (PTE_VALID | PTE_TABLE) != (PTE_VALID | PTE_TABLE) {
             return None;
         }
@@ -644,20 +647,20 @@ impl DynamicIdentityMapper {
         // L1
         let l1_table = l0_entry & PTE_ADDR_MASK;
         let l1_idx = ((ipa >> 30) & PT_INDEX_MASK) as usize;
-        let l1_entry = unsafe { *(l1_table as *const u64).add(l1_idx) };
+        let l1_entry = Self::read_pte(Self::entry_ptr(l1_table, l1_idx));
         if l1_entry & PTE_VALID == 0 {
             return None;
         }
         // L1 block (1GB)
         if l1_entry & PTE_TABLE == 0 {
-            return Some(unsafe { (l1_table as *mut u64).add(l1_idx) });
+            return Some(Self::entry_ptr(l1_table, l1_idx));
         }
 
         // L2
         let l2_table = l1_entry & PTE_ADDR_MASK;
         let l2_idx = ((ipa >> 21) & PT_INDEX_MASK) as usize;
-        let l2_ptr = unsafe { (l2_table as *mut u64).add(l2_idx) };
-        let l2_entry = unsafe { core::ptr::read_volatile(l2_ptr) };
+        let l2_ptr = Self::entry_ptr(l2_table, l2_idx);
+        let l2_entry = Self::read_pte(l2_ptr);
         if l2_entry & PTE_VALID == 0 {
             return None;
         }
@@ -669,8 +672,8 @@ impl DynamicIdentityMapper {
         // L3 (4KB page)
         let l3_table = l2_entry & PTE_ADDR_MASK;
         let l3_idx = ((ipa >> 12) & PT_INDEX_MASK) as usize;
-        let l3_ptr = unsafe { (l3_table as *mut u64).add(l3_idx) };
-        let l3_entry = unsafe { core::ptr::read_volatile(l3_ptr) };
+        let l3_ptr = Self::entry_ptr(l3_table, l3_idx);
+        let l3_entry = Self::read_pte(l3_ptr);
         if l3_entry & PTE_VALID == 0 {
             return None;
         }
@@ -718,6 +721,7 @@ impl Stage2Mapper for DynamicIdentityMapper {
 /// Initialize Stage-2 translation from a Stage2Config (used by DynamicIdentityMapper).
 pub fn init_stage2_from_config(config: &Stage2Config) {
     // Enable Stage-2 translation in HCR_EL2
+    // SAFETY: updates local CPU HCR_EL2 and performs architected barriers.
     unsafe {
         let mut hcr: u64;
         core::arch::asm!(
@@ -734,6 +738,7 @@ pub fn init_stage2_from_config(config: &Stage2Config) {
         );
     }
     config.install();
+    // SAFETY: global stage-2 TLB invalidate sequence for current CPU context.
     unsafe {
         core::arch::asm!(
             "tlbi vmalls12e1is",

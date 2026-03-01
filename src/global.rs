@@ -39,12 +39,16 @@ impl GlobalDeviceManager {
     }
 
     pub fn reset(&self) {
+        // SAFETY: single-pCPU build guarantees serialized access to the
+        // device manager; no concurrent mutable alias exists.
         unsafe {
             (*self.devices.get()).reset();
         }
     }
 
     pub fn register_device(&self, dev: crate::devices::Device) {
+        // SAFETY: single-pCPU build guarantees serialized access to the
+        // device manager; no concurrent mutable alias exists.
         unsafe {
             (*self.devices.get()).register_device(dev);
         }
@@ -52,31 +56,43 @@ impl GlobalDeviceManager {
     }
 
     pub fn attach_virtio_blk(&self, disk_base: u64, disk_size: u64) {
+        // SAFETY: single-pCPU build guarantees serialized access to the
+        // device manager; no concurrent mutable alias exists.
         unsafe {
             (*self.devices.get()).attach_virtio_blk(disk_base, disk_size);
         }
     }
 
     pub fn handle_mmio(&self, addr: u64, value: u64, size: u8, is_write: bool) -> Option<u64> {
+        // SAFETY: single-pCPU build guarantees serialized access to the
+        // device manager; no concurrent mutable alias exists.
         unsafe { (*self.devices.get()).handle_mmio(addr, value, size, is_write) }
     }
 
     pub fn route_spi(&self, intid: u32) -> usize {
+        // SAFETY: single-pCPU build guarantees serialized access to the
+        // device manager; no concurrent mutable alias exists.
         unsafe { (*self.devices.get()).route_spi(intid) }
     }
 
     #[allow(clippy::mut_from_ref)]
     pub fn uart_mut(&self) -> Option<&mut crate::devices::pl011::VirtualUart> {
+        // SAFETY: single-pCPU build guarantees serialized access to the
+        // device manager; caller must not hold another mutable borrow.
         unsafe { (*self.devices.get()).uart_mut() }
     }
 
     pub fn attach_virtio_net(&self, vm_id: usize) {
+        // SAFETY: single-pCPU build guarantees serialized access to the
+        // device manager; no concurrent mutable alias exists.
         unsafe {
             (*self.devices.get()).attach_virtio_net(vm_id);
         }
     }
 
     pub fn inject_net_rx(&self, frame: &[u8]) -> bool {
+        // SAFETY: single-pCPU build guarantees serialized access to the
+        // device manager; no concurrent mutable alias exists.
         unsafe {
             if let Some(transport) = (*self.devices.get()).virtio_net_mut() {
                 transport.inject_rx(frame)
@@ -424,6 +440,8 @@ pub fn inject_spi(intid: u32) {
     let target = {
         let gicd_irouter_base = crate::dtb::platform_info().gicd_base + 0x6100;
         let irouter_addr = gicd_irouter_base + (intid as u64 - 32) * 8;
+        // SAFETY: `irouter_addr` targets a valid memory-mapped GIC distributor
+        // register and must be accessed with volatile semantics.
         let irouter = unsafe { core::ptr::read_volatile(irouter_addr as *const u64) };
         (irouter & 0xFF) as usize // Aff0 = vCPU ID
     };
@@ -439,6 +457,8 @@ pub fn inject_spi(intid: u32) {
             if target != current {
                 // Send SGI 0 to target pCPU to wake it from WFI
                 let val: u64 = 1u64 << target; // TargetList only, INTID=0
+                // SAFETY: EL2 owns this sysreg programming path and value only
+                // targets the selected CPU in Aff0.
                 unsafe {
                     core::arch::asm!(
                         "msr icc_sgi1r_el1, {val}",
@@ -481,6 +501,8 @@ impl UartRxRing {
         if next == self.head.load(Ordering::Acquire) {
             return; // full, drop
         }
+        // SAFETY: producer writes only at `tail`; consumer reads at `head`.
+        // Acquire/Release ordering guarantees no concurrent access to same slot.
         unsafe {
             (*self.buf.get())[tail] = ch;
         }
@@ -493,6 +515,8 @@ impl UartRxRing {
         if head == self.tail.load(Ordering::Acquire) {
             return None; // empty
         }
+        // SAFETY: consumer reads only at `head`; producer writes at `tail`.
+        // Acquire/Release ordering guarantees this slot was initialized.
         let ch = unsafe { (*self.buf.get())[head] };
         self.head
             .store((head + 1) % UART_RX_RING_SIZE, Ordering::Release);

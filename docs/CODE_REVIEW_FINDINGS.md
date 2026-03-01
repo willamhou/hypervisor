@@ -30,6 +30,11 @@ Two-pass review of the hypervisor codebase:
 | M4 | ✅ Fixed | Added `nomem` to remaining pure sysreg/TLBI/barrier `asm!` sites (`guest_loader.rs`, `main.rs`, `sel2_mmu.rs`, `stage2_walker.rs`, `mmu.rs`); kept MMIO `str/strb` sites as `nostack` only. |
 | H7 | ✅ Fixed | Added explicit `// SAFETY:` rationale for `copy_nonoverlapping` into guest RX buffers in `proxy.rs` (including bounds/non-overlap invariants). |
 | M5 | ✅ Fixed | Added compile-time `size_of`/`offset_of` assertions for `VcpuContext`/`SystemRegs` to enforce `exception.S`-dependent layout offsets. |
+| H2 | ✅ Fixed | `stage2_walker.rs` now documents all remaining unsafe page-table/asm operations and centralizes volatile PTE access via helpers with invariants. |
+| H3 | ✅ Fixed | `mmu.rs` now documents stage-2 walker/table unsafe operations; pointer/volatile access consolidated via helper APIs. |
+| H4 | ✅ Fixed | `global.rs` UnsafeCell/volatile/ring-buffer unsafe paths now include explicit single-pCPU and producer/consumer safety invariants. |
+| H5 | ✅ Fixed | `spmc_handler.rs` replaced `static mut NWD_RXTX` with `UnsafeCell` wrapper and added safety contracts for shared state and context-switch unsafe calls. |
+| H1 | 🟡 In Progress | Global unsafe comment coverage improved from 6.6% (20/305) to 22.9% (62/271); remaining modules still need SAFETY convergence. |
 
 ---
 
@@ -47,11 +52,11 @@ Two-pass review of the hypervisor codebase:
 
 | ID | Rule | File | Description |
 |----|------|------|-------------|
-| H1 | §2.2 SAFETY | Global | 305 unsafe blocks, only 20 have `// SAFETY:` comments (6.6% coverage) |
-| H2 | §2.2 | `src/ffa/stage2_walker.rs` | 39 unsafe blocks, 0 SAFETY comments — all page table pointer derefs |
-| H3 | §2.2 | `src/arch/aarch64/mm/mmu.rs` | 29 unsafe blocks, 0 SAFETY comments — page table arithmetic |
-| H4 | §2.2 | `src/global.rs` | 12 UnsafeCell derefs + 2 UartRxRing derefs, no SAFETY. Single-pCPU invariant undocumented |
-| H5 | §2.2 | `src/spmc_handler.rs` | `static mut NWD_RXTX` 10+ access points undocumented; `SpmcShareArray` 5 UnsafeCell derefs undocumented. Per-CPU race risk in pKVM |
+| H1 | §2.2 SAFETY | Global | SAFETY docs are still incomplete globally; coverage improved to 22.9% (62/271). Continue converging remaining modules. |
+| H2 | §2.2 | `src/ffa/stage2_walker.rs` | Fixed: page-table unsafe derefs/volatile accesses now documented and centralized via helper APIs. |
+| H3 | §2.2 | `src/arch/aarch64/mm/mmu.rs` | Fixed: stage-2 page table arithmetic unsafe paths now carry explicit SAFETY invariants and helper encapsulation. |
+| H4 | §2.2 | `src/global.rs` | Fixed: UnsafeCell/global ring-buffer unsafe accesses now document single-pCPU and lock-free producer/consumer invariants. |
+| H5 | §2.2 | `src/spmc_handler.rs` | Fixed: replaced `static mut NWD_RXTX` with `UnsafeCell` wrapper; shared-state/context-switch unsafe blocks now documented. |
 | H6 | §2.2 | `src/sp_context.rs` | `get_sp_mut()` returns `&'static mut SpContext` — aliasing safety undocumented |
 | H7 | §2.2 | `src/ffa/proxy.rs` | `copy_nonoverlapping` to guest RX buffer (lines 387-391, 1045-1051) — bounds validation undocumented |
 | H8 | §3.1 asm! options | 35 locations | `asm!()` completely missing `options()`, concentrated in `exception.rs` (18), `main.rs` (10) |

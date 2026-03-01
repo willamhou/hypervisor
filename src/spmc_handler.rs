@@ -31,6 +31,7 @@ use crate::platform::MAX_SMP_CPUS;
 #[inline(always)]
 fn sel2_cpu_id() -> usize {
     let mpidr: u64;
+    // SAFETY: reading MPIDR_EL1 is side-effect free and valid at EL2.
     unsafe { core::arch::asm!("mrs {}, MPIDR_EL1", out(reg) mpidr, options(nostack, nomem)) };
     (mpidr & 0xFF) as usize
 }
@@ -102,6 +103,7 @@ pub fn current_running_sp() -> u16 {
 pub fn set_sp_irq_preempted(val: bool) {
     let cpu = {
         let mpidr: u64;
+        // SAFETY: reading MPIDR_EL1 is side-effect free and valid at EL2.
         unsafe { core::arch::asm!("mrs {}, MPIDR_EL1", out(reg) mpidr, options(nostack, nomem)) };
         (mpidr & 0xFF) as usize
     };
@@ -112,6 +114,7 @@ pub fn set_sp_irq_preempted(val: bool) {
 pub fn inc_fiq_preempt_count() {
     let cpu = {
         let mpidr: u64;
+        // SAFETY: reading MPIDR_EL1 is side-effect free and valid at EL2.
         unsafe { core::arch::asm!("mrs {}, MPIDR_EL1", out(reg) mpidr, options(nostack, nomem)) };
         (mpidr & 0xFF) as usize
     };
@@ -132,12 +135,30 @@ struct NwdRxtxState {
     mapped: bool,
 }
 
-static mut NWD_RXTX: NwdRxtxState = NwdRxtxState {
+struct NwdRxtxCell(UnsafeCell<NwdRxtxState>);
+
+// SAFETY: SPMC FF-A message handling is serialized in the event loop.
+// No concurrent mutable access is allowed to the NWd RXTX registration state.
+unsafe impl Sync for NwdRxtxCell {}
+
+static NWD_RXTX: NwdRxtxCell = NwdRxtxCell(UnsafeCell::new(NwdRxtxState {
     tx_pa: 0,
     rx_pa: 0,
     page_count: 0,
     mapped: false,
-};
+}));
+
+#[inline(always)]
+fn nwd_rxtx_mut() -> &'static mut NwdRxtxState {
+    // SAFETY: guarded by SPMC event-loop serialization; no aliasing mutable refs.
+    unsafe { &mut *NWD_RXTX.0.get() }
+}
+
+#[inline(always)]
+fn nwd_rxtx_ref() -> &'static NwdRxtxState {
+    // SAFETY: callers only take immutable snapshots; mutation remains serialized.
+    unsafe { &*NWD_RXTX.0.get() }
+}
 
 // ── SPMC-side memory share records ──────────────────────────────────
 
@@ -157,6 +178,8 @@ struct SpmcShareRecord {
 }
 
 struct SpmcShareArray(UnsafeCell<[SpmcShareRecord; MAX_SPMC_SHARES]>);
+// SAFETY: accesses are serialized by the SPMC event loop and per-request
+// execution; no concurrent mutable aliases are created.
 unsafe impl Sync for SpmcShareArray {}
 
 static SPMC_SHARES: SpmcShareArray = SpmcShareArray(UnsafeCell::new({
@@ -190,6 +213,7 @@ fn record_spmc_share(
     is_lend: bool,
 ) -> Option<u64> {
     let handle = spmc_alloc_handle();
+    // SAFETY: event-loop execution is single-threaded for SPMC requests.
     let records = unsafe { &mut *SPMC_SHARES.0.get() };
     for record in records.iter_mut() {
         if !record.active {
@@ -218,6 +242,7 @@ fn record_spmc_share(
 fn lookup_spmc_share(
     handle: u64,
 ) -> Option<(u16, u16, [(u64, u32); MAX_SHARE_RANGES], usize, bool, bool)> {
+    // SAFETY: immutable access under event-loop serialization.
     let records = unsafe { &*SPMC_SHARES.0.get() };
     for record in records.iter() {
         if record.active && record.handle == handle {
@@ -236,6 +261,7 @@ fn lookup_spmc_share(
 
 /// Mark a share as retrieved. Returns true if successful.
 fn mark_spmc_retrieved(handle: u64) -> bool {
+    // SAFETY: event-loop execution is single-threaded for SPMC requests.
     let records = unsafe { &mut *SPMC_SHARES.0.get() };
     for record in records.iter_mut() {
         if record.active && record.handle == handle && !record.retrieved {
@@ -248,6 +274,7 @@ fn mark_spmc_retrieved(handle: u64) -> bool {
 
 /// Mark a share as relinquished. Returns true if successful.
 fn mark_spmc_relinquished(handle: u64) -> bool {
+    // SAFETY: event-loop execution is single-threaded for SPMC requests.
     let records = unsafe { &mut *SPMC_SHARES.0.get() };
     for record in records.iter_mut() {
         if record.active && record.handle == handle && record.retrieved {
@@ -260,6 +287,7 @@ fn mark_spmc_relinquished(handle: u64) -> bool {
 
 /// Reclaim (delete) a share record. Fails if still retrieved.
 fn reclaim_spmc_share(handle: u64) -> Result<(), i32> {
+    // SAFETY: event-loop execution is single-threaded for SPMC requests.
     let records = unsafe { &mut *SPMC_SHARES.0.get() };
     for record in records.iter_mut() {
         if record.active && record.handle == handle {
@@ -279,6 +307,7 @@ fn reclaim_spmc_share(handle: u64) -> Result<(), i32> {
 fn save_host_el2_state() -> (u64, u64) {
     let elr: u64;
     let spsr: u64;
+    // SAFETY: EL2 sysregs are readable in this context and accesses are local CPU state.
     unsafe {
         core::arch::asm!("mrs {}, elr_el2", out(reg) elr, options(nostack, nomem));
         core::arch::asm!("mrs {}, spsr_el2", out(reg) spsr, options(nostack, nomem));
@@ -290,6 +319,7 @@ fn save_host_el2_state() -> (u64, u64) {
 #[cfg(feature = "sel2")]
 #[inline(always)]
 fn restore_host_el2_state(elr: u64, spsr: u64) {
+    // SAFETY: restores previously saved EL2 host state for the current CPU.
     unsafe {
         core::arch::asm!("msr elr_el2, {}", in(reg) elr, options(nostack, nomem));
         core::arch::asm!("msr spsr_el2, {}", in(reg) spsr, options(nostack, nomem));
@@ -310,6 +340,7 @@ fn restore_host_el2_state(elr: u64, spsr: u64) {
 fn pre_enter_guest(_sp: &mut crate::sp_context::SpContext) -> usize {
     // Clear HCR_EL2.FMO so NS FIQ doesn't trap to S-EL2 during SP execution.
     // Mask FIQ in PSTATE.F at S-EL2 to prevent FIQ during enter_guest asm.
+    // SAFETY: modifies only local CPU trap/mask bits before guest entry.
     unsafe {
         core::arch::asm!(
             "mrs {tmp}, hcr_el2",
@@ -340,10 +371,12 @@ fn post_enter_guest(cpu: usize) {
         SAVED_HOST_ELR[cpu].load(Ordering::Relaxed),
         SAVED_HOST_SPSR[cpu].load(Ordering::Relaxed),
     );
+    // SAFETY: TPIDR_EL2 is scratch for this CPU and cleared on return path.
     unsafe {
         core::arch::asm!("msr tpidr_el2, xzr", options(nostack, nomem));
     }
     // Restore HCR_EL2.FMO and unmask PSTATE.F
+    // SAFETY: restores local CPU trap/mask bits after guest exit.
     unsafe {
         core::arch::asm!(
             "mrs {tmp}, hcr_el2",
@@ -383,6 +416,7 @@ pub fn run_event_loop(first_request: SmcResult8) -> ! {
     // SPMD does NOT save/restore EL1 when SPMD_SPM_AT_SEL2=1 (only EL2),
     // so hardware EL1 regs contain whatever NWd (pKVM) left. We must save
     // them before dispatch_to_sp() overwrites them with SP's EL1 state.
+    // SAFETY: this CPU owns its HOST_EL1_STATE slot.
     unsafe {
         (*HOST_EL1_STATE.0[cpu].get()).save();
     }
@@ -391,6 +425,7 @@ pub fn run_event_loop(first_request: SmcResult8) -> ! {
         let response = dispatch_request(&request);
 
         // Disable Secure Group 1 interrupt delivery before SMC to SPMD.
+        // SAFETY: local CPU interrupt-group enable programming.
         unsafe {
             core::arch::asm!("msr ICC_IGRPEN1_EL1, xzr", "isb", options(nostack, nomem),);
         }
@@ -402,6 +437,7 @@ pub fn run_event_loop(first_request: SmcResult8) -> ! {
         //
         // Uses restore_except_sp_el0() because at S-EL2 (SPSel=0), SP_EL0 is
         // our current stack pointer — overwriting it would corrupt the stack.
+        // SAFETY: this CPU owns its HOST_EL1_STATE slot.
         unsafe {
             (*HOST_EL1_STATE.0[cpu].get()).restore_except_sp_el0();
         }
@@ -419,11 +455,13 @@ pub fn run_event_loop(first_request: SmcResult8) -> ! {
 
         // Save NWd EL1 state immediately after SPMD returns to S-EL2.
         // Hardware EL1 regs now contain NWd's state (passed through by SPMD).
+        // SAFETY: this CPU owns its HOST_EL1_STATE slot.
         unsafe {
             (*HOST_EL1_STATE.0[cpu].get()).save();
         }
 
         // Re-enable Secure Group 1 for IRQ handling during SP execution
+        // SAFETY: local CPU interrupt-group enable programming.
         unsafe {
             core::arch::asm!(
                 "mov x0, #1",
@@ -522,6 +560,8 @@ fn dispatch_to_sp(req: &SmcResult8, sp_id: u16) -> SmcResult8 {
 
     let ctx_ptr = sp.vcpu_ctx_mut() as *mut crate::arch::aarch64::regs::VcpuContext;
 
+    // SAFETY: `ctx_ptr` points to the current SP's owned VcpuContext and the
+    // per-SP lock ensures exclusive mutable access across CPUs.
     let _exit = unsafe { crate::arch::aarch64::enter_guest(ctx_ptr) };
 
     // sp reference is preserved across enter_guest() via callee-saved register
@@ -551,6 +591,7 @@ fn dispatch_to_sp(req: &SmcResult8, sp_id: u16) -> SmcResult8 {
 /// Preserves TSC, FMO, IMO, AMO, RW and other trap bits.
 #[cfg(feature = "sel2")]
 fn clear_secure_stage2() {
+    // SAFETY: programs local CPU secure stage-2 and HCR_EL2 control bits.
     unsafe {
         // Clear Secure Stage-2 translation registers
         core::arch::asm!(
@@ -724,6 +765,7 @@ fn handle_sp_exit(sp: &mut crate::sp_context::SpContext, sp_id: u16) -> SmcResul
         crate::arch::aarch64::peripherals::timer::arm_preemption_timer();
         pre_enter_guest(sp);
 
+        // SAFETY: pointer comes from the locked SP context and is exclusive.
         let _exit = unsafe {
             crate::arch::aarch64::enter_guest(
                 sp.vcpu_ctx_mut() as *mut crate::arch::aarch64::regs::VcpuContext
@@ -798,6 +840,7 @@ fn resume_preempted_sp(sp_id: u16) -> SmcResult8 {
     crate::arch::aarch64::peripherals::timer::arm_preemption_timer();
     pre_enter_guest(sp);
 
+    // SAFETY: pointer comes from the locked SP context and is exclusive.
     let _exit = unsafe {
         crate::arch::aarch64::enter_guest(
             sp.vcpu_ctx_mut() as *mut crate::arch::aarch64::regs::VcpuContext
@@ -829,6 +872,7 @@ fn resume_preempted_sp(sp_id: u16) -> SmcResult8 {
 fn inject_pending_virq(sp: &mut crate::sp_context::SpContext) {
     if sp.has_pending_irq() {
         // Set HCR_EL2.VI → hardware auto-vectors to IRQ handler on ERET
+        // SAFETY: local CPU HCR_EL2 update before guest entry.
         unsafe {
             let mut hcr: u64;
             core::arch::asm!("mrs {}, hcr_el2", out(reg) hcr, options(nostack, nomem));
@@ -897,6 +941,7 @@ fn dispatch_interrupt_to_sp(sp_id: u16) -> bool {
     crate::arch::aarch64::peripherals::timer::arm_preemption_timer();
     pre_enter_guest(sp);
 
+    // SAFETY: pointer comes from the locked SP context and is exclusive.
     let _exit = unsafe {
         crate::arch::aarch64::enter_guest(
             sp.vcpu_ctx_mut() as *mut crate::arch::aarch64::regs::VcpuContext
@@ -1088,15 +1133,14 @@ fn handle_rxtx_map(req: &SmcResult8) -> SmcResult8 {
         return make_error(ffa::FFA_INVALID_PARAMETERS as u64);
     }
 
-    unsafe {
-        if NWD_RXTX.mapped {
+    let nwd = nwd_rxtx_mut();
+    if nwd.mapped {
             return make_error(ffa::FFA_DENIED as u64);
-        }
-        NWD_RXTX.tx_pa = tx_pa;
-        NWD_RXTX.rx_pa = rx_pa;
-        NWD_RXTX.page_count = page_count;
-        NWD_RXTX.mapped = true;
     }
+    nwd.tx_pa = tx_pa;
+    nwd.rx_pa = rx_pa;
+    nwd.page_count = page_count;
+    nwd.mapped = true;
 
     SmcResult8 {
         x0: ffa::FFA_SUCCESS_32,
@@ -1112,15 +1156,14 @@ fn handle_rxtx_map(req: &SmcResult8) -> SmcResult8 {
 
 /// Handle FFA_RXTX_UNMAP — clear NWd's RXTX registration.
 fn handle_rxtx_unmap() -> SmcResult8 {
-    unsafe {
-        if !NWD_RXTX.mapped {
+    let nwd = nwd_rxtx_mut();
+    if !nwd.mapped {
             return make_error(ffa::FFA_DENIED as u64);
-        }
-        NWD_RXTX.tx_pa = 0;
-        NWD_RXTX.rx_pa = 0;
-        NWD_RXTX.page_count = 0;
-        NWD_RXTX.mapped = false;
     }
+    nwd.tx_pa = 0;
+    nwd.rx_pa = 0;
+    nwd.page_count = 0;
+    nwd.mapped = false;
 
     SmcResult8 {
         x0: ffa::FFA_SUCCESS_32,
@@ -1136,10 +1179,8 @@ fn handle_rxtx_unmap() -> SmcResult8 {
 
 /// Handle FFA_RX_RELEASE — acknowledge NWd has consumed the RX buffer.
 fn handle_rx_release() -> SmcResult8 {
-    unsafe {
-        if !NWD_RXTX.mapped {
-            return make_error(ffa::FFA_DENIED as u64);
-        }
+    if !nwd_rxtx_ref().mapped {
+        return make_error(ffa::FFA_DENIED as u64);
     }
     // No-op: we write descriptors synchronously in PARTITION_INFO_GET.
     SmcResult8 {
@@ -1170,10 +1211,11 @@ fn handle_partition_info_get() -> SmcResult8 {
     // Write descriptors to NWd's RX buffer (sel2 mode) or just count (unit tests).
     #[cfg(feature = "sel2")]
     {
-        let mapped = unsafe { NWD_RXTX.mapped };
-        let rx_pa = unsafe { NWD_RXTX.rx_pa };
+        let nwd = nwd_rxtx_ref();
+        let mapped = nwd.mapped;
+        let rx_pa = nwd.rx_pa;
         let max_bytes = if mapped {
-            unsafe { NWD_RXTX.page_count as usize * 4096 }
+            nwd.page_count as usize * 4096
         } else {
             0
         };
@@ -1280,10 +1322,13 @@ fn handle_spmc_mem_share(req: &SmcResult8, is_lend: bool) -> SmcResult8 {
 
     #[cfg(feature = "sel2")]
     {
-        let mapped = unsafe { NWD_RXTX.mapped };
+        let nwd = nwd_rxtx_ref();
+        let mapped = nwd.mapped;
         if mapped {
-            let tx_pa = unsafe { NWD_RXTX.tx_pa };
+            let tx_pa = nwd.tx_pa;
             let total_length = req.x1 as usize;
+            // SAFETY: `tx_pa` comes from validated RXTX_MAP registration and
+            // `total_length` is bounded by the FF-A request payload length.
             let parsed = unsafe {
                 crate::ffa::descriptors::parse_mem_region(tx_pa as *const u8, total_length as u32)
             };
