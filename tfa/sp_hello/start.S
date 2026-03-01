@@ -36,6 +36,11 @@ _start:
     ldr     x0, =SP_STACK_TOP
     mov     sp, x0
 
+    /* Install EL1 exception vector table */
+    adr     x0, sp_vector_table
+    msr     vbar_el1, x0
+    isb
+
     /* Print banner */
     adr     x0, str_banner
     bl      uart_print
@@ -205,6 +210,48 @@ _start:
     mov     x7, xzr
     smc     #0
     b       .Lmsg_loop
+
+/* ============ EL1 exception vectors ============ */
+.macro VEC target
+    b       \target
+    .space  (0x80 - 4)
+.endm
+
+.align 11
+sp_vector_table:
+    /* Current EL with SP0 */
+    VEC .Lvec_unexpected
+    VEC .Lvec_unexpected
+    VEC .Lvec_unexpected
+    VEC .Lvec_unexpected
+    /* Current EL with SPx */
+    VEC .Lvec_unexpected
+    VEC .Lvec_unexpected
+    VEC .Lvec_unexpected
+    VEC .Lvec_unexpected
+    /* Lower EL using AArch64 */
+    VEC .Lvec_unexpected
+    VEC .Lvec_unexpected
+    VEC .Lvec_unexpected
+    VEC .Lvec_unexpected
+    /* Lower EL using AArch32 */
+    VEC .Lvec_unexpected
+    VEC .Lvec_unexpected
+    VEC .Lvec_unexpected
+    VEC .Lvec_unexpected
+
+.Lvec_unexpected:
+    /* Report failure to SPMC instead of jumping into unmapped memory. */
+    ldr     x0, =0x84000060      /* FFA_ERROR */
+    mov     x1, xzr
+    mov     x2, #-2              /* FFA_INVALID_PARAMETERS */
+    mov     x3, xzr
+    mov     x4, xzr
+    mov     x5, xzr
+    mov     x6, xzr
+    mov     x7, xzr
+    smc     #0
+    b       .Lvec_unexpected
 
 /* ============ UART print subroutine ============ */
 /* x0 = pointer to null-terminated string. Clobbers x10-x12. */

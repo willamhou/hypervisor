@@ -683,6 +683,13 @@ fn handle_sp_exit(sp: &mut crate::sp_context::SpContext, sp_id: u16) -> SmcResul
                 ctx.pc,
                 ctx.sys_regs.elr_el1
             );
+
+            // Unexpected SP exits are fatal for the current transaction.
+            // Do not forward raw x0/x1 to NWd (can surface as -EINVAL).
+            let _ = sp.transition_to(crate::sp_context::SpState::Idle);
+            sp.clear_preempted_cpu();
+            sp.clear_owner_cpu();
+            return make_error(ffa::FFA_DENIED as u64);
         }
 
         match x0 {
