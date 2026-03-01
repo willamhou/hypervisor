@@ -466,8 +466,11 @@ fn dispatch_to_sp(req: &SmcResult8, sp_id: u16) -> SmcResult8 {
     // Acquire per-SP dispatch lock to prevent two CPUs from simultaneously
     // entering the same SP context (data race on VcpuContext fields).
     let slot = match crate::sp_context::try_lock_sp(sp_id) {
-        Some(s) => s,
-        None => return make_error(ffa::FFA_BUSY as u64),
+        Ok(s) => s,
+        Err(crate::sp_context::SpLockError::NotFound) => {
+            return make_error(ffa::FFA_INVALID_PARAMETERS as u64);
+        }
+        Err(crate::sp_context::SpLockError::Busy) => return make_error(ffa::FFA_BUSY as u64),
     };
 
     let sp = crate::sp_context::get_sp_by_slot(slot);
@@ -729,8 +732,11 @@ fn resume_preempted_sp(sp_id: u16) -> SmcResult8 {
     crate::log_debug!("[SPMC] resume sp={:#06x}\n", sp_id);
 
     let slot = match crate::sp_context::try_lock_sp(sp_id) {
-        Some(s) => s,
-        None => return make_error(ffa::FFA_DENIED as u64),
+        Ok(s) => s,
+        Err(crate::sp_context::SpLockError::NotFound) => {
+            return make_error(ffa::FFA_INVALID_PARAMETERS as u64);
+        }
+        Err(crate::sp_context::SpLockError::Busy) => return make_error(ffa::FFA_DENIED as u64),
     };
 
     let sp = crate::sp_context::get_sp_by_slot(slot);
@@ -813,8 +819,8 @@ fn inject_pending_virq(sp: &mut crate::sp_context::SpContext) {
 #[cfg(feature = "sel2")]
 fn dispatch_interrupt_to_sp(sp_id: u16) {
     let slot = match crate::sp_context::try_lock_sp(sp_id) {
-        Some(s) => s,
-        None => return,
+        Ok(s) => s,
+        Err(_) => return,
     };
 
     let sp = crate::sp_context::get_sp_by_slot(slot);

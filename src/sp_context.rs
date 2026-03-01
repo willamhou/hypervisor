@@ -7,6 +7,8 @@ use crate::arch::aarch64::defs::SPSR_EL1H_DAIF_MASKED;
 use crate::arch::aarch64::regs::VcpuContext;
 use core::arch::asm;
 use core::cell::UnsafeCell;
+use core::convert::TryFrom;
+use core::sync::atomic::{AtomicU32, AtomicU8, Ordering};
 
 /// Lightweight EL1 system register state for Secure Partitions.
 ///
@@ -148,19 +150,46 @@ impl SpEl1State {
 }
 
 /// SP lifecycle states.
+///
+/// Represented as u8 for atomic operations — multi-CPU SPMD means multiple
+/// CPUs can simultaneously try to dispatch to the same SP.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[repr(u8)]
 pub enum SpState {
     /// SP has been loaded but not yet booted.
-    Reset,
+    Reset = 0,
     /// SP has booted and is waiting for a message (called FFA_MSG_WAIT).
-    Idle,
+    Idle = 1,
     /// SP is currently executing (SPMC ERETs to it).
-    Running,
+    Running = 2,
     /// SP is blocked waiting for an event.
-    Blocked,
+    Blocked = 3,
     /// SP was preempted by NS interrupt, resume via FFA_RUN.
-    Preempted,
+    Preempted = 4,
 }
+
+impl SpState {
+    fn try_from_u8(v: u8) -> Option<Self> {
+        match v {
+            0 => Some(SpState::Reset),
+            1 => Some(SpState::Idle),
+            2 => Some(SpState::Running),
+            3 => Some(SpState::Blocked),
+            4 => Some(SpState::Preempted),
+            _ => None,
+        }
+    }
+}
+
+impl TryFrom<u8> for SpState {
+    type Error = ();
+
+    fn try_from(value: u8) -> Result<Self, Self::Error> {
+        SpState::try_from_u8(value).ok_or(())
+    }
+}
+
+const NO_PENDING_IRQ: u32 = u32::MAX;
 
 /// Per-SP context: register state + metadata.
 pub struct SpContext {
@@ -171,8 +200,8 @@ pub struct SpContext {
     el1_state: SpEl1State,
     /// FF-A partition ID (e.g. 0x8001).
     id: u16,
-    /// Current lifecycle state.
-    state: SpState,
+    /// Current lifecycle state (atomic for multi-CPU safety).
+    state: AtomicU8,
     /// Cold boot entry point.
     entry: u64,
     /// Secure Stage-2 VSTTBR value for this SP (set after page table creation).
@@ -180,7 +209,8 @@ pub struct SpContext {
     /// 128-bit UUID from SP manifest (4 x u32 LE words).
     uuid: [u32; 4],
     /// Pending virtual interrupt to inject via HCR_EL2.VI on next entry.
-    pending_irq: Option<u32>,
+    /// Atomic so IRQ/HVC paths can update it without taking a mutable SP borrow.
+    pending_irq: AtomicU32,
     /// INTIDs owned by this SP, delivered as virtual IRQ (up to 4, 0 = unused).
     owned_intids: [u32; 4],
 }
@@ -198,11 +228,11 @@ impl SpContext {
             ctx,
             el1_state: SpEl1State::new(),
             id: sp_id,
-            state: SpState::Reset,
+            state: AtomicU8::new(SpState::Reset as u8),
             entry: entry_point,
             vsttbr: 0,
             uuid,
-            pending_irq: None,
+            pending_irq: AtomicU32::new(NO_PENDING_IRQ),
             owned_intids: [0; 4],
         }
     }
@@ -212,7 +242,7 @@ impl SpContext {
     }
 
     pub fn state(&self) -> SpState {
-        self.state
+        SpState::try_from(self.state.load(Ordering::Acquire)).expect("corrupt SP state value")
     }
 
     pub fn entry_point(&self) -> u64 {
@@ -253,9 +283,11 @@ impl SpContext {
         self.el1_state.restore();
     }
 
-    /// Validate and perform a state transition.
+    /// Validate and perform a state transition (non-atomic store).
+    /// Use when the caller already holds exclusive access (e.g., after CAS lock).
     pub fn transition_to(&mut self, new_state: SpState) -> Result<(), &'static str> {
-        let valid = match (self.state, new_state) {
+        let current = self.state();
+        let valid = match (current, new_state) {
             (SpState::Reset, SpState::Idle) => true,
             (SpState::Idle, SpState::Running) => true,
             (SpState::Running, SpState::Idle) => true,
@@ -266,10 +298,25 @@ impl SpContext {
             _ => false,
         };
         if valid {
-            self.state = new_state;
+            self.state.store(new_state as u8, Ordering::Release);
             Ok(())
         } else {
             Err("invalid SP state transition")
+        }
+    }
+
+    /// Atomically transition from expected_state to new_state.
+    /// Returns Ok(()) if the CAS succeeded, Err if the SP was not in expected_state.
+    /// Used by multi-CPU dispatch to prevent two CPUs from entering the same SP.
+    pub fn try_transition(&self, expected: SpState, new_state: SpState) -> Result<(), SpState> {
+        match self.state.compare_exchange(
+            expected as u8,
+            new_state as u8,
+            Ordering::AcqRel,
+            Ordering::Acquire,
+        ) {
+            Ok(_) => Ok(()),
+            Err(actual) => Err(SpState::try_from(actual).expect("corrupt SP state value")),
         }
     }
 
@@ -320,25 +367,29 @@ impl SpContext {
     }
 
     /// Set a pending virtual interrupt for injection on next SP entry.
-    pub fn set_pending_irq(&mut self, intid: u32) {
-        self.pending_irq = Some(intid);
+    pub fn set_pending_irq(&self, intid: u32) {
+        self.pending_irq.store(intid, Ordering::Release);
     }
 
     /// Take the pending virtual interrupt (returns None if none pending).
-    pub fn take_pending_irq(&mut self) -> Option<u32> {
-        self.pending_irq.take()
+    pub fn take_pending_irq(&self) -> Option<u32> {
+        let intid = self.pending_irq.swap(NO_PENDING_IRQ, Ordering::AcqRel);
+        if intid == NO_PENDING_IRQ {
+            None
+        } else {
+            Some(intid)
+        }
     }
 
     /// Check if this SP has a pending interrupt.
     pub fn has_pending_irq(&self) -> bool {
-        self.pending_irq.is_some()
+        self.pending_irq.load(Ordering::Acquire) != NO_PENDING_IRQ
     }
 
     /// Return the first non-zero owned INTID, if any.
     pub fn first_owned_intid(&self) -> Option<u32> {
         self.owned_intids.iter().copied().find(|&id| id != 0)
     }
-
 }
 
 // ── Global SP store ─────────────────────────────────────────────────
@@ -355,6 +406,57 @@ static SP_STORE: SpStore = SpStore {
     contexts: UnsafeCell::new([None, None, None, None]),
 };
 
+/// Per-SP dispatch lock. Prevents two CPUs from simultaneously entering
+/// mutable SP dispatch paths for the same SP, which would create aliasing
+/// &mut references.
+/// Index matches SP_STORE slot (not SP ID). Locked before mutable access,
+/// unlocked after dispatch completes.
+use core::sync::atomic::AtomicBool;
+static SP_DISPATCH_LOCK: [AtomicBool; MAX_SPS] = [
+    AtomicBool::new(false),
+    AtomicBool::new(false),
+    AtomicBool::new(false),
+    AtomicBool::new(false),
+];
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SpLockError {
+    NotFound,
+    Busy,
+}
+
+/// Try to acquire the dispatch lock for an SP (by partition ID).
+/// Returns the slot index on success.
+pub fn try_lock_sp(sp_id: u16) -> Result<usize, SpLockError> {
+    let contexts = unsafe { &*SP_STORE.contexts.get() };
+    for (i, slot) in contexts.iter().enumerate() {
+        if let Some(ref sp) = slot {
+            if sp.sp_id() == sp_id {
+                // Attempt atomic lock acquisition
+                if SP_DISPATCH_LOCK[i]
+                    .compare_exchange(false, true, Ordering::Acquire, Ordering::Relaxed)
+                    .is_ok()
+                {
+                    return Ok(i);
+                }
+                return Err(SpLockError::Busy); // Found SP but locked by another CPU
+            }
+        }
+    }
+    Err(SpLockError::NotFound) // SP not found
+}
+
+/// Release the dispatch lock for an SP slot.
+pub fn unlock_sp(slot: usize) {
+    SP_DISPATCH_LOCK[slot].store(false, Ordering::Release);
+}
+
+/// Get mutable SP reference by slot index (caller must hold the lock).
+pub fn get_sp_by_slot(slot: usize) -> &'static mut SpContext {
+    let contexts = unsafe { &mut *SP_STORE.contexts.get() };
+    contexts[slot].as_mut().expect("SP slot empty after lock")
+}
+
 /// Register a booted SP in the global store.
 pub fn register_sp(sp: SpContext) {
     unsafe {
@@ -369,14 +471,57 @@ pub fn register_sp(sp: SpContext) {
     }
 }
 
-/// Look up an SP by partition ID (mutable, for dispatch).
-pub fn get_sp_mut(sp_id: u16) -> Option<&'static mut SpContext> {
+/// Run a closure with exclusive mutable access to an SP (if lock can be acquired).
+/// Returns None if SP does not exist or is currently locked by another CPU.
+pub fn with_sp_locked<R, F: FnOnce(&mut SpContext) -> R>(sp_id: u16, f: F) -> Option<R> {
+    let slot = try_lock_sp(sp_id).ok()?;
+    let result = {
+        let sp = get_sp_by_slot(slot);
+        f(sp)
+    };
+    unlock_sp(slot);
+    Some(result)
+}
+
+/// Read a specific SP's state without taking a mutable borrow.
+pub fn state_of(sp_id: u16) -> Option<SpState> {
     unsafe {
-        let contexts = &mut *SP_STORE.contexts.get();
-        for slot in contexts.iter_mut() {
-            if let Some(ref mut sp) = slot {
+        let contexts = &*SP_STORE.contexts.get();
+        for slot in contexts.iter() {
+            if let Some(ref sp) = slot {
                 if sp.sp_id() == sp_id {
-                    return Some(sp);
+                    return Some(sp.state());
+                }
+            }
+        }
+        None
+    }
+}
+
+/// Set pending IRQ for one SP by partition ID.
+pub fn set_pending_irq_for(sp_id: u16, intid: u32) -> bool {
+    unsafe {
+        let contexts = &*SP_STORE.contexts.get();
+        for slot in contexts.iter() {
+            if let Some(ref sp) = slot {
+                if sp.sp_id() == sp_id {
+                    sp.set_pending_irq(intid);
+                    return true;
+                }
+            }
+        }
+        false
+    }
+}
+
+/// Consume pending IRQ for one SP by partition ID.
+pub fn take_pending_irq_for(sp_id: u16) -> Option<u32> {
+    unsafe {
+        let contexts = &*SP_STORE.contexts.get();
+        for slot in contexts.iter() {
+            if let Some(ref sp) = slot {
+                if sp.sp_id() == sp_id {
+                    return sp.take_pending_irq();
                 }
             }
         }
@@ -402,7 +547,7 @@ pub fn is_registered_sp(sp_id: u16) -> bool {
 /// Iterate over all registered SPs, calling `f` for each one.
 ///
 /// # Safety (internal)
-/// The callback `f` must NOT call `register_sp()`, `get_sp_mut()`, or any
+/// The callback `f` must NOT call `register_sp()`, `with_sp_locked()`, or any
 /// other function that mutates SP_STORE. Doing so is undefined behavior.
 pub fn for_each_sp<F: FnMut(&SpContext)>(mut f: F) {
     unsafe {
