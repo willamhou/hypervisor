@@ -121,6 +121,8 @@ impl Vm {
     ///
     /// With distinct VMIDs per VM, TLB entries are tagged and no flush is needed.
     pub fn activate_stage2(&self) {
+        // SAFETY: programs current CPU's VTTBR_EL2 with a value created by
+        // Stage2Config and followed by ISB for architectural synchronization.
         unsafe {
             core::arch::asm!(
                 "msr vttbr_el2, {vttbr}",
@@ -178,6 +180,8 @@ impl Vm {
         unsafe impl Sync for MapperCell {}
 
         static MAPPER: MapperCell = MapperCell(UnsafeCell::new(IdentityMapper::new()));
+        // SAFETY: unit-test path is single-threaded; `MAPPER` is only mutated
+        // under this function's serialized initialization flow.
         unsafe {
             let m = &mut *MAPPER.0.get();
             m.reset();
@@ -318,6 +322,7 @@ impl Vm {
         {
             let vttbr: u64;
             let vtcr: u64;
+            // SAFETY: reads current CPU's stage-2 sysregs after install.
             unsafe {
                 core::arch::asm!("mrs {}, vttbr_el2", out(reg) vttbr, options(nostack, nomem));
                 core::arch::asm!("mrs {}, vtcr_el2", out(reg) vtcr, options(nostack, nomem));
@@ -475,6 +480,8 @@ impl Vm {
                 Err("WFI") => {
                     // WFI: execute real WFI on the physical CPU.
                     // pCPU idles until next interrupt (SGI, SPI, timer).
+                    // SAFETY: WFI is executed in the idle path after all
+                    // shared state updates are published.
                     unsafe { core::arch::asm!("wfi", options(nostack, nomem)) };
                 }
                 Err(_) => {
@@ -774,6 +781,8 @@ pub fn run_multi_vm(vms: &mut [Vm]) {
 #[cfg(not(feature = "multi_pcpu"))]
 fn wake_gicr(rd_base: u64) {
     let waker_addr = (rd_base + platform::GICR_WAKER_OFF) as *mut u32;
+    // SAFETY: `waker_addr` points to the physical GICR_WAKER MMIO register
+    // for this redistributor and must be accessed with volatile ops.
     unsafe {
         let mut waker = core::ptr::read_volatile(waker_addr);
         // Clear ProcessorSleep (bit 1)
@@ -807,6 +816,8 @@ pub fn ensure_vtimer_enabled(cpu_id: usize) {
     const ENABLE_MASK: u32 = 0xFFFF | (1 << 27); // bits 0-15 + bit 27
 
     let sgi_base = crate::dtb::gicr_sgi_base(cpu_id);
+    // SAFETY: programs physical GICR SGI-frame MMIO registers at EL2 using
+    // volatile accesses; address is derived from trusted platform DT info.
     unsafe {
         // IGROUPR0: ensure Group 1 for SGIs + PPI 27
         let igroupr0 =
@@ -830,6 +841,8 @@ pub fn ensure_vtimer_enabled(cpu_id: usize) {
 #[cfg(not(feature = "multi_pcpu"))]
 #[inline]
 fn ensure_cnthp_enabled() {
+    // SAFETY: programs physical GICR0 SGI-frame MMIO registers at EL2 using
+    // volatile accesses; address is derived from trusted platform DT info.
     unsafe {
         let sgi_base = crate::dtb::gicr_sgi_base(0);
         // IGROUPR0: ensure Group 1 (read-modify-write)

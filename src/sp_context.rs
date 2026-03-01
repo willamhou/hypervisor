@@ -66,6 +66,8 @@ impl SpEl1State {
 
     /// Save EL1 system registers from hardware.
     pub fn save(&mut self) {
+        // SAFETY: executes at EL2 and accesses architected EL1 sysregs of the
+        // currently running world; caller serializes save/restore ordering.
         unsafe {
             asm!("mrs {}, sctlr_el1", out(reg) self.sctlr_el1, options(nostack, nomem));
             asm!("mrs {}, ttbr0_el1", out(reg) self.ttbr0_el1, options(nostack, nomem));
@@ -91,6 +93,8 @@ impl SpEl1State {
 
     /// Restore EL1 system registers to hardware.
     pub fn restore(&self) {
+        // SAFETY: writes back values previously captured by `save()` for the
+        // same execution context before re-entering that context.
         unsafe {
             asm!("msr sctlr_el1, {}", in(reg) self.sctlr_el1, options(nostack, nomem));
             asm!("msr ttbr0_el1, {}", in(reg) self.ttbr0_el1, options(nostack, nomem));
@@ -125,6 +129,8 @@ impl SpEl1State {
     /// responses to SPMD. SPMD does NOT save/restore EL1 when SPMD_SPM_AT_SEL2=1
     /// (it only saves/restores EL2), so the SPMC must manage EL1 state itself.
     pub fn restore_except_sp_el0(&self) {
+        // SAFETY: same preconditions as `restore()`, except SP_EL0 is
+        // intentionally skipped to preserve the SPMC's current stack.
         unsafe {
             asm!("msr sctlr_el1, {}", in(reg) self.sctlr_el1, options(nostack, nomem));
             asm!("msr ttbr0_el1, {}", in(reg) self.ttbr0_el1, options(nostack, nomem));
@@ -496,6 +502,8 @@ struct SpStore {
     contexts: UnsafeCell<[Option<SpContext>; MAX_SPS]>,
 }
 
+// SAFETY: all access to `contexts` is serialized by `SP_STORE_LOCK`; no
+// concurrent mutable aliases are created across callers.
 unsafe impl Sync for SpStore {}
 
 static SP_STORE: SpStore = SpStore {
@@ -528,6 +536,8 @@ pub struct SpDispatchGuard {
 
 impl SpDispatchGuard {
     pub fn sp_mut(&mut self) -> &mut SpContext {
+        // SAFETY: `SpDispatchGuard` is only constructed after acquiring the
+        // per-slot dispatch lock, so this mutable borrow is unique.
         let contexts = unsafe { &mut *SP_STORE.contexts.get() };
         contexts[self.slot]
             .as_mut()
@@ -545,6 +555,7 @@ impl Drop for SpDispatchGuard {
 /// Returns a guard on success.
 pub fn try_lock_sp(sp_id: u16) -> Result<SpDispatchGuard, SpLockError> {
     let _store_guard = SP_STORE_LOCK.lock();
+    // SAFETY: protected by `SP_STORE_LOCK` for read-only slot scan.
     let contexts = unsafe { &*SP_STORE.contexts.get() };
     for (i, slot) in contexts.iter().enumerate() {
         if let Some(ref sp) = slot {
@@ -566,6 +577,8 @@ pub fn try_lock_sp(sp_id: u16) -> Result<SpDispatchGuard, SpLockError> {
 /// Register a booted SP in the global store.
 pub fn register_sp(sp: SpContext) {
     let _store_guard = SP_STORE_LOCK.lock();
+    // SAFETY: protected by `SP_STORE_LOCK`; this is the only mutable access
+    // path for inserting into `SP_STORE`.
     unsafe {
         let contexts = &mut *SP_STORE.contexts.get();
         for slot in contexts.iter_mut() {
@@ -588,6 +601,7 @@ pub fn with_sp_locked<R, F: FnOnce(&mut SpContext) -> R>(sp_id: u16, f: F) -> Op
 /// Read a specific SP's state without taking a mutable borrow.
 pub fn state_of(sp_id: u16) -> Option<SpState> {
     let _store_guard = SP_STORE_LOCK.lock();
+    // SAFETY: protected by `SP_STORE_LOCK` for read-only slot scan.
     unsafe {
         let contexts = &*SP_STORE.contexts.get();
         for slot in contexts.iter() {
@@ -604,6 +618,7 @@ pub fn state_of(sp_id: u16) -> Option<SpState> {
 /// Set pending IRQ for one SP by partition ID.
 pub fn set_pending_irq_for(sp_id: u16, intid: u32) -> bool {
     let _store_guard = SP_STORE_LOCK.lock();
+    // SAFETY: protected by `SP_STORE_LOCK`; only atomic IRQ slots are mutated.
     unsafe {
         let contexts = &*SP_STORE.contexts.get();
         for slot in contexts.iter() {
@@ -621,6 +636,7 @@ pub fn set_pending_irq_for(sp_id: u16, intid: u32) -> bool {
 /// Consume pending IRQ for one SP by partition ID.
 pub fn take_pending_irq_for(sp_id: u16) -> Option<u32> {
     let _store_guard = SP_STORE_LOCK.lock();
+    // SAFETY: protected by `SP_STORE_LOCK` for slot traversal.
     unsafe {
         let contexts = &*SP_STORE.contexts.get();
         for slot in contexts.iter() {
@@ -637,6 +653,7 @@ pub fn take_pending_irq_for(sp_id: u16) -> Option<u32> {
 /// Check if a partition ID belongs to a registered SP.
 pub fn is_registered_sp(sp_id: u16) -> bool {
     let _store_guard = SP_STORE_LOCK.lock();
+    // SAFETY: protected by `SP_STORE_LOCK` for read-only slot scan.
     unsafe {
         let contexts = &*SP_STORE.contexts.get();
         for slot in contexts.iter() {
@@ -657,6 +674,7 @@ pub fn is_registered_sp(sp_id: u16) -> bool {
 /// other function that mutates SP_STORE. Doing so is undefined behavior.
 pub fn for_each_sp<F: FnMut(&SpContext)>(mut f: F) {
     let _store_guard = SP_STORE_LOCK.lock();
+    // SAFETY: protected by `SP_STORE_LOCK`; callback receives shared refs only.
     unsafe {
         let contexts = &*SP_STORE.contexts.get();
         for slot in contexts.iter() {
@@ -671,6 +689,7 @@ pub fn for_each_sp<F: FnMut(&SpContext)>(mut f: F) {
 /// Used by the IRQ handler to inject virtual interrupts without &mut.
 pub fn first_owned_intid_for(sp_id: u16) -> Option<u32> {
     let _store_guard = SP_STORE_LOCK.lock();
+    // SAFETY: protected by `SP_STORE_LOCK` for read-only slot scan.
     unsafe {
         let contexts = &*SP_STORE.contexts.get();
         for slot in contexts.iter() {
@@ -688,6 +707,7 @@ pub fn first_owned_intid_for(sp_id: u16) -> Option<u32> {
 /// Returns the SP's partition ID, or None.
 pub fn find_sp_for_intid(intid: u32) -> Option<u16> {
     let _store_guard = SP_STORE_LOCK.lock();
+    // SAFETY: protected by `SP_STORE_LOCK` for read-only slot scan.
     unsafe {
         let contexts = &*SP_STORE.contexts.get();
         for slot in contexts.iter() {
@@ -704,6 +724,7 @@ pub fn find_sp_for_intid(intid: u32) -> Option<u16> {
 /// Find any SP that has a pending interrupt. Returns the SP's partition ID, or None.
 pub fn find_sp_with_pending_irq() -> Option<u16> {
     let _store_guard = SP_STORE_LOCK.lock();
+    // SAFETY: protected by `SP_STORE_LOCK` for read-only slot scan.
     unsafe {
         let contexts = &*SP_STORE.contexts.get();
         for slot in contexts.iter() {

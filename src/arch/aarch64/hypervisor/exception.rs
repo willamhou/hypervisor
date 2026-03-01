@@ -34,6 +34,8 @@ extern "C" {
 /// 1. Loading VBAR_EL2 with the exception vector table address
 /// 2. Configuring HCR_EL2 to enable necessary traps
 pub fn init() {
+    // SAFETY: programs EL2 exception and trap control registers during
+    // hypervisor initialization on the current CPU.
     unsafe {
         // Get the address of the exception vector table
         let vbar = &exception_vector_table as *const _ as u64;
@@ -100,6 +102,8 @@ fn inc_exception_count() -> u32 {
         EXCEPTION_COUNT.fetch_add(1, Ordering::Relaxed) + 1
     }
     #[cfg(feature = "multi_pcpu")]
+    // SAFETY: `this_cpu()` returns the current CPU's percpu slot and this path
+    // only mutates that slot's exception counter.
     unsafe {
         let percpu = crate::percpu::this_cpu();
         (*percpu).exception_count += 1;
@@ -115,6 +119,8 @@ fn reset_exception_count() {
         EXCEPTION_COUNT.store(0, Ordering::Relaxed);
     }
     #[cfg(feature = "multi_pcpu")]
+    // SAFETY: `this_cpu()` returns the current CPU's percpu slot and this path
+    // only mutates that slot's exception counter.
     unsafe {
         (*crate::percpu::this_cpu()).exception_count = 0;
     }
@@ -136,6 +142,7 @@ pub fn reset_exception_counters() {
 pub extern "C" fn handle_exception(context: &mut VcpuContext) -> bool {
     // Read ESR_EL2 to determine exception cause
     let esr: u64;
+    // SAFETY: reading ESR_EL2 is side-effect free in EL2 exception context.
     unsafe {
         core::arch::asm!(
             "mrs {esr}, esr_el2",
@@ -147,6 +154,7 @@ pub extern "C" fn handle_exception(context: &mut VcpuContext) -> bool {
 
     // Read FAR_EL2 for fault address
     let far: u64;
+    // SAFETY: reading FAR_EL2 is side-effect free in EL2 exception context.
     unsafe {
         core::arch::asm!(
             "mrs {far}, far_el2",
@@ -168,6 +176,7 @@ pub extern "C" fn handle_exception(context: &mut VcpuContext) -> bool {
         );
         // Halt the system completely to prevent further execution
         loop {
+            // SAFETY: terminal halt path intentionally waits-for-event forever.
             unsafe {
                 core::arch::asm!("wfe", options(nostack, nomem));
             }
@@ -294,6 +303,8 @@ pub extern "C" fn handle_exception(context: &mut VcpuContext) -> bool {
             let ttbr0_el1: u64;
             let ttbr1_el1: u64;
             let vbar_el1: u64;
+            // SAFETY: debug dump path reads architected EL1/EL2 sysregs while
+            // handling a trapped exception at EL2.
             unsafe {
                 core::arch::asm!("mrs {}, elr_el1", out(reg) elr_el1, options(nostack, nomem));
                 core::arch::asm!("mrs {}, esr_el1", out(reg) esr_el1, options(nostack, nomem));
@@ -335,6 +346,7 @@ pub extern "C" fn handle_exception(context: &mut VcpuContext) -> bool {
             let vttbr_el2: u64;
             let hcr_el2: u64;
             let id_mmfr0: u64;
+            // SAFETY: debug dump path reads architected EL2/sys-id registers.
             unsafe {
                 core::arch::asm!("mrs {}, vtcr_el2", out(reg) vtcr_el2, options(nostack, nomem));
                 core::arch::asm!(
@@ -369,12 +381,16 @@ pub extern "C" fn handle_exception(context: &mut VcpuContext) -> bool {
 
             // Dump Stage-2 L0 table entries to verify
             let s2_l0_base = vttbr_el2 & !PAGE_OFFSET_MASK;
+            // SAFETY: `s2_l0_base` comes from VTTBR_EL2 table base and must be
+            // read with volatile semantics for MMU table memory.
             let s2_l0_0 = unsafe { core::ptr::read_volatile(s2_l0_base as *const u64) };
             crate::log_error!("  S2 L0[0] = {:#018x}\n", s2_l0_0);
             if s2_l0_0 & (PTE_VALID | PTE_TABLE) == (PTE_VALID | PTE_TABLE) {
                 let s2_l1_base = s2_l0_0 & PTE_ADDR_MASK;
+                // SAFETY: `s2_l1_base` comes from a valid table descriptor.
                 let s2_l1_0 = unsafe { core::ptr::read_volatile(s2_l1_base as *const u64) };
                 crate::log_error!("  S2 L1[0] = {:#018x}\n", s2_l1_0);
+                // SAFETY: reads adjacent L1 entry from same validated table base.
                 let s2_l1_1 = unsafe { core::ptr::read_volatile((s2_l1_base + 8) as *const u64) };
                 crate::log_error!("  S2 L1[1] = {:#018x}\n", s2_l1_1);
             }
@@ -385,6 +401,7 @@ pub extern "C" fn handle_exception(context: &mut VcpuContext) -> bool {
                 let l0_base = ttbr1_el1 & !PAGE_OFFSET_MASK;
                 let l0_index = ((far_el1 >> 39) & PT_INDEX_MASK) as usize;
                 let l0_entry_addr = l0_base + (l0_index as u64) * 8;
+                // SAFETY: `l0_entry_addr` is derived from TTBR1_EL1 base/index.
                 let l0_entry = unsafe { core::ptr::read_volatile(l0_entry_addr as *const u64) };
                 let l0_valid = l0_entry & PTE_VALID;
                 let l0_type = (l0_entry >> 1) & 1;
@@ -402,6 +419,7 @@ pub extern "C" fn handle_exception(context: &mut VcpuContext) -> bool {
                     let l1_base = l0_entry & PTE_ADDR_MASK;
                     let l1_index = ((far_el1 >> 30) & PT_INDEX_MASK) as usize;
                     let l1_entry_addr = l1_base + (l1_index as u64) * 8;
+                    // SAFETY: `l1_entry_addr` is derived from validated L0 table entry.
                     let l1_entry = unsafe { core::ptr::read_volatile(l1_entry_addr as *const u64) };
                     crate::log_error!(
                         "  L1[{:#018x}] @ {:#018x} = {:#018x}\n",
@@ -426,6 +444,7 @@ pub extern "C" fn handle_exception(context: &mut VcpuContext) -> bool {
             // When the guest MMU is off, VA == IPA so FAR_EL2 also works,
             // but HPFAR_EL2 is still valid and correct.
             let hpfar: u64;
+            // SAFETY: reading HPFAR_EL2 is side-effect free in EL2 exception context.
             unsafe {
                 core::arch::asm!(
                     "mrs {}, hpfar_el2",
@@ -527,6 +546,7 @@ pub extern "C" fn handle_exception(context: &mut VcpuContext) -> bool {
 /// This is the Hafnium-compatible virtual interrupt injection mechanism.
 #[cfg(feature = "sel2")]
 fn set_hcr_vi(enable: bool) {
+    // SAFETY: read-modify-write of local CPU HCR_EL2 VI bit with ISB sync.
     unsafe {
         let mut hcr: u64;
         core::arch::asm!("mrs {}, hcr_el2", out(reg) hcr, options(nostack, nomem));
@@ -715,6 +735,7 @@ pub extern "C" fn handle_irq_exception(_context: &mut VcpuContext) -> bool {
             // Read all available bytes from physical UART into global ring buffer.
             loop {
                 let fr: u32;
+                // SAFETY: PL011 MMIO read from trusted physical UART base.
                 unsafe {
                     core::arch::asm!(
                         "ldr {val:w}, [{addr}]",
@@ -727,6 +748,7 @@ pub extern "C" fn handle_irq_exception(_context: &mut VcpuContext) -> bool {
                     break;
                 } // RXFE — FIFO empty
                 let data: u32;
+                // SAFETY: PL011 MMIO read from trusted physical UART base.
                 unsafe {
                     core::arch::asm!(
                         "ldr {val:w}, [{addr}]",
@@ -854,6 +876,7 @@ fn emulate_mrs(op0: u32, op1: u32, crn: u32, crm: u32, op2: u32) -> u64 {
         // Debug registers (Op0=2) - return safe defaults
         (2, 0, 0, 2, 2) => {
             // MDSCR_EL1 - Debug Status and Control
+            // SAFETY: trapped debug register read emulation from EL2.
             unsafe {
                 let val: u64;
                 core::arch::asm!("mrs {}, mdscr_el1", out(reg) val, options(nostack, nomem));
@@ -890,6 +913,7 @@ fn emulate_msr(op0: u32, op1: u32, crn: u32, crm: u32, op2: u32, value: u64) {
         // Debug registers
         (2, 0, 0, 2, 2) => {
             // MDSCR_EL1 - Debug Status and Control
+            // SAFETY: trapped debug register write emulation from EL2.
             unsafe {
                 core::arch::asm!("msr mdscr_el1, {}", in(reg) value, options(nostack, nomem));
                 core::arch::asm!("isb", options(nostack, nomem));
@@ -897,6 +921,7 @@ fn emulate_msr(op0: u32, op1: u32, crn: u32, crm: u32, op2: u32, value: u64) {
         }
         (2, 0, 1, 0, 4) => {
             // OSLAR_EL1 - OS Lock Access (write-only)
+            // SAFETY: trapped debug register write emulation from EL2.
             unsafe {
                 core::arch::asm!("msr oslar_el1, {}", in(reg) value, options(nostack, nomem));
                 core::arch::asm!("isb", options(nostack, nomem));
@@ -1006,6 +1031,7 @@ fn handle_sgi_trap(value: u64) {
 #[cfg(feature = "multi_pcpu")]
 fn send_physical_sgi(intid: u32, target_list: u16) {
     let val: u64 = ((intid as u64 & 0xF) << 24) | (target_list as u64);
+    // SAFETY: writes architected SGI system register with encoded target list.
     unsafe {
         core::arch::asm!(
             "msr icc_sgi1r_el1, {val}",
@@ -1104,6 +1130,7 @@ fn handle_jailhouse_debug_console(context: &mut VcpuContext) -> bool {
             let uart_base = crate::dtb::platform_info().uart_base as usize;
             let uart_fr = uart_base + 0x18; // Flag register
 
+            // SAFETY: PL011 MMIO reads from trusted physical UART base.
             unsafe {
                 // Check if RX FIFO has data (FR bit 4 = RXFE, 0 = has data)
                 let fr: u32;
@@ -1269,6 +1296,7 @@ fn handle_psci(context: &mut VcpuContext, function_id: u64) -> bool {
                     crate::global::PENDING_CPU_ON_PER_VCPU[target_id]
                         .request(entry_point, context_id);
                     // Wake the target pCPU from WFE
+                    // SAFETY: sends event to wake waiting CPUs after publishing request.
                     unsafe { core::arch::asm!("sev", options(nostack, nomem)) };
                 }
             }
@@ -1349,6 +1377,8 @@ fn handle_mmio_abort(context: &mut VcpuContext, addr: u64) -> bool {
         0 // ISS decode doesn't need the instruction
     } else if context.pc < 0x8000_0000_0000 {
         // PC looks like a physical address, safe to read
+        // SAFETY: guarded by physical-address plausibility check and requires
+        // volatile read semantics for instruction fetch from guest memory.
         unsafe { core::ptr::read_volatile(context.pc as *const u32) }
     } else {
         // PC is a virtual address (guest MMU is on), can't read instruction
