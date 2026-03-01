@@ -18,6 +18,9 @@ Two-pass review of the hypervisor codebase:
 | R3 | ✅ Fixed | Implemented explicit owner tracking (`owner_cpu`) with CAS claim/migrate protocol in dispatch/resume paths, plus preemption ownership bookkeeping. |
 | R4 | ✅ Fixed | `CURRENT_RUNNING_SP` clear path now consistently uses captured `cpu` slot. |
 | B1 | ✅ Fixed | `dispatch_interrupt_to_sp()` now calls `clear_secure_stage2()` before returning. |
+| H9 | ✅ Fixed | Added `isb` after GIC sysreg `msr` writes in `gicv3.rs` (CPU + virtual interface write helpers). |
+| H10 | ✅ Fixed | Added `isb` after trapped `msr mdscr_el1` / `msr oslar_el1` in `exception.rs::emulate_msr()`. |
+| H11 | ✅ Fixed | Added `isb` in timer write helpers: `set_ctl()`, `set_cval()`, `set_tval()`, `init_hypervisor_timer()`. |
 
 ---
 

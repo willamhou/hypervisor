@@ -46,6 +46,7 @@ pub fn get_ctl() -> u64 {
 pub fn set_ctl(ctl: u64) {
     unsafe {
         asm!("msr cntv_ctl_el0, {}", in(reg) ctl);
+        asm!("isb");
     }
 }
 
@@ -62,6 +63,7 @@ pub fn get_cval() -> u64 {
 pub fn set_cval(cval: u64) {
     unsafe {
         asm!("msr cntv_cval_el0, {}", in(reg) cval);
+        asm!("isb");
     }
 }
 
@@ -78,6 +80,7 @@ pub fn get_tval() -> u32 {
 pub fn set_tval(tval: u32) {
     unsafe {
         asm!("msr cntv_tval_el0, {0:x}", in(reg) tval as u64);
+        asm!("isb");
     }
 }
 
@@ -93,6 +96,7 @@ pub fn init_hypervisor_timer() {
 
     unsafe {
         asm!("msr cnthctl_el2, {}", in(reg) cnthctl);
+        asm!("isb");
     }
 }
 

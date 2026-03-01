@@ -105,6 +105,7 @@ impl GicV3SystemRegs {
                 intid = in(reg) intid as u64,
                 options(nostack, nomem),
             );
+            asm!("isb", options(nostack, nomem));
         }
     }
 
@@ -118,6 +119,7 @@ impl GicV3SystemRegs {
                 intid = in(reg) intid as u64,
                 options(nostack, nomem),
             );
+            asm!("isb", options(nostack, nomem));
         }
     }
 
@@ -144,6 +146,7 @@ impl GicV3SystemRegs {
                 value = in(reg) value as u64,
                 options(nostack, nomem),
             );
+            asm!("isb", options(nostack, nomem));
         }
     }
 
@@ -170,6 +173,7 @@ impl GicV3SystemRegs {
                 priority = in(reg) priority as u64,
                 options(nostack, nomem),
             );
+            asm!("isb", options(nostack, nomem));
         }
     }
 
@@ -196,6 +200,7 @@ impl GicV3SystemRegs {
                 value = in(reg) value as u64,
                 options(nostack, nomem),
             );
+            asm!("isb", options(nostack, nomem));
         }
     }
 
@@ -224,6 +229,7 @@ impl GicV3SystemRegs {
                 value = in(reg) value,
                 options(nostack, nomem),
             );
+            asm!("isb", options(nostack, nomem));
         }
     }
 
@@ -294,6 +300,7 @@ impl GicV3VirtualInterface {
                 value = in(reg) value as u64,
                 options(nostack, nomem),
             );
+            asm!("isb", options(nostack, nomem));
         }
     }
 
@@ -320,6 +327,7 @@ impl GicV3VirtualInterface {
                 value = in(reg) value as u64,
                 options(nostack, nomem),
             );
+            asm!("isb", options(nostack, nomem));
         }
     }
 
@@ -608,8 +616,11 @@ pub fn init() {
     let num_lrs = ((vtr & VTR_LISTREGS_MASK) + 1) as u32;
     let num_priority_bits = ((vtr >> 29) & 0x7) + 1;
 
-    crate::log_info!("[GIC] VGIC capabilities:\n  - List Registers: {}\n  - Priority bits: {}\n",
-        num_lrs, num_priority_bits);
+    crate::log_info!(
+        "[GIC] VGIC capabilities:\n  - List Registers: {}\n  - Priority bits: {}\n",
+        num_lrs,
+        num_priority_bits
+    );
 
     // Initialize virtual interrupt interface
     GicV3VirtualInterface::init();

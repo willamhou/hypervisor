@@ -160,7 +160,12 @@ pub extern "C" fn handle_exception(context: &mut VcpuContext) -> bool {
     let count = inc_exception_count();
     if count > MAX_CONSECUTIVE_EXCEPTIONS {
         crate::log_error!("\n[FATAL] Too many consecutive exceptions, halting system\n");
-        crate::log_error!("[DEBUG] ESR_EL2={:#018x} FAR_EL2={:#018x} PC={:#018x}\n", esr, far, context.pc);
+        crate::log_error!(
+            "[DEBUG] ESR_EL2={:#018x} FAR_EL2={:#018x} PC={:#018x}\n",
+            esr,
+            far,
+            context.pc
+        );
         // Halt the system completely to prevent further execution
         loop {
             unsafe {
@@ -225,9 +230,7 @@ pub extern "C" fn handle_exception(context: &mut VcpuContext) -> bool {
                 if context.gp_regs.x0 == HF_INTERRUPT_GET {
                     let sp_id = crate::spmc_handler::current_running_sp();
                     let intid = if sp_id != 0 {
-                        crate::sp_context::get_sp_mut(sp_id)
-                            .and_then(|sp| sp.take_pending_irq())
-                            .unwrap_or(0xFFFFFFFF)
+                        crate::sp_context::take_pending_irq_for(sp_id).unwrap_or(0xFFFFFFFF)
                     } else {
                         0xFFFFFFFF
                     };
@@ -236,7 +239,6 @@ pub extern "C" fn handle_exception(context: &mut VcpuContext) -> bool {
                     // HVC: ELR_EL2 already points past the HVC instruction
                     return true;
                 }
-
             }
 
             // HVC: Hypercall from guest
@@ -275,8 +277,11 @@ pub extern "C" fn handle_exception(context: &mut VcpuContext) -> bool {
         }
 
         ExitReason::InstructionAbort => {
-            crate::log_error!("[VCPU] Instruction abort at FAR={:#018x} PC={:#018x}\n",
-                context.sys_regs.far_el2, context.pc);
+            crate::log_error!(
+                "[VCPU] Instruction abort at FAR={:#018x} PC={:#018x}\n",
+                context.sys_regs.far_el2,
+                context.pc
+            );
 
             // Read EL1 registers to understand what caused the ORIGINAL EL1 exception
             let elr_el1: u64;
@@ -303,10 +308,17 @@ pub extern "C" fn handle_exception(context: &mut VcpuContext) -> bool {
             }
             let el1_ec = (esr_el1 >> ESR_EC_SHIFT) & ESR_EC_MASK;
             crate::log_error!("[VCPU] EL1 state at crash:\n");
-            crate::log_error!("  ELR_EL1  = {:#018x} (instruction that caused EL1 exception)\n", elr_el1);
+            crate::log_error!(
+                "  ELR_EL1  = {:#018x} (instruction that caused EL1 exception)\n",
+                elr_el1
+            );
             crate::log_error!("  ESR_EL1  = {:#018x} (EC={:#018x})\n", esr_el1, el1_ec);
             crate::log_error!("  SPSR_EL1 = {:#018x}\n", spsr_el1);
-            crate::log_error!("  SCTLR_EL1= {:#018x} (M={})\n", sctlr_el1, if sctlr_el1 & 1 != 0 { 1 } else { 0 });
+            crate::log_error!(
+                "  SCTLR_EL1= {:#018x} (M={})\n",
+                sctlr_el1,
+                if sctlr_el1 & 1 != 0 { 1 } else { 0 }
+            );
             crate::log_error!("  SP_EL1   = {:#018x}\n", sp_el1);
             crate::log_error!("  FAR_EL1  = {:#018x} (faulting address)\n", far_el1);
             crate::log_error!("  TCR_EL1  = {:#018x}\n", tcr_el1);
@@ -332,10 +344,19 @@ pub extern "C" fn handle_exception(context: &mut VcpuContext) -> bool {
             let vtcr_t0sz = vtcr_el2 & 0x3F;
             let vtcr_sl0 = (vtcr_el2 >> 6) & 0x3;
             let vtcr_ps = (vtcr_el2 >> 16) & 0x7;
-            crate::log_error!("  VTCR_EL2 = {:#018x} (T0SZ={:#018x} SL0={:#018x} PS={:#018x})\n",
-                vtcr_el2, vtcr_t0sz, vtcr_sl0, vtcr_ps);
+            crate::log_error!(
+                "  VTCR_EL2 = {:#018x} (T0SZ={:#018x} SL0={:#018x} PS={:#018x})\n",
+                vtcr_el2,
+                vtcr_t0sz,
+                vtcr_sl0,
+                vtcr_ps
+            );
             crate::log_error!("  VTTBR_EL2= {:#018x}\n", vttbr_el2);
-            crate::log_error!("  HCR_EL2  = {:#018x} (VM={})\n", hcr_el2, if hcr_el2 & HCR_VM != 0 { 1 } else { 0 });
+            crate::log_error!(
+                "  HCR_EL2  = {:#018x} (VM={})\n",
+                hcr_el2,
+                if hcr_el2 & HCR_VM != 0 { 1 } else { 0 }
+            );
             crate::log_error!("  ID_AA64MMFR0_EL1 = {:#018x}\n", id_mmfr0);
 
             // Dump Stage-2 L0 table entries to verify
@@ -360,16 +381,26 @@ pub extern "C" fn handle_exception(context: &mut VcpuContext) -> bool {
                 let l0_valid = l0_entry & PTE_VALID;
                 let l0_type = (l0_entry >> 1) & 1;
                 crate::log_error!("  TTBR1 L0 base = {:#018x}\n", l0_base);
-                crate::log_error!("  L0[{:#018x}] @ {:#018x} = {:#018x} (valid={:#018x} type={:#018x})\n",
-                    l0_index as u64, l0_entry_addr, l0_entry, l0_valid, l0_type);
+                crate::log_error!(
+                    "  L0[{:#018x}] @ {:#018x} = {:#018x} (valid={:#018x} type={:#018x})\n",
+                    l0_index as u64,
+                    l0_entry_addr,
+                    l0_entry,
+                    l0_valid,
+                    l0_type
+                );
                 // If L0 entry is valid table, dump the address it points to
                 if l0_entry & (PTE_VALID | PTE_TABLE) == (PTE_VALID | PTE_TABLE) {
                     let l1_base = l0_entry & PTE_ADDR_MASK;
                     let l1_index = ((far_el1 >> 30) & PT_INDEX_MASK) as usize;
                     let l1_entry_addr = l1_base + (l1_index as u64) * 8;
                     let l1_entry = unsafe { core::ptr::read_volatile(l1_entry_addr as *const u64) };
-                    crate::log_error!("  L1[{:#018x}] @ {:#018x} = {:#018x}\n",
-                        l1_index as u64, l1_entry_addr, l1_entry);
+                    crate::log_error!(
+                        "  L1[{:#018x}] @ {:#018x} = {:#018x}\n",
+                        l1_index as u64,
+                        l1_entry_addr,
+                        l1_entry
+                    );
                 }
             }
 
@@ -415,8 +446,11 @@ pub extern "C" fn handle_exception(context: &mut VcpuContext) -> bool {
                 true
             } else {
                 // Not MMIO or failed to handle
-                crate::log_error!("[VCPU] Data abort IPA={:#018x} VA={:#018x} (not MMIO)\n",
-                    addr, context.sys_regs.far_el2);
+                crate::log_error!(
+                    "[VCPU] Data abort IPA={:#018x} VA={:#018x} (not MMIO)\n",
+                    addr,
+                    context.sys_regs.far_el2
+                );
                 false // Exit
             }
         }
@@ -445,15 +479,23 @@ pub extern "C" fn handle_exception(context: &mut VcpuContext) -> bool {
                 }
                 _ => {
                     // Unknown/unhandled exception - fatal
-                    crate::log_error!("[VCPU] Unknown exception EC={:#018x} ESR={:#018x} PC={:#018x}\n",
-                        ec, esr, context.pc);
+                    crate::log_error!(
+                        "[VCPU] Unknown exception EC={:#018x} ESR={:#018x} PC={:#018x}\n",
+                        ec,
+                        esr,
+                        context.pc
+                    );
                     false // Exit
                 }
             }
         }
 
         ExitReason::Unknown => {
-            crate::log_error!("[VCPU] Unknown exception, ESR={:#018x} PC={:#018x}\n", esr, context.pc);
+            crate::log_error!(
+                "[VCPU] Unknown exception, ESR={:#018x} PC={:#018x}\n",
+                esr,
+                context.pc
+            );
             false // Exit
         }
     }
@@ -577,16 +619,12 @@ pub extern "C" fn handle_irq_exception(_context: &mut VcpuContext) -> bool {
             if let Some(owner_id) = crate::sp_context::find_sp_for_intid(intid) {
                 if owner_id == current_sp_id {
                     // Case 1: Owned by current SP → inject via VI
-                    if let Some(sp) = crate::sp_context::get_sp_mut(current_sp_id) {
-                        sp.set_pending_irq(intid);
-                    }
+                    let _ = crate::sp_context::set_pending_irq_for(current_sp_id, intid);
                     set_hcr_vi(true);
                     return true;
                 }
                 // Case 2: Owned by another SP → set pending, preempt current SP
-                if let Some(sp) = crate::sp_context::get_sp_mut(owner_id) {
-                    sp.set_pending_irq(intid);
-                }
+                let _ = crate::sp_context::set_pending_irq_for(owner_id, intid);
                 crate::spmc_handler::set_sp_irq_preempted(true);
                 return false;
             }
@@ -597,12 +635,8 @@ pub extern "C" fn handle_irq_exception(_context: &mut VcpuContext) -> bool {
             if intid == 26 {
                 timer::disarm_preemption_timer();
 
-                if let Some(owned_intid) =
-                    crate::sp_context::first_owned_intid_for(current_sp_id)
-                {
-                    if let Some(sp) = crate::sp_context::get_sp_mut(current_sp_id) {
-                        sp.set_pending_irq(owned_intid);
-                    }
+                if let Some(owned_intid) = crate::sp_context::first_owned_intid_for(current_sp_id) {
+                    let _ = crate::sp_context::set_pending_irq_for(current_sp_id, owned_intid);
                     set_hcr_vi(true);
                     timer::arm_preemption_timer();
                 }
@@ -850,12 +884,14 @@ fn emulate_msr(op0: u32, op1: u32, crn: u32, crm: u32, op2: u32, value: u64) {
             // MDSCR_EL1 - Debug Status and Control
             unsafe {
                 core::arch::asm!("msr mdscr_el1, {}", in(reg) value);
+                core::arch::asm!("isb", options(nostack, nomem));
             }
         }
         (2, 0, 1, 0, 4) => {
             // OSLAR_EL1 - OS Lock Access (write-only)
             unsafe {
                 core::arch::asm!("msr oslar_el1, {}", in(reg) value);
+                core::arch::asm!("isb", options(nostack, nomem));
             }
         }
         (2, 0, 1, 3, 4) => {
@@ -1204,7 +1240,11 @@ fn handle_psci(context: &mut VcpuContext, function_id: u64) -> bool {
             let entry_point = context.gp_regs.x2;
             let context_id = context.gp_regs.x3;
 
-            crate::log_info!("[PSCI] CPU_ON target={:#018x} entry={:#018x}\n", target_cpu, entry_point);
+            crate::log_info!(
+                "[PSCI] CPU_ON target={:#018x} entry={:#018x}\n",
+                target_cpu,
+                entry_point
+            );
 
             #[cfg(not(feature = "multi_pcpu"))]
             {
@@ -1304,7 +1344,10 @@ fn handle_mmio_abort(context: &mut VcpuContext, addr: u64) -> bool {
         unsafe { core::ptr::read_volatile(context.pc as *const u32) }
     } else {
         // PC is a virtual address (guest MMU is on), can't read instruction
-        crate::log_warn!("[MMIO] Can't decode: guest VA PC={:#018x} ISV=0\n", context.pc);
+        crate::log_warn!(
+            "[MMIO] Can't decode: guest VA PC={:#018x} ISV=0\n",
+            context.pc
+        );
         return false;
     };
 
@@ -1312,7 +1355,10 @@ fn handle_mmio_abort(context: &mut VcpuContext, addr: u64) -> bool {
     let access = match MmioAccess::decode(insn, iss) {
         Some(a) => a,
         None => {
-            crate::log_warn!("[MMIO] Failed to decode instruction at {:#018x}\n", context.pc);
+            crate::log_warn!(
+                "[MMIO] Failed to decode instruction at {:#018x}\n",
+                context.pc
+            );
             return false;
         }
     };
@@ -1372,7 +1418,10 @@ fn handle_wfi_with_timer_injection(context: &mut VcpuContext) -> bool {
     // Increment WFI counter
     let count = WFI_CONSECUTIVE_COUNT.fetch_add(1, Ordering::Relaxed) + 1;
     if count > MAX_CONSECUTIVE_WFI {
-        crate::log_warn!("[WFI] Guest idle ({:#018x} WFIs at same PC), exiting\n", count as u64);
+        crate::log_warn!(
+            "[WFI] Guest idle ({:#018x} WFIs at same PC), exiting\n",
+            count as u64
+        );
         return false;
     }
 
