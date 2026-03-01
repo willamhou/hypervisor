@@ -35,6 +35,7 @@ pub fn run_timer_test() {
     hypervisor::log_info!("[TIMER TEST] Waiting for interrupt (WFI)...\n");
 
     // Enable interrupts at EL2 by clearing PSTATE.I
+    // SAFETY: Test toggles DAIF IRQ mask bits intentionally around timer polling loop.
     unsafe {
         core::arch::asm!("msr daifclr, #2"); // Clear I bit (enable IRQ)
     }
@@ -67,6 +68,7 @@ pub fn run_timer_test() {
 
         // Small delay via busy loop
         for _ in 0..1000000 {
+            // SAFETY: `nop` is a side-effect-free delay instruction used for test pacing.
             unsafe {
                 core::arch::asm!("nop");
             }
@@ -74,6 +76,7 @@ pub fn run_timer_test() {
     }
 
     // Disable interrupts again
+    // SAFETY: Restores DAIF IRQ mask bit after timer test section.
     unsafe {
         core::arch::asm!("msr daifset, #2"); // Set I bit (disable IRQ)
     }

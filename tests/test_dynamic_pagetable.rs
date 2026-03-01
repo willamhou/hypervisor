@@ -74,6 +74,7 @@ pub fn run_dynamic_pt_test() {
 
     // Clear VTTBR_EL2 so subsequent tests (e.g. FF-A MEM_SHARE) don't see stale
     // page tables and attempt Stage-2 walks on pages that were never mapped.
+    // SAFETY: Test teardown clears VTTBR_EL2 to known state between independent test scenarios.
     unsafe {
         core::arch::asm!("msr vttbr_el2, xzr", "isb", options(nomem, nostack));
     }

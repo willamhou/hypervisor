@@ -56,6 +56,7 @@ pub fn run_mmio_test() {
 
     // Get guest code and stack addresses
     let guest_entry = &GUEST_CODE_MMIO.code as *const _ as u64;
+    // SAFETY: Uses address of static aligned MMIO guest stack and computes top-of-stack pointer.
     let guest_stack =
         unsafe { (&raw const GUEST_STACK_MMIO.stack as *const [u8; 16384]) as u64 + 16384 };
 

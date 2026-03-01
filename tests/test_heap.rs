@@ -18,6 +18,7 @@ pub fn run_heap_test() {
     // Test 2: Write to allocated page
     hypervisor::log_info!("[HEAP] Test 2: Write to allocated page...\n");
     let ptr = page_addr as *mut u64;
+    // SAFETY: `page_addr` comes from heap allocator and is owned by this test for read/write probe.
     unsafe {
         *ptr = 0xDEAD_BEEF_CAFE_BABE;
         let read_back = *ptr;

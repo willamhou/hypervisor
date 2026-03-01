@@ -10,6 +10,7 @@ pub fn run_allocator_test() {
     let heap_start = 0x4100_0000u64;
     let heap_size = 0x10_0000u64; // 1MB
 
+    // SAFETY: Test provides a valid synthetic heap base/size region for allocator initialization.
     let mut alloc = unsafe { BumpAllocator::new(heap_start, heap_size) };
 
     // Test 1: Allocate 4KB page

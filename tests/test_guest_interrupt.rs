@@ -59,6 +59,7 @@ pub fn run_guest_interrupt_test() {
 
     // Get guest code and stack addresses
     let guest_entry = &GUEST_IRQ_CODE.code as *const _ as u64;
+    // SAFETY: Uses address of static aligned guest IRQ stack object and computes top-of-stack pointer.
     let guest_stack =
         unsafe { (&raw const GUEST_IRQ_STACK.stack as *const [u8; 16384]) as u64 + 16384 };
 

@@ -15,6 +15,7 @@ pub fn run_ffa_test() {
     // Earlier tests (test_mmio, test_simple_guest) create VMs that set VTTBR
     // to their own Stage-2 tables. The MEM_SHARE handler checks has_stage2()
     // and would attempt ownership validation against those incomplete tables.
+    // SAFETY: Test setup resets VTTBR_EL2 to avoid cross-test Stage-2 state leakage.
     unsafe {
         core::arch::asm!("msr vttbr_el2, xzr", "isb", options(nomem, nostack));
     }
@@ -237,9 +238,11 @@ pub fn run_ffa_test() {
     {
         let mut buf = [0u8; 128];
         let ranges = [(0x5000_0000u64, 2u32)];
+        // SAFETY: Buffer is local and sized for descriptor build helper contract.
         let total_len = unsafe {
             ffa::descriptors::build_test_descriptor(buf.as_mut_ptr(), 1, 0x8001, &ranges)
         };
+        // SAFETY: Parser reads from the same initialized descriptor bytes and bounded length.
         let parsed = unsafe { ffa::descriptors::parse_mem_region(buf.as_ptr(), total_len) };
         if let Ok(p) = parsed {
             if p.sender_id == 1
@@ -264,9 +267,11 @@ pub fn run_ffa_test() {
     {
         let mut buf = [0u8; 160];
         let ranges = [(0x5000_0000u64, 1u32), (0x6000_0000u64, 3u32)];
+        // SAFETY: Buffer is local and sized for multi-range descriptor build helper.
         let total_len = unsafe {
             ffa::descriptors::build_test_descriptor(buf.as_mut_ptr(), 2, 0x8002, &ranges)
         };
+        // SAFETY: Parser reads from initialized buffer with exact descriptor length.
         let parsed = unsafe { ffa::descriptors::parse_mem_region(buf.as_ptr(), total_len) };
         if let Ok(p) = parsed {
             if p.range_count == 2
@@ -289,6 +294,7 @@ pub fn run_ffa_test() {
     // Test 16: Parse undersized descriptor → INVALID_PARAMETERS
     {
         let buf = [0u8; 16]; // Too small for FfaMemRegion (48 bytes)
+        // SAFETY: Intentionally passes undersized buffer to validate parser error handling path.
         let parsed = unsafe { ffa::descriptors::parse_mem_region(buf.as_ptr(), 16) };
         if let Err(code) = parsed {
             if code == ffa::FFA_INVALID_PARAMETERS {
@@ -853,6 +859,7 @@ pub fn run_ffa_test() {
 
         // Write indirect message header in VM0's TX buffer
         // Header: sender_id(u16=1) + receiver_id(u16=2) + size(u32=4) + payload
+        // SAFETY: Writes test message header/payload into local 4KB TX mailbox buffer.
         unsafe {
             core::ptr::write_unaligned(tx_buf.0.as_mut_ptr() as *mut u16, 1u16); // sender VM0
             core::ptr::write_unaligned(tx_buf.0.as_mut_ptr().add(2) as *mut u16, 2u16); // receiver VM1
@@ -920,6 +927,7 @@ pub fn run_ffa_test() {
         // Test 43: MSG_SEND2 when receiver RX busy → BUSY
         {
             // Send first message (RX now owned by VM1)
+            // SAFETY: Reinitializes local TX mailbox header for busy-RX negative test.
             unsafe {
                 core::ptr::write_unaligned(tx_buf.0.as_mut_ptr() as *mut u16, 1u16);
                 core::ptr::write_unaligned(tx_buf.0.as_mut_ptr().add(2) as *mut u16, 2u16);
