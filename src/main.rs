@@ -69,6 +69,7 @@ pub extern "C" fn rust_main(dtb_addr: usize) -> ! {
 
     // Check current exception level
     let current_el: u64;
+    // SAFETY: reads architected CurrentEL register.
     unsafe {
         core::arch::asm!(
             "mrs {el}, CurrentEL",
@@ -81,6 +82,7 @@ pub extern "C" fn rust_main(dtb_addr: usize) -> ! {
 
     // Initialize heap
     hypervisor::log_info!("[INIT] Initializing heap...\n");
+    // SAFETY: heap init is called once during boot before allocations.
     unsafe {
         hypervisor::mm::heap::init();
     }
@@ -245,6 +247,7 @@ pub extern "C" fn rust_main(dtb_addr: usize) -> ! {
 
     // Halt - we'll implement proper VM execution later
     loop {
+        // SAFETY: terminal idle loop waits for events indefinitely.
         unsafe {
             core::arch::asm!("wfe", options(nostack, nomem));
         }
@@ -271,6 +274,7 @@ pub extern "C" fn rust_main_sel2(
     hypervisor::log_info!("========================================\n\n");
 
     let current_el: u64;
+    // SAFETY: reads architected CurrentEL register.
     unsafe {
         core::arch::asm!("mrs {}, CurrentEL", out(reg) current_el, options(nostack, nomem));
     }
@@ -314,6 +318,7 @@ pub extern "C" fn rust_main_sel2(
     // so ICC_IAR1_EL1 at S-EL2 would never see them.
     {
         let gicr_sgi_base = hypervisor::dtb::gicr_sgi_base(0);
+        // SAFETY: programs secure GICR PPI MMIO registers for CPU0.
         unsafe {
             let ppi_mask: u32 = (1 << 26) | (1 << 29);
 
@@ -337,6 +342,7 @@ pub extern "C" fn rust_main_sel2(
 
     // 5.5. Initialize secure heap (for page table allocation)
     hypervisor::log_info!("[SPMC] Initializing secure heap\n");
+    // SAFETY: secure heap init is called once during SPMC boot.
     unsafe {
         hypervisor::mm::heap::init_at(
             hypervisor::platform::SECURE_HEAP_START,
@@ -345,6 +351,7 @@ pub extern "C" fn rust_main_sel2(
     }
 
     // 5.5b. Enable S-EL1 access to physical timer/counter (CNTHCTL_EL2)
+    // SAFETY: updates CNTHCTL_EL2 for timer/counter access and synchronizes.
     unsafe {
         let mut cnthctl: u64;
         core::arch::asm!("mrs {}, cnthctl_el2", out(reg) cnthctl, options(nostack, nomem));
@@ -369,6 +376,7 @@ pub extern "C" fn rust_main_sel2(
     s2_config.install();
 
     // Enable Secure Stage-2 by setting HCR_EL2.VM
+    // SAFETY: read-modify-write HCR_EL2 on current CPU with ISB sync.
     unsafe {
         let hcr: u64;
         core::arch::asm!("mrs {}, hcr_el2", out(reg) hcr, options(nostack, nomem));
@@ -389,6 +397,7 @@ pub extern "C" fn rust_main_sel2(
     //   offset 0x10: img_offset   (4B LE)  — SP binary
     //   offset 0x14: img_size     (4B LE)
     let pkg_base = hypervisor::platform::SP1_LOAD_ADDR;
+    // SAFETY: SPKG header is loaded by BL2 at trusted physical address.
     let img_offset = unsafe {
         let ptr = pkg_base as *const u32;
         // Read img_offset at offset 0x10 (index 4)
@@ -416,6 +425,7 @@ pub extern "C" fn rust_main_sel2(
     // Clear EL1 system registers left by TF-A (SCTLR_EL1.M=1 would fault
     // because TF-A's Stage-1 page tables don't map SP load address).
     // Also clear VBAR_EL1 so stale TF-A exception handlers don't trigger.
+    // SAFETY: clears EL1 sysregs before first SP entry.
     unsafe {
         core::arch::asm!(
             "msr sctlr_el1, xzr",
@@ -431,6 +441,7 @@ pub extern "C" fn rust_main_sel2(
     {
         use hypervisor::arch::aarch64::enter_guest;
         use hypervisor::arch::aarch64::regs::VcpuContext;
+        // SAFETY: pointer is to locked SP1 VcpuContext prepared for guest entry.
         let _exit = unsafe { enter_guest(sp1.vcpu_ctx_mut() as *mut VcpuContext) };
     }
 
@@ -456,6 +467,7 @@ pub extern "C" fn rust_main_sel2(
     // 5.8. Boot SP2 (if present at SP2_LOAD_ADDR)
     {
         let sp2_pkg_base = hypervisor::platform::SP2_LOAD_ADDR;
+        // SAFETY: reads SP2 package magic from trusted BL2-loaded memory.
         let sp2_magic = unsafe { core::ptr::read_volatile(sp2_pkg_base as *const u32) };
         if sp2_magic == 0x474B5053 {
             // "SPKG" magic found
@@ -470,6 +482,7 @@ pub extern "C" fn rust_main_sel2(
             let s2_config2 = hypervisor::secure_stage2::SecureStage2Config::new(mapper2.l0_addr());
 
             // Parse SPKG header for SP2
+            // SAFETY: SP2 SPKG header is loaded by BL2 at trusted physical address.
             let sp2_img_offset = unsafe {
                 let ptr = sp2_pkg_base as *const u32;
                 core::ptr::read_volatile(ptr.add(4)) as u64
@@ -493,6 +506,7 @@ pub extern "C" fn rust_main_sel2(
 
             // Install SP2's Stage-2, clear EL1 state, ERET to SP2
             s2_config2.install();
+            // SAFETY: clears EL1 sysregs before first SP2 entry.
             unsafe {
                 core::arch::asm!(
                     "msr sctlr_el1, xzr",
@@ -507,6 +521,7 @@ pub extern "C" fn rust_main_sel2(
             {
                 use hypervisor::arch::aarch64::enter_guest;
                 use hypervisor::arch::aarch64::regs::VcpuContext;
+                // SAFETY: pointer is to locked SP2 VcpuContext prepared for guest entry.
                 let _exit = unsafe { enter_guest(sp2.vcpu_ctx_mut() as *mut VcpuContext) };
             }
 
@@ -593,6 +608,7 @@ pub extern "C" fn rust_main_sel2_secondary(
     // 1b. Enable Secure Stage-2 (HCR_EL2.VM) — exception::init() doesn't set VM.
     // Primary CPU sets this during SP Stage-2 setup, but secondaries need it too
     // for dispatch_to_sp() to work (ERET to S-EL1 requires Stage-2 enabled).
+    // SAFETY: read-modify-write HCR_EL2 on current CPU with ISB sync.
     unsafe {
         let hcr: u64;
         core::arch::asm!("mrs {}, hcr_el2", out(reg) hcr, options(nostack, nomem));
@@ -607,6 +623,7 @@ pub extern "C" fn rust_main_sel2_secondary(
     // 1c. Don't trap FP/SIMD/debug from S-EL1 to S-EL2.
     // TF-A warm-boot path may leave CPTR_EL2/MDCR_EL2 in a different state
     // than the primary CPU. Clear trap bits to match primary CPU behavior.
+    // SAFETY: updates EL2 trap control registers for secondary S-EL2 CPU.
     unsafe {
         use hypervisor::arch::aarch64::defs::*;
         core::arch::asm!(
@@ -636,6 +653,7 @@ pub extern "C" fn rust_main_sel2_secondary(
     // secondary CPUs, so dispatch_to_sp() hangs if the SP gets stuck.
     {
         let gicr_sgi_base = hypervisor::dtb::gicr_sgi_base(core_id);
+        // SAFETY: programs secure GICR PPI MMIO registers for this core.
         unsafe {
             let ppi_mask: u32 = (1 << 26) | (1 << 29);
 
@@ -696,6 +714,7 @@ pub extern "C" fn rust_main_secondary(cpu_id: usize) -> ! {
 
     // Early debug: write 'S' directly to UART via assembly
     // This verifies the CPU actually entered rust_main_secondary
+    // SAFETY: best-effort debug MMIO write to trusted UART base.
     unsafe {
         core::arch::asm!(
             "mov x1, #0x09000000",
@@ -715,6 +734,7 @@ pub extern "C" fn rust_main_secondary(cpu_id: usize) -> ! {
     // 2. Set VTTBR_EL2 / VTCR_EL2 (shared Stage-2 from primary)
     let vttbr = hypervisor::global::SHARED_VTTBR.load(Ordering::Acquire);
     let vtcr = hypervisor::global::SHARED_VTCR.load(Ordering::Acquire);
+    // SAFETY: installs shared stage-2 registers for this secondary CPU.
     unsafe {
         core::arch::asm!(
             "msr vtcr_el2, {vtcr}",
@@ -727,6 +747,7 @@ pub extern "C" fn rust_main_secondary(cpu_id: usize) -> ! {
     }
 
     // 3. HCR_EL2 is set by exception::init(). Enable Stage-2 and clear TWI.
+    // SAFETY: read-modify-write HCR_EL2 on current CPU with ISB sync.
     unsafe {
         let mut hcr: u64;
         core::arch::asm!("mrs {}, hcr_el2", out(reg) hcr, options(nostack, nomem));
@@ -736,6 +757,7 @@ pub extern "C" fn rust_main_secondary(cpu_id: usize) -> ! {
     }
 
     // 4. Configure CPTR_EL2 / MDCR_EL2 (don't trap FP/SIMD/debug)
+    // SAFETY: updates EL2 trap control registers for this secondary CPU.
     unsafe {
         core::arch::asm!(
             "mrs x0, cptr_el2",
@@ -759,6 +781,7 @@ pub extern "C" fn rust_main_secondary(cpu_id: usize) -> ! {
     gicv3::init();
 
     // 6. Set PerCpuContext
+    // SAFETY: `this_cpu()` returns this CPU's percpu slot.
     unsafe {
         (*hypervisor::percpu::this_cpu()).vcpu_id = cpu_id;
     }
@@ -767,6 +790,7 @@ pub extern "C" fn rust_main_secondary(cpu_id: usize) -> ! {
 
     // 7. Idle loop: WFE until PSCI CPU_ON sets our request
     loop {
+        // SAFETY: idle wait loop for incoming CPU_ON events.
         unsafe { core::arch::asm!("wfe", options(nostack, nomem)) };
         if let Some((entry, ctx)) = hypervisor::global::PENDING_CPU_ON_PER_VCPU[cpu_id].take() {
             hypervisor::log_info!("[SMP] pCPU {} got CPU_ON, entering guest\n", cpu_id);
@@ -789,6 +813,7 @@ fn secondary_enter_guest(cpu_id: usize, entry: u64, ctx_id: u64) {
     if cpu_id < platform::num_cpus() {
         let rd_base = hypervisor::dtb::gicr_rd_base(cpu_id);
         let waker_addr = (rd_base + platform::GICR_WAKER_OFF) as *mut u32;
+        // SAFETY: accesses this CPU's GICR_WAKER MMIO register via volatile ops.
         unsafe {
             let mut waker = core::ptr::read_volatile(waker_addr);
             waker &= !(1 << 1); // Clear ProcessorSleep
@@ -849,6 +874,7 @@ fn secondary_enter_guest(cpu_id: usize, entry: u64, ctx_id: u64) {
             }
             Err("WFI") => {
                 // WFI: execute real WFI — pCPU idles until next interrupt
+                // SAFETY: idle path after publishing all shared state updates.
                 unsafe { core::arch::asm!("wfi", options(nostack, nomem)) };
             }
             Err(_) => {
@@ -877,6 +903,7 @@ fn panic(info: &PanicInfo) -> ! {
     }
 
     loop {
+        // SAFETY: panic path idles forever to halt execution.
         unsafe {
             core::arch::asm!("wfe", options(nostack, nomem));
         }

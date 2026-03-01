@@ -26,6 +26,7 @@ impl GicV3SystemRegs {
     #[inline]
     pub fn read_sre_el2() -> u32 {
         let sre: u64;
+        // SAFETY: reads architected GIC system register at EL2.
         unsafe {
             asm!(
                 "mrs {sre}, ICC_SRE_EL2",
@@ -41,6 +42,7 @@ impl GicV3SystemRegs {
     /// Bit 3 (Enable): Enable lower EL access to ICC_* registers
     #[inline]
     pub fn write_sre_el2(value: u32) {
+        // SAFETY: writes architected GIC system register at EL2 and ISB syncs.
         unsafe {
             asm!(
                 "msr ICC_SRE_EL2, {value}",
@@ -55,6 +57,7 @@ impl GicV3SystemRegs {
     #[inline]
     pub fn read_sre_el1() -> u32 {
         let sre: u64;
+        // SAFETY: reads architected GIC system register at EL2.
         unsafe {
             asm!(
                 "mrs {sre}, ICC_SRE_EL1",
@@ -69,6 +72,7 @@ impl GicV3SystemRegs {
     /// Bit 0 (SRE): Enable system register interface at EL1
     #[inline]
     pub fn write_sre_el1(value: u32) {
+        // SAFETY: writes architected GIC system register and ISB syncs.
         unsafe {
             asm!(
                 "msr ICC_SRE_EL1, {value}",
@@ -84,6 +88,7 @@ impl GicV3SystemRegs {
     #[inline]
     pub fn read_iar1() -> u32 {
         let iar: u64;
+        // SAFETY: reads interrupt acknowledge register via system register interface.
         unsafe {
             asm!(
                 "mrs {iar}, ICC_IAR1_EL1",
@@ -99,6 +104,7 @@ impl GicV3SystemRegs {
     /// With EOImode=1: only does priority drop (use write_dir for deactivation).
     #[inline]
     pub fn write_eoir1(intid: u32) {
+        // SAFETY: writes EOIR with provided INTID and synchronizes via ISB.
         unsafe {
             asm!(
                 "msr ICC_EOIR1_EL1, {intid}",
@@ -113,6 +119,7 @@ impl GicV3SystemRegs {
     /// Used when EOImode=1 to explicitly deactivate a physical interrupt.
     #[inline]
     pub fn write_dir(intid: u32) {
+        // SAFETY: writes DIR with provided INTID and synchronizes via ISB.
         unsafe {
             asm!(
                 "msr ICC_DIR_EL1, {intid}",
@@ -127,6 +134,7 @@ impl GicV3SystemRegs {
     #[inline]
     pub fn read_ctlr() -> u32 {
         let ctlr: u64;
+        // SAFETY: reads GIC CPU interface control register.
         unsafe {
             asm!(
                 "mrs {ctlr}, ICC_CTLR_EL1",
@@ -140,6 +148,7 @@ impl GicV3SystemRegs {
     /// Write ICC_CTLR_EL1
     #[inline]
     pub fn write_ctlr(value: u32) {
+        // SAFETY: writes GIC CPU interface control register and ISB syncs.
         unsafe {
             asm!(
                 "msr ICC_CTLR_EL1, {value}",
@@ -154,6 +163,7 @@ impl GicV3SystemRegs {
     #[inline]
     pub fn read_pmr() -> u32 {
         let pmr: u64;
+        // SAFETY: reads priority mask register.
         unsafe {
             asm!(
                 "mrs {pmr}, ICC_PMR_EL1",
@@ -167,6 +177,7 @@ impl GicV3SystemRegs {
     /// Write ICC_PMR_EL1
     #[inline]
     pub fn write_pmr(priority: u32) {
+        // SAFETY: writes priority mask register and synchronizes via ISB.
         unsafe {
             asm!(
                 "msr ICC_PMR_EL1, {priority}",
@@ -181,6 +192,7 @@ impl GicV3SystemRegs {
     #[inline]
     pub fn read_bpr1() -> u32 {
         let bpr: u64;
+        // SAFETY: reads binary point register.
         unsafe {
             asm!(
                 "mrs {bpr}, ICC_BPR1_EL1",
@@ -194,6 +206,7 @@ impl GicV3SystemRegs {
     /// Write ICC_BPR1_EL1
     #[inline]
     pub fn write_bpr1(value: u32) {
+        // SAFETY: writes binary point register and synchronizes via ISB.
         unsafe {
             asm!(
                 "msr ICC_BPR1_EL1, {value}",
@@ -208,6 +221,7 @@ impl GicV3SystemRegs {
     #[inline]
     pub fn read_igrpen1() -> u32 {
         let igrpen: u64;
+        // SAFETY: reads group-1 enable register.
         unsafe {
             asm!(
                 "mrs {igrpen}, ICC_IGRPEN1_EL1",
@@ -223,6 +237,7 @@ impl GicV3SystemRegs {
     #[inline]
     pub fn write_igrpen1(enable: bool) {
         let value = if enable { 1u64 } else { 0u64 };
+        // SAFETY: writes group-1 enable register and synchronizes via ISB.
         unsafe {
             asm!(
                 "msr ICC_IGRPEN1_EL1, {value}",
@@ -242,6 +257,7 @@ impl GicV3SystemRegs {
         Self::write_igrpen1(true);
 
         // Ensure changes are visible
+        // SAFETY: ISB synchronizes prior GIC sysreg writes.
         unsafe {
             asm!("isb", options(nostack, nomem));
         }
@@ -250,6 +266,7 @@ impl GicV3SystemRegs {
     /// Disable interrupt delivery
     pub fn disable() {
         Self::write_igrpen1(false);
+        // SAFETY: ISB synchronizes prior GIC sysreg writes.
         unsafe {
             asm!("isb", options(nostack, nomem));
         }
@@ -280,6 +297,7 @@ impl GicV3VirtualInterface {
     #[inline]
     pub fn read_hcr() -> u32 {
         let hcr: u64;
+        // SAFETY: reads virtual interface control register.
         unsafe {
             asm!(
                 "mrs {hcr}, ICH_HCR_EL2",
@@ -294,6 +312,7 @@ impl GicV3VirtualInterface {
     /// Bit 0 (En): Enable virtual interrupts
     #[inline]
     pub fn write_hcr(value: u32) {
+        // SAFETY: writes virtual interface control register and ISB syncs.
         unsafe {
             asm!(
                 "msr ICH_HCR_EL2, {value}",
@@ -308,6 +327,7 @@ impl GicV3VirtualInterface {
     #[inline]
     pub fn read_vmcr() -> u32 {
         let vmcr: u64;
+        // SAFETY: reads virtual machine control register.
         unsafe {
             asm!(
                 "mrs {vmcr}, ICH_VMCR_EL2",
@@ -321,6 +341,7 @@ impl GicV3VirtualInterface {
     /// Write ICH_VMCR_EL2
     #[inline]
     pub fn write_vmcr(value: u32) {
+        // SAFETY: writes virtual machine control register and ISB syncs.
         unsafe {
             asm!(
                 "msr ICH_VMCR_EL2, {value}",
@@ -335,6 +356,7 @@ impl GicV3VirtualInterface {
     #[inline]
     pub fn read_vtr() -> u32 {
         let vtr: u64;
+        // SAFETY: reads VGIC type register.
         unsafe {
             asm!(
                 "mrs {vtr}, ICH_VTR_EL2",
@@ -349,6 +371,7 @@ impl GicV3VirtualInterface {
     #[inline]
     pub fn read_lr(n: u32) -> u64 {
         let lr: u64;
+        // SAFETY: reads one of architected list registers selected by `n`.
         unsafe {
             match n {
                 0 => asm!("mrs {lr}, ICH_LR0_EL2", lr = out(reg) lr, options(nostack, nomem)),
@@ -364,6 +387,7 @@ impl GicV3VirtualInterface {
     /// Write ICH_LR<n>_EL2 - List Register
     #[inline]
     pub fn write_lr(n: u32, value: u64) {
+        // SAFETY: writes one of architected list registers selected by `n`.
         unsafe {
             match n {
                 0 => {
@@ -488,6 +512,7 @@ impl GicV3VirtualInterface {
             Self::write_lr(i, 0);
         }
 
+        // SAFETY: ISB synchronizes list register initialization.
         unsafe {
             asm!("isb", options(nostack, nomem));
         }
@@ -561,6 +586,7 @@ impl GicV3VirtualInterface {
     /// Check ARMv8.4+ features for enhanced virtualization
     pub fn has_armv8_4_features() -> bool {
         let mmfr2: u64;
+        // SAFETY: reads feature ID register.
         unsafe {
             asm!(
                 "mrs {mmfr2}, ID_AA64MMFR2_EL1",
@@ -578,6 +604,7 @@ impl GicV3VirtualInterface {
 /// Check if GICv3 is available
 pub fn is_gicv3_available() -> bool {
     let pfr0: u64;
+    // SAFETY: reads feature ID register.
     unsafe {
         asm!(
             "mrs {pfr0}, ID_AA64PFR0_EL1",

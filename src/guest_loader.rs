@@ -38,6 +38,8 @@ impl GuestConfig {
         let load_addr = platform::GUEST_LOAD_ADDR;
 
         // Read entry point from ELF header
+        // SAFETY: `load_addr` is QEMU-provided guest image memory; reads are
+        // volatile/byte loads for boot-time header inspection only.
         let entry_point = unsafe {
             let elf_header = load_addr as *const u8;
             let magic = core::slice::from_raw_parts(elf_header, 4);
@@ -101,6 +103,7 @@ impl GuestConfig {
         let kernel_addr = platform::GUEST_LOAD_ADDR;
 
         // Parse ARM64 Image header to find entry point
+        // SAFETY: `kernel_addr` points to QEMU-loaded kernel image memory.
         let entry_point = unsafe {
             let header = kernel_addr as *const u8;
 
@@ -163,6 +166,7 @@ impl GuestConfig {
         let kernel_addr = platform::VM1_GUEST_LOAD_ADDR;
 
         // Parse ARM64 Image header to find entry point
+        // SAFETY: `kernel_addr` points to QEMU-loaded kernel image memory.
         let entry_point = unsafe {
             let magic = core::ptr::read_volatile((kernel_addr + 0x38) as *const u32);
             if magic == 0x644d5241 {
@@ -256,6 +260,7 @@ pub fn run_guest(config: &GuestConfig) -> Result<(), &'static str> {
         }
 
         // Configure EL2 registers (not per-vCPU)
+        // SAFETY: programs EL2 control registers before entering first guest.
         unsafe {
             core::arch::asm!(
                 // Ensure CPTR_EL2 does NOT trap FP/SIMD/SVE/SME to EL2
@@ -287,6 +292,7 @@ pub fn run_guest(config: &GuestConfig) -> Result<(), &'static str> {
     // Single-pCPU: keep TWI set (trap WFI for cooperative scheduling), clear TWE.
     // Multi-pCPU: clear both TWI and TWE (WFI passthrough — real idle on pCPU).
     if config.guest_type == GuestType::Linux {
+        // SAFETY: updates HCR_EL2 trap bits on current CPU with ISB sync.
         unsafe {
             #[cfg(not(feature = "multi_pcpu"))]
             core::arch::asm!(
@@ -361,6 +367,7 @@ pub fn run_guest(config: &GuestConfig) -> Result<(), &'static str> {
 
     // Debug: check UART state after guest exits
     crate::log_info!("\n[GUEST] Guest exited, checking UART state...\n");
+    // SAFETY: reads trusted physical UART MMIO flag register.
     unsafe {
         let uart_base = crate::dtb::platform_info().uart_base as usize;
         let uartfr = core::ptr::read_volatile((uart_base + 0x18) as *const u32);
@@ -381,6 +388,7 @@ fn enable_physical_uart_irq() {
     const UART_BASE: u64 = 0x0900_0000;
     const INTID: u32 = 33; // SPI 1
 
+    // SAFETY: programs trusted GICD/PL011 MMIO registers with volatile accesses.
     unsafe {
         // GICD_ISENABLER1: enable INTID 33 (bit 1 of word 1)
         let isenabler1 = (GICD_BASE + 0x104) as *mut u32;
@@ -431,6 +439,7 @@ fn wake_secondary_pcpus() {
         let target_mpidr = cpu_id as u64; // Aff0 = cpu_id
 
         let ret: u64;
+        // SAFETY: issues SMCCC PSCI CPU_ON call with SMCCC clobber contract.
         unsafe {
             // PSCI CPU_ON via SMC. Per SMCCC v1.2, x4-x17 are caller-saved
             // and may be clobbered by the SMC call.
@@ -552,6 +561,7 @@ pub fn run_multi_vm_guests() -> Result<(), &'static str> {
     crate::global::DEVICES[1].attach_virtio_net(1);
 
     // Restore VM 0's Stage-2 as active (run_multi_vm will switch as needed)
+    // SAFETY: writes VTTBR_EL2 on current CPU and synchronizes via ISB.
     unsafe {
         core::arch::asm!(
             "msr vttbr_el2, {vttbr}",
@@ -562,6 +572,7 @@ pub fn run_multi_vm_guests() -> Result<(), &'static str> {
     }
 
     // Configure EL2 registers (shared: CPTR, MDCR, VPIDR)
+    // SAFETY: programs EL2 control registers before guest execution.
     unsafe {
         core::arch::asm!(
             "mrs x0, cptr_el2",
@@ -584,6 +595,7 @@ pub fn run_multi_vm_guests() -> Result<(), &'static str> {
     }
 
     // Configure WFI trapping: trap WFI for cooperative scheduling (single-pCPU)
+    // SAFETY: updates HCR_EL2 trap bits on current CPU with ISB sync.
     unsafe {
         core::arch::asm!(
             "mrs x0, hcr_el2",
@@ -646,6 +658,7 @@ fn test_ffa_vm_to_vm_integration(vm0_vttbr: u64) {
 
     // Ensure VM 0 context is active
     CURRENT_VM_ID.store(0, Ordering::Relaxed);
+    // SAFETY: writes VTTBR_EL2 on current CPU and synchronizes via ISB.
     unsafe {
         core::arch::asm!(
             "msr vttbr_el2, {v}",
@@ -707,6 +720,7 @@ fn test_ffa_vm_to_vm_integration(vm0_vttbr: u64) {
     // Construct full VTTBR with VMID=1 in bits [63:48]
     let vm1_vttbr = vm1_l0_pa | (1u64 << 48);
     CURRENT_VM_ID.store(1, Ordering::Relaxed);
+    // SAFETY: writes VTTBR_EL2 on current CPU and synchronizes via ISB.
     unsafe {
         core::arch::asm!(
             "msr vttbr_el2, {v}",
@@ -799,6 +813,7 @@ fn test_ffa_vm_to_vm_integration(vm0_vttbr: u64) {
 
     // ── Switch back to VM 0 for RECLAIM ─────────────────────────────
     CURRENT_VM_ID.store(0, Ordering::Relaxed);
+    // SAFETY: writes VTTBR_EL2 on current CPU and synchronizes via ISB.
     unsafe {
         core::arch::asm!(
             "msr vttbr_el2, {v}",

@@ -18,6 +18,7 @@ const TIMER_ISTATUS: u64 = 1 << 2; // Interrupt status (read-only)
 /// Read the virtual counter frequency
 pub fn get_frequency() -> u64 {
     let freq: u64;
+    // SAFETY: reads architected timer frequency register at EL2.
     unsafe {
         asm!("mrs {}, cntfrq_el0", out(reg) freq);
     }
@@ -27,6 +28,7 @@ pub fn get_frequency() -> u64 {
 /// Read the virtual counter value
 pub fn get_counter() -> u64 {
     let count: u64;
+    // SAFETY: reads architected virtual counter register.
     unsafe {
         asm!("mrs {}, cntvct_el0", out(reg) count);
     }
@@ -36,6 +38,7 @@ pub fn get_counter() -> u64 {
 /// Read the virtual timer control register
 pub fn get_ctl() -> u64 {
     let ctl: u64;
+    // SAFETY: reads architected virtual timer control register.
     unsafe {
         asm!("mrs {}, cntv_ctl_el0", out(reg) ctl);
     }
@@ -44,6 +47,7 @@ pub fn get_ctl() -> u64 {
 
 /// Write the virtual timer control register
 pub fn set_ctl(ctl: u64) {
+    // SAFETY: writes virtual timer control register and synchronizes via ISB.
     unsafe {
         asm!("msr cntv_ctl_el0, {}", in(reg) ctl);
         asm!("isb");
@@ -53,6 +57,7 @@ pub fn set_ctl(ctl: u64) {
 /// Read the virtual timer compare value
 pub fn get_cval() -> u64 {
     let cval: u64;
+    // SAFETY: reads architected virtual timer compare register.
     unsafe {
         asm!("mrs {}, cntv_cval_el0", out(reg) cval);
     }
@@ -61,6 +66,7 @@ pub fn get_cval() -> u64 {
 
 /// Write the virtual timer compare value
 pub fn set_cval(cval: u64) {
+    // SAFETY: writes virtual timer compare register and synchronizes via ISB.
     unsafe {
         asm!("msr cntv_cval_el0, {}", in(reg) cval);
         asm!("isb");
@@ -70,6 +76,7 @@ pub fn set_cval(cval: u64) {
 /// Read the virtual timer countdown value (ticks until interrupt)
 pub fn get_tval() -> u32 {
     let tval: u64;
+    // SAFETY: reads architected virtual timer countdown register.
     unsafe {
         asm!("mrs {0:x}, cntv_tval_el0", out(reg) tval);
     }
@@ -78,6 +85,7 @@ pub fn get_tval() -> u32 {
 
 /// Write the virtual timer countdown value (ticks until interrupt)
 pub fn set_tval(tval: u32) {
+    // SAFETY: writes virtual timer countdown register and synchronizes via ISB.
     unsafe {
         asm!("msr cntv_tval_el0, {0:x}", in(reg) tval as u64);
         asm!("isb");
@@ -87,6 +95,7 @@ pub fn set_tval(tval: u32) {
 /// Configure hypervisor control of timers
 pub fn init_hypervisor_timer() {
     let mut cnthctl: u64;
+    // SAFETY: reads EL2 timer control register for read-modify-write.
     unsafe {
         asm!("mrs {}, cnthctl_el2", out(reg) cnthctl);
     }
@@ -94,6 +103,7 @@ pub fn init_hypervisor_timer() {
     // Allow EL1 access to physical counter and timer
     cnthctl |= CNTHCTL_EL1PCTEN | CNTHCTL_EL1PCEN;
 
+    // SAFETY: writes EL2 timer control register and synchronizes via ISB.
     unsafe {
         asm!("msr cnthctl_el2, {}", in(reg) cnthctl);
         asm!("isb");
@@ -103,6 +113,7 @@ pub fn init_hypervisor_timer() {
 /// Configure timer access for guest VM
 pub fn init_guest_timer() {
     let mut cnthctl: u64;
+    // SAFETY: reads EL2 timer control register for read-modify-write.
     unsafe {
         asm!("mrs {}, cnthctl_el2", out(reg) cnthctl);
     }
@@ -110,12 +121,14 @@ pub fn init_guest_timer() {
     // Allow EL1 access to physical counter
     cnthctl |= CNTHCTL_EL1PCTEN;
 
+    // SAFETY: writes EL2 timer control register and synchronizes via ISB.
     unsafe {
         asm!("msr cnthctl_el2, {}", in(reg) cnthctl);
         asm!("isb");
     }
 
     // Set virtual timer offset to 0
+    // SAFETY: writes EL2 virtual counter offset register and synchronizes.
     unsafe {
         asm!("msr cntvoff_el2, xzr");
         asm!("isb");
@@ -125,6 +138,7 @@ pub fn init_guest_timer() {
 /// Check if the guest's virtual timer is enabled and pending
 pub fn is_guest_vtimer_pending() -> bool {
     let ctl: u64;
+    // SAFETY: reads architected virtual timer control register.
     unsafe {
         asm!("mrs {}, cntv_ctl_el0", out(reg) ctl);
     }
@@ -137,10 +151,12 @@ pub fn is_guest_vtimer_pending() -> bool {
 /// Mask the guest's virtual timer interrupt
 pub fn mask_guest_vtimer() {
     let mut ctl: u64;
+    // SAFETY: reads architected virtual timer control register.
     unsafe {
         asm!("mrs {}, cntv_ctl_el0", out(reg) ctl);
     }
     ctl |= TIMER_IMASK;
+    // SAFETY: writes virtual timer control register and synchronizes via ISB.
     unsafe {
         asm!("msr cntv_ctl_el0, {}", in(reg) ctl);
         asm!("isb");
@@ -167,6 +183,7 @@ pub fn disable_timer() {
 pub fn arm_preemption_timer() {
     // 10ms at counter frequency
     let ticks = get_frequency() / 100;
+    // SAFETY: programs EL2 physical timer registers for local CPU preemption.
     unsafe {
         asm!("msr cnthp_tval_el2, {}", in(reg) ticks, options(nostack, nomem));
         asm!("msr cnthp_ctl_el2, {}", in(reg) 1u64, options(nostack, nomem)); // ENABLE=1, IMASK=0
@@ -176,6 +193,7 @@ pub fn arm_preemption_timer() {
 
 /// Disarm the EL2 hypervisor physical timer.
 pub fn disarm_preemption_timer() {
+    // SAFETY: disables EL2 physical timer on the current CPU.
     unsafe {
         asm!("msr cnthp_ctl_el2, {}", in(reg) 0u64, options(nostack, nomem)); // ENABLE=0
         asm!("isb", options(nostack, nomem));
