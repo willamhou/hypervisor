@@ -465,15 +465,15 @@ fn dispatch_request(req: &SmcResult8) -> SmcResult8 {
 fn dispatch_to_sp(req: &SmcResult8, sp_id: u16) -> SmcResult8 {
     // Acquire per-SP dispatch lock to prevent two CPUs from simultaneously
     // entering the same SP context (data race on VcpuContext fields).
-    let slot = match crate::sp_context::try_lock_sp(sp_id) {
-        Ok(s) => s,
+    let mut sp_guard = match crate::sp_context::try_lock_sp(sp_id) {
+        Ok(g) => g,
         Err(crate::sp_context::SpLockError::NotFound) => {
             return make_error(ffa::FFA_INVALID_PARAMETERS as u64);
         }
         Err(crate::sp_context::SpLockError::Busy) => return make_error(ffa::FFA_BUSY as u64),
     };
 
-    let sp = crate::sp_context::get_sp_by_slot(slot);
+    let sp = sp_guard.sp_mut();
 
     // Atomically claim SP: Idle→Running.
     if sp
@@ -483,7 +483,6 @@ fn dispatch_to_sp(req: &SmcResult8, sp_id: u16) -> SmcResult8 {
         )
         .is_err()
     {
-        crate::sp_context::unlock_sp(slot);
         return make_error(ffa::FFA_BUSY as u64);
     }
     sp.clear_preempted_cpu();
@@ -532,9 +531,6 @@ fn dispatch_to_sp(req: &SmcResult8, sp_id: u16) -> SmcResult8 {
 
     // Clear Secure Stage-2 and HCR_EL2 bits before returning to SPMD.
     clear_secure_stage2();
-
-    // Release per-SP dispatch lock
-    crate::sp_context::unlock_sp(slot);
 
     result
 }
@@ -735,18 +731,17 @@ fn resume_preempted_sp(sp_id: u16) -> SmcResult8 {
     crate::log_debug!("[SPMC] resume sp={:#06x}\n", sp_id);
     let cpu = sel2_cpu_id();
 
-    let slot = match crate::sp_context::try_lock_sp(sp_id) {
-        Ok(s) => s,
+    let mut sp_guard = match crate::sp_context::try_lock_sp(sp_id) {
+        Ok(g) => g,
         Err(crate::sp_context::SpLockError::NotFound) => {
             return make_error(ffa::FFA_INVALID_PARAMETERS as u64);
         }
         Err(crate::sp_context::SpLockError::Busy) => return make_error(ffa::FFA_DENIED as u64),
     };
 
-    let sp = crate::sp_context::get_sp_by_slot(slot);
+    let sp = sp_guard.sp_mut();
 
     if sp.preempted_cpu() != Some(cpu) {
-        crate::sp_context::unlock_sp(slot);
         return make_error(ffa::FFA_BUSY as u64);
     }
 
@@ -758,7 +753,6 @@ fn resume_preempted_sp(sp_id: u16) -> SmcResult8 {
         )
         .is_err()
     {
-        crate::sp_context::unlock_sp(slot);
         return make_error(ffa::FFA_DENIED as u64);
     }
 
@@ -790,8 +784,6 @@ fn resume_preempted_sp(sp_id: u16) -> SmcResult8 {
 
     let result = handle_sp_exit(sp, sp_id);
     clear_secure_stage2();
-
-    crate::sp_context::unlock_sp(slot);
     result
 }
 
@@ -827,12 +819,12 @@ fn inject_pending_virq(sp: &mut crate::sp_context::SpContext) {
 /// preempt SP1 → dispatch interrupt to SP2 → SP2 returns → resume SP1.
 #[cfg(feature = "sel2")]
 fn dispatch_interrupt_to_sp(sp_id: u16) -> bool {
-    let slot = match crate::sp_context::try_lock_sp(sp_id) {
-        Ok(s) => s,
+    let mut sp_guard = match crate::sp_context::try_lock_sp(sp_id) {
+        Ok(g) => g,
         Err(_) => return false,
     };
 
-    let sp = crate::sp_context::get_sp_by_slot(slot);
+    let sp = sp_guard.sp_mut();
 
     // Atomically claim: Idle→Running
     if sp
@@ -842,7 +834,6 @@ fn dispatch_interrupt_to_sp(sp_id: u16) -> bool {
         )
         .is_err()
     {
-        crate::sp_context::unlock_sp(slot);
         return false;
     }
 
@@ -884,7 +875,6 @@ fn dispatch_interrupt_to_sp(sp_id: u16) -> bool {
         sp.clear_preempted_cpu();
     }
 
-    crate::sp_context::unlock_sp(slot);
     preempted
 }
 

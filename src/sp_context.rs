@@ -5,6 +5,7 @@
 
 use crate::arch::aarch64::defs::SPSR_EL1H_DAIF_MASKED;
 use crate::arch::aarch64::regs::VcpuContext;
+use crate::sync::SpinLock;
 use core::arch::asm;
 use core::cell::UnsafeCell;
 use core::convert::TryFrom;
@@ -457,6 +458,7 @@ unsafe impl Sync for SpStore {}
 static SP_STORE: SpStore = SpStore {
     contexts: UnsafeCell::new([None, None, None, None]),
 };
+static SP_STORE_LOCK: SpinLock<()> = SpinLock::new(());
 
 /// Per-SP dispatch lock. Prevents two CPUs from simultaneously entering
 /// mutable SP dispatch paths for the same SP, which would create aliasing
@@ -477,9 +479,29 @@ pub enum SpLockError {
     Busy,
 }
 
+pub struct SpDispatchGuard {
+    slot: usize,
+}
+
+impl SpDispatchGuard {
+    pub fn sp_mut(&mut self) -> &mut SpContext {
+        let contexts = unsafe { &mut *SP_STORE.contexts.get() };
+        contexts[self.slot]
+            .as_mut()
+            .expect("SP slot empty while dispatch guard held")
+    }
+}
+
+impl Drop for SpDispatchGuard {
+    fn drop(&mut self) {
+        SP_DISPATCH_LOCK[self.slot].store(false, Ordering::Release);
+    }
+}
+
 /// Try to acquire the dispatch lock for an SP (by partition ID).
-/// Returns the slot index on success.
-pub fn try_lock_sp(sp_id: u16) -> Result<usize, SpLockError> {
+/// Returns a guard on success.
+pub fn try_lock_sp(sp_id: u16) -> Result<SpDispatchGuard, SpLockError> {
+    let _store_guard = SP_STORE_LOCK.lock();
     let contexts = unsafe { &*SP_STORE.contexts.get() };
     for (i, slot) in contexts.iter().enumerate() {
         if let Some(ref sp) = slot {
@@ -489,7 +511,7 @@ pub fn try_lock_sp(sp_id: u16) -> Result<usize, SpLockError> {
                     .compare_exchange(false, true, Ordering::Acquire, Ordering::Relaxed)
                     .is_ok()
                 {
-                    return Ok(i);
+                    return Ok(SpDispatchGuard { slot: i });
                 }
                 return Err(SpLockError::Busy); // Found SP but locked by another CPU
             }
@@ -498,19 +520,9 @@ pub fn try_lock_sp(sp_id: u16) -> Result<usize, SpLockError> {
     Err(SpLockError::NotFound) // SP not found
 }
 
-/// Release the dispatch lock for an SP slot.
-pub fn unlock_sp(slot: usize) {
-    SP_DISPATCH_LOCK[slot].store(false, Ordering::Release);
-}
-
-/// Get mutable SP reference by slot index (caller must hold the lock).
-pub fn get_sp_by_slot(slot: usize) -> &'static mut SpContext {
-    let contexts = unsafe { &mut *SP_STORE.contexts.get() };
-    contexts[slot].as_mut().expect("SP slot empty after lock")
-}
-
 /// Register a booted SP in the global store.
 pub fn register_sp(sp: SpContext) {
+    let _store_guard = SP_STORE_LOCK.lock();
     unsafe {
         let contexts = &mut *SP_STORE.contexts.get();
         for slot in contexts.iter_mut() {
@@ -526,17 +538,13 @@ pub fn register_sp(sp: SpContext) {
 /// Run a closure with exclusive mutable access to an SP (if lock can be acquired).
 /// Returns None if SP does not exist or is currently locked by another CPU.
 pub fn with_sp_locked<R, F: FnOnce(&mut SpContext) -> R>(sp_id: u16, f: F) -> Option<R> {
-    let slot = try_lock_sp(sp_id).ok()?;
-    let result = {
-        let sp = get_sp_by_slot(slot);
-        f(sp)
-    };
-    unlock_sp(slot);
-    Some(result)
+    let mut guard = try_lock_sp(sp_id).ok()?;
+    Some(f(guard.sp_mut()))
 }
 
 /// Read a specific SP's state without taking a mutable borrow.
 pub fn state_of(sp_id: u16) -> Option<SpState> {
+    let _store_guard = SP_STORE_LOCK.lock();
     unsafe {
         let contexts = &*SP_STORE.contexts.get();
         for slot in contexts.iter() {
@@ -552,6 +560,7 @@ pub fn state_of(sp_id: u16) -> Option<SpState> {
 
 /// Set pending IRQ for one SP by partition ID.
 pub fn set_pending_irq_for(sp_id: u16, intid: u32) -> bool {
+    let _store_guard = SP_STORE_LOCK.lock();
     unsafe {
         let contexts = &*SP_STORE.contexts.get();
         for slot in contexts.iter() {
@@ -568,6 +577,7 @@ pub fn set_pending_irq_for(sp_id: u16, intid: u32) -> bool {
 
 /// Consume pending IRQ for one SP by partition ID.
 pub fn take_pending_irq_for(sp_id: u16) -> Option<u32> {
+    let _store_guard = SP_STORE_LOCK.lock();
     unsafe {
         let contexts = &*SP_STORE.contexts.get();
         for slot in contexts.iter() {
@@ -583,6 +593,7 @@ pub fn take_pending_irq_for(sp_id: u16) -> Option<u32> {
 
 /// Check if a partition ID belongs to a registered SP.
 pub fn is_registered_sp(sp_id: u16) -> bool {
+    let _store_guard = SP_STORE_LOCK.lock();
     unsafe {
         let contexts = &*SP_STORE.contexts.get();
         for slot in contexts.iter() {
@@ -602,6 +613,7 @@ pub fn is_registered_sp(sp_id: u16) -> bool {
 /// The callback `f` must NOT call `register_sp()`, `with_sp_locked()`, or any
 /// other function that mutates SP_STORE. Doing so is undefined behavior.
 pub fn for_each_sp<F: FnMut(&SpContext)>(mut f: F) {
+    let _store_guard = SP_STORE_LOCK.lock();
     unsafe {
         let contexts = &*SP_STORE.contexts.get();
         for slot in contexts.iter() {
@@ -615,6 +627,7 @@ pub fn for_each_sp<F: FnMut(&SpContext)>(mut f: F) {
 /// Get the first owned INTID for a given SP (read-only lookup).
 /// Used by the IRQ handler to inject virtual interrupts without &mut.
 pub fn first_owned_intid_for(sp_id: u16) -> Option<u32> {
+    let _store_guard = SP_STORE_LOCK.lock();
     unsafe {
         let contexts = &*SP_STORE.contexts.get();
         for slot in contexts.iter() {
@@ -631,6 +644,7 @@ pub fn first_owned_intid_for(sp_id: u16) -> Option<u32> {
 /// Find which SP owns a given INTID.
 /// Returns the SP's partition ID, or None.
 pub fn find_sp_for_intid(intid: u32) -> Option<u16> {
+    let _store_guard = SP_STORE_LOCK.lock();
     unsafe {
         let contexts = &*SP_STORE.contexts.get();
         for slot in contexts.iter() {
@@ -646,6 +660,7 @@ pub fn find_sp_for_intid(intid: u32) -> Option<u16> {
 
 /// Find any SP that has a pending interrupt. Returns the SP's partition ID, or None.
 pub fn find_sp_with_pending_irq() -> Option<u16> {
+    let _store_guard = SP_STORE_LOCK.lock();
     unsafe {
         let contexts = &*SP_STORE.contexts.get();
         for slot in contexts.iter() {
