@@ -190,6 +190,7 @@ impl TryFrom<u8> for SpState {
 }
 
 const NO_PENDING_IRQ: u32 = u32::MAX;
+const PENDING_IRQ_SLOTS: usize = 4;
 
 /// Per-SP context: register state + metadata.
 pub struct SpContext {
@@ -208,9 +209,9 @@ pub struct SpContext {
     vsttbr: u64,
     /// 128-bit UUID from SP manifest (4 x u32 LE words).
     uuid: [u32; 4],
-    /// Pending virtual interrupt to inject via HCR_EL2.VI on next entry.
-    /// Atomic so IRQ/HVC paths can update it without taking a mutable SP borrow.
-    pending_irq: AtomicU32,
+    /// Pending virtual interrupts to inject via HCR_EL2.VI.
+    /// Atomic slots so IRQ/HVC paths can update without taking a mutable SP borrow.
+    pending_irqs: [AtomicU32; PENDING_IRQ_SLOTS],
     /// INTIDs owned by this SP, delivered as virtual IRQ (up to 4, 0 = unused).
     owned_intids: [u32; 4],
 }
@@ -232,7 +233,10 @@ impl SpContext {
             entry: entry_point,
             vsttbr: 0,
             uuid,
-            pending_irq: AtomicU32::new(NO_PENDING_IRQ),
+            pending_irqs: {
+                const EMPTY: AtomicU32 = AtomicU32::new(NO_PENDING_IRQ);
+                [EMPTY; PENDING_IRQ_SLOTS]
+            },
             owned_intids: [0; 4],
         }
     }
@@ -368,22 +372,46 @@ impl SpContext {
 
     /// Set a pending virtual interrupt for injection on next SP entry.
     pub fn set_pending_irq(&self, intid: u32) {
-        self.pending_irq.store(intid, Ordering::Release);
+        // Deduplicate first to avoid filling slots with repeated INTIDs.
+        for slot in self.pending_irqs.iter() {
+            if slot.load(Ordering::Acquire) == intid {
+                return;
+            }
+        }
+
+        for slot in self.pending_irqs.iter() {
+            if slot
+                .compare_exchange(
+                    NO_PENDING_IRQ,
+                    intid,
+                    Ordering::AcqRel,
+                    Ordering::Acquire,
+                )
+                .is_ok()
+            {
+                return;
+            }
+        }
+
+        crate::log_warn!("[SPMC] pending IRQ slots full, dropping intid={}\n", intid);
     }
 
     /// Take the pending virtual interrupt (returns None if none pending).
     pub fn take_pending_irq(&self) -> Option<u32> {
-        let intid = self.pending_irq.swap(NO_PENDING_IRQ, Ordering::AcqRel);
-        if intid == NO_PENDING_IRQ {
-            None
-        } else {
-            Some(intid)
+        for slot in self.pending_irqs.iter() {
+            let intid = slot.swap(NO_PENDING_IRQ, Ordering::AcqRel);
+            if intid != NO_PENDING_IRQ {
+                return Some(intid);
+            }
         }
+        None
     }
 
     /// Check if this SP has a pending interrupt.
     pub fn has_pending_irq(&self) -> bool {
-        self.pending_irq.load(Ordering::Acquire) != NO_PENDING_IRQ
+        self.pending_irqs
+            .iter()
+            .any(|slot| slot.load(Ordering::Acquire) != NO_PENDING_IRQ)
     }
 
     /// Return the first non-zero owned INTID, if any.

@@ -90,6 +90,22 @@ pub fn run_tests() {
     assert_eq!(ctx6.take_pending_irq(), None);
     pass += 1;
 
+    // Test 29-33: pending IRQ queue keeps multiple distinct INTIDs
+    ctx6.set_pending_irq(29);
+    ctx6.set_pending_irq(30);
+    ctx6.set_pending_irq(31);
+    assert_eq!(ctx6.take_pending_irq(), Some(29));
+    assert_eq!(ctx6.take_pending_irq(), Some(30));
+    assert_eq!(ctx6.take_pending_irq(), Some(31));
+    assert_eq!(ctx6.take_pending_irq(), None);
+    pass += 5;
+
+    // Test 34-35: duplicate pending IRQ is deduplicated
+    ctx6.set_pending_irq(45);
+    ctx6.set_pending_irq(45);
+    assert_eq!(ctx6.take_pending_irq(), Some(45));
+    assert_eq!(ctx6.take_pending_irq(), None);
+    pass += 2;
 
     hypervisor::log_info!("    {} assertions passed\n", pass);
 }
