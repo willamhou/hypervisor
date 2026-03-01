@@ -15,7 +15,7 @@ Two-pass review of the hypervisor codebase:
 | C3 | ✅ Fixed | `lib.rs` now has 3 `compile_error!` feature guards (`multi_pcpu+multi_vm`, `sel2+linux_guest`, `sel2+guest`). |
 | R1 | ✅ Fixed | `dispatch_interrupt_to_sp()` now sets/clears `CURRENT_RUNNING_SP[cpu]`. |
 | R2 | ✅ Fixed | `sp_context` now uses `SpDispatchGuard` (RAII) for per-SP mutable access and `SP_STORE_LOCK` to serialize store scans/registration; removed public `&'static mut SpContext` publication. |
-| R3 | 🟨 Partially Fixed | Short-term same-CPU resume policy implemented via `preempted_cpu`; long-term cross-CPU migration protocol (`owner_cpu` CAS) not implemented. |
+| R3 | ✅ Fixed | Implemented explicit owner tracking (`owner_cpu`) with CAS claim/migrate protocol in dispatch/resume paths, plus preemption ownership bookkeeping. |
 | R4 | ✅ Fixed | `CURRENT_RUNNING_SP` clear path now consistently uses captured `cpu` slot. |
 | B1 | ✅ Fixed | `dispatch_interrupt_to_sp()` now calls `clear_secure_stage2()` before returning. |
 

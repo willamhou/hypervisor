@@ -115,5 +115,15 @@ pub fn run_tests() {
     assert_eq!(ctx6.preempted_cpu(), None);
     pass += 3;
 
+    // Test 39-42: owner CPU claim/migrate/clear lifecycle
+    assert_eq!(ctx6.owner_cpu(), None);
+    assert!(ctx6.try_claim_owner_cpu(1));
+    assert_eq!(ctx6.owner_cpu(), Some(1));
+    assert!(ctx6.try_migrate_owner_cpu(1, 3));
+    assert_eq!(ctx6.owner_cpu(), Some(3));
+    ctx6.clear_owner_cpu();
+    assert_eq!(ctx6.owner_cpu(), None);
+    pass += 4;
+
     hypervisor::log_info!("    {} assertions passed\n", pass);
 }

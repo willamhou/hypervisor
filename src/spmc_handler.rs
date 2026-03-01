@@ -473,7 +473,13 @@ fn dispatch_to_sp(req: &SmcResult8, sp_id: u16) -> SmcResult8 {
         Err(crate::sp_context::SpLockError::Busy) => return make_error(ffa::FFA_BUSY as u64),
     };
 
+    let cpu = sel2_cpu_id();
     let sp = sp_guard.sp_mut();
+
+    // Claim ownership for initial dispatch (Idle -> Running).
+    if !sp.try_claim_owner_cpu(cpu) {
+        return make_error(ffa::FFA_BUSY as u64);
+    }
 
     // Atomically claim SP: Idle→Running.
     if sp
@@ -483,6 +489,7 @@ fn dispatch_to_sp(req: &SmcResult8, sp_id: u16) -> SmcResult8 {
         )
         .is_err()
     {
+        sp.clear_owner_cpu();
         return make_error(ffa::FFA_BUSY as u64);
     }
     sp.clear_preempted_cpu();
@@ -493,7 +500,7 @@ fn dispatch_to_sp(req: &SmcResult8, sp_id: u16) -> SmcResult8 {
     );
 
     // Clear preemption flag before SP entry
-    SP_IRQ_PREEMPTED[sel2_cpu_id()].store(false, Ordering::Release);
+    SP_IRQ_PREEMPTED[cpu].store(false, Ordering::Release);
 
     // Inject any pending virtual interrupt before entry
     inject_pending_virq(sp);
@@ -503,7 +510,6 @@ fn dispatch_to_sp(req: &SmcResult8, sp_id: u16) -> SmcResult8 {
     s2.install();
 
     // Track which SP is running so exception/IRQ handler can route correctly
-    let cpu = sel2_cpu_id();
     CURRENT_RUNNING_SP[cpu].store(sp_id, Ordering::Release);
 
     // Restore SP's EL1 sysregs (SCTLR_EL1, VBAR_EL1, etc.)
@@ -676,6 +682,7 @@ fn handle_sp_exit(sp: &mut crate::sp_context::SpContext, sp_id: u16) -> SmcResul
                 sp.transition_to(crate::sp_context::SpState::Idle)
                     .expect("SP Idle transition failed");
                 sp.clear_preempted_cpu();
+                sp.clear_owner_cpu();
                 return SmcResult8 {
                     x0,
                     x1,
@@ -741,8 +748,20 @@ fn resume_preempted_sp(sp_id: u16) -> SmcResult8 {
 
     let sp = sp_guard.sp_mut();
 
-    if sp.preempted_cpu() != Some(cpu) {
-        return make_error(ffa::FFA_BUSY as u64);
+    // Acquire ownership for this CPU. If another CPU owns the preempted SP,
+    // perform explicit owner migration under dispatch lock.
+    match sp.owner_cpu() {
+        Some(owner) if owner == cpu => {}
+        Some(owner) => {
+            if !sp.try_migrate_owner_cpu(owner, cpu) {
+                return make_error(ffa::FFA_BUSY as u64);
+            }
+        }
+        None => {
+            if !sp.try_claim_owner_cpu(cpu) {
+                return make_error(ffa::FFA_BUSY as u64);
+            }
+        }
     }
 
     // Atomically claim: Preempted→Running
@@ -824,6 +843,7 @@ fn dispatch_interrupt_to_sp(sp_id: u16) -> bool {
         Err(_) => return false,
     };
 
+    let cpu = sel2_cpu_id();
     let sp = sp_guard.sp_mut();
 
     // Atomically claim: Idle→Running
@@ -837,7 +857,23 @@ fn dispatch_interrupt_to_sp(sp_id: u16) -> bool {
         return false;
     }
 
-    let cpu = sel2_cpu_id();
+    // Claim or migrate ownership for this CPU after successful state claim.
+    match sp.owner_cpu() {
+        Some(owner) if owner == cpu => {}
+        Some(owner) => {
+            if !sp.try_migrate_owner_cpu(owner, cpu) {
+                let _ = sp.transition_to(crate::sp_context::SpState::Idle);
+                return false;
+            }
+        }
+        None => {
+            if !sp.try_claim_owner_cpu(cpu) {
+                let _ = sp.transition_to(crate::sp_context::SpState::Idle);
+                return false;
+            }
+        }
+    }
+
     SP_IRQ_PREEMPTED[cpu].store(false, Ordering::Release);
     inject_pending_virq(sp);
 
@@ -873,6 +909,7 @@ fn dispatch_interrupt_to_sp(sp_id: u16) -> bool {
         sp.transition_to(crate::sp_context::SpState::Idle)
             .expect("SP Idle transition failed");
         sp.clear_preempted_cpu();
+        sp.clear_owner_cpu();
     }
 
     preempted

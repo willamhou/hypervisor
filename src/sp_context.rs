@@ -193,6 +193,7 @@ impl TryFrom<u8> for SpState {
 const NO_PENDING_IRQ: u32 = u32::MAX;
 const PENDING_IRQ_SLOTS: usize = 4;
 const NO_PREEMPTED_CPU: u16 = u16::MAX;
+const NO_OWNER_CPU: u16 = u16::MAX;
 
 /// Per-SP context: register state + metadata.
 pub struct SpContext {
@@ -216,6 +217,8 @@ pub struct SpContext {
     pending_irqs: [AtomicU32; PENDING_IRQ_SLOTS],
     /// CPU that last preempted this SP. Used to enforce same-CPU FFA_RUN policy.
     preempted_cpu: core::sync::atomic::AtomicU16,
+    /// Current logical owner CPU for this SP context.
+    owner_cpu: core::sync::atomic::AtomicU16,
     /// INTIDs owned by this SP, delivered as virtual IRQ (up to 4, 0 = unused).
     owned_intids: [u32; 4],
 }
@@ -242,6 +245,7 @@ impl SpContext {
                 [EMPTY; PENDING_IRQ_SLOTS]
             },
             preempted_cpu: core::sync::atomic::AtomicU16::new(NO_PREEMPTED_CPU),
+            owner_cpu: core::sync::atomic::AtomicU16::new(NO_OWNER_CPU),
             owned_intids: [0; 4],
         }
     }
@@ -437,6 +441,45 @@ impl SpContext {
     /// Clear recorded preempted CPU ownership.
     pub fn clear_preempted_cpu(&self) {
         self.preempted_cpu.store(NO_PREEMPTED_CPU, Ordering::Release);
+    }
+
+    /// Return current owner CPU of this SP context, if any.
+    pub fn owner_cpu(&self) -> Option<usize> {
+        let cpu = self.owner_cpu.load(Ordering::Acquire);
+        if cpu == NO_OWNER_CPU {
+            None
+        } else {
+            Some(cpu as usize)
+        }
+    }
+
+    /// Try to claim owner when there is no current owner.
+    pub fn try_claim_owner_cpu(&self, cpu: usize) -> bool {
+        self.owner_cpu
+            .compare_exchange(
+                NO_OWNER_CPU,
+                cpu as u16,
+                Ordering::AcqRel,
+                Ordering::Acquire,
+            )
+            .is_ok()
+    }
+
+    /// Try to migrate ownership from one CPU to another.
+    pub fn try_migrate_owner_cpu(&self, from_cpu: usize, to_cpu: usize) -> bool {
+        self.owner_cpu
+            .compare_exchange(
+                from_cpu as u16,
+                to_cpu as u16,
+                Ordering::AcqRel,
+                Ordering::Acquire,
+            )
+            .is_ok()
+    }
+
+    /// Clear owner CPU when SP is no longer running/preempted.
+    pub fn clear_owner_cpu(&self) {
+        self.owner_cpu.store(NO_OWNER_CPU, Ordering::Release);
     }
 
     /// Return the first non-zero owned INTID, if any.
