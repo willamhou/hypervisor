@@ -817,10 +817,10 @@ fn inject_pending_virq(sp: &mut crate::sp_context::SpContext) {
 /// Used for cross-SP preemption: SP1 running + SP2's interrupt fires →
 /// preempt SP1 → dispatch interrupt to SP2 → SP2 returns → resume SP1.
 #[cfg(feature = "sel2")]
-fn dispatch_interrupt_to_sp(sp_id: u16) {
+fn dispatch_interrupt_to_sp(sp_id: u16) -> bool {
     let slot = match crate::sp_context::try_lock_sp(sp_id) {
         Ok(s) => s,
-        Err(_) => return,
+        Err(_) => return false,
     };
 
     let sp = crate::sp_context::get_sp_by_slot(slot);
@@ -834,15 +834,18 @@ fn dispatch_interrupt_to_sp(sp_id: u16) {
         .is_err()
     {
         crate::sp_context::unlock_sp(slot);
-        return;
+        return false;
     }
 
+    let cpu = sel2_cpu_id();
+    SP_IRQ_PREEMPTED[cpu].store(false, Ordering::Release);
     inject_pending_virq(sp);
 
     let s2 = crate::secure_stage2::SecureStage2Config::new_from_vsttbr(sp.vsttbr());
     s2.install();
 
-    let cpu = sel2_cpu_id();
+    // Make HF_INTERRUPT_GET route to this SP while it is running.
+    CURRENT_RUNNING_SP[cpu].store(sp_id, Ordering::Release);
 
     sp.restore_el1_state();
     crate::arch::aarch64::peripherals::timer::arm_preemption_timer();
@@ -858,11 +861,19 @@ fn dispatch_interrupt_to_sp(sp_id: u16) {
     post_enter_guest(cpu);
     sp.save_el1_state();
 
+    CURRENT_RUNNING_SP[cpu].store(0, Ordering::Release);
     crate::arch::aarch64::peripherals::timer::disarm_preemption_timer();
-    sp.transition_to(crate::sp_context::SpState::Idle)
-        .expect("SP Idle transition failed");
+    let preempted = SP_IRQ_PREEMPTED[cpu].swap(false, Ordering::Acquire);
+    if preempted {
+        sp.transition_to(crate::sp_context::SpState::Preempted)
+            .expect("SP Preempted transition failed");
+    } else {
+        sp.transition_to(crate::sp_context::SpState::Idle)
+            .expect("SP Idle transition failed");
+    }
 
     crate::sp_context::unlock_sp(slot);
+    preempted
 }
 
 /// Dispatch an FF-A request and return the appropriate response.
