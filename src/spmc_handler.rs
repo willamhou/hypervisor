@@ -486,6 +486,7 @@ fn dispatch_to_sp(req: &SmcResult8, sp_id: u16) -> SmcResult8 {
         crate::sp_context::unlock_sp(slot);
         return make_error(ffa::FFA_BUSY as u64);
     }
+    sp.clear_preempted_cpu();
 
     // Set up SP registers with the DIRECT_REQ args
     sp.set_args(
@@ -523,7 +524,7 @@ fn dispatch_to_sp(req: &SmcResult8, sp_id: u16) -> SmcResult8 {
 
     sp.save_el1_state();
 
-    CURRENT_RUNNING_SP[sel2_cpu_id()].store(0, Ordering::Release);
+    CURRENT_RUNNING_SP[cpu].store(0, Ordering::Release);
     crate::arch::aarch64::peripherals::timer::disarm_preemption_timer();
 
     // Handle SP exit — may loop if SP calls FF-A memory operations
@@ -591,6 +592,7 @@ fn handle_sp_exit(sp: &mut crate::sp_context::SpContext, sp_id: u16) -> SmcResul
             );
             sp.transition_to(crate::sp_context::SpState::Preempted)
                 .expect("SP Preempted transition failed");
+            sp.set_preempted_cpu(cpu);
 
             // Check if another SP has a pending interrupt (cross-SP preemption)
             if let Some(target_id) = crate::sp_context::find_sp_with_pending_irq() {
@@ -677,6 +679,7 @@ fn handle_sp_exit(sp: &mut crate::sp_context::SpContext, sp_id: u16) -> SmcResul
                 // Normal exit (FFA_DIRECT_RESP, FFA_MSG_WAIT, etc.)
                 sp.transition_to(crate::sp_context::SpState::Idle)
                     .expect("SP Idle transition failed");
+                sp.clear_preempted_cpu();
                 return SmcResult8 {
                     x0,
                     x1,
@@ -718,7 +721,7 @@ fn handle_sp_exit(sp: &mut crate::sp_context::SpContext, sp_id: u16) -> SmcResul
         post_enter_guest(cpu);
         sp.save_el1_state();
 
-        CURRENT_RUNNING_SP[sel2_cpu_id()].store(0, Ordering::Release);
+        CURRENT_RUNNING_SP[cpu].store(0, Ordering::Release);
         crate::arch::aarch64::peripherals::timer::disarm_preemption_timer();
     }
 }
@@ -730,6 +733,7 @@ fn handle_sp_exit(sp: &mut crate::sp_context::SpContext, sp_id: u16) -> SmcResul
 #[cfg(feature = "sel2")]
 fn resume_preempted_sp(sp_id: u16) -> SmcResult8 {
     crate::log_debug!("[SPMC] resume sp={:#06x}\n", sp_id);
+    let cpu = sel2_cpu_id();
 
     let slot = match crate::sp_context::try_lock_sp(sp_id) {
         Ok(s) => s,
@@ -740,6 +744,11 @@ fn resume_preempted_sp(sp_id: u16) -> SmcResult8 {
     };
 
     let sp = crate::sp_context::get_sp_by_slot(slot);
+
+    if sp.preempted_cpu() != Some(cpu) {
+        crate::sp_context::unlock_sp(slot);
+        return make_error(ffa::FFA_BUSY as u64);
+    }
 
     // Atomically claim: Preempted→Running
     if sp
@@ -753,7 +762,7 @@ fn resume_preempted_sp(sp_id: u16) -> SmcResult8 {
         return make_error(ffa::FFA_DENIED as u64);
     }
 
-    let cpu = sel2_cpu_id();
+    sp.clear_preempted_cpu();
     SP_IRQ_PREEMPTED[cpu].store(false, Ordering::Release);
 
     inject_pending_virq(sp);
@@ -776,7 +785,7 @@ fn resume_preempted_sp(sp_id: u16) -> SmcResult8 {
     post_enter_guest(cpu);
     sp.save_el1_state();
 
-    CURRENT_RUNNING_SP[sel2_cpu_id()].store(0, Ordering::Release);
+    CURRENT_RUNNING_SP[cpu].store(0, Ordering::Release);
     crate::arch::aarch64::peripherals::timer::disarm_preemption_timer();
 
     let result = handle_sp_exit(sp, sp_id);
@@ -863,13 +872,16 @@ fn dispatch_interrupt_to_sp(sp_id: u16) -> bool {
 
     CURRENT_RUNNING_SP[cpu].store(0, Ordering::Release);
     crate::arch::aarch64::peripherals::timer::disarm_preemption_timer();
+    clear_secure_stage2();
     let preempted = SP_IRQ_PREEMPTED[cpu].swap(false, Ordering::Acquire);
     if preempted {
         sp.transition_to(crate::sp_context::SpState::Preempted)
             .expect("SP Preempted transition failed");
+        sp.set_preempted_cpu(cpu);
     } else {
         sp.transition_to(crate::sp_context::SpState::Idle)
             .expect("SP Idle transition failed");
+        sp.clear_preempted_cpu();
     }
 
     crate::sp_context::unlock_sp(slot);

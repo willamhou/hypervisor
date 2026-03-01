@@ -83,9 +83,13 @@ impl Stage2Walker {
         self.split_block_if_needed(ipa)?;
         let leaf_ptr = self.walk_to_leaf_ptr(ipa).ok_or("IPA not mapped")?;
         unsafe {
-            let mut pte = core::ptr::read_volatile(leaf_ptr);
-            pte = (pte & !S2AP_MASK) | (((s2ap as u64) & 0x3) << S2AP_SHIFT);
-            core::ptr::write_volatile(leaf_ptr, pte);
+            // Break-before-make for a live leaf PTE:
+            // invalidate old entry -> TLBI -> write updated entry -> TLBI.
+            let old_pte = core::ptr::read_volatile(leaf_ptr);
+            let new_pte = (old_pte & !S2AP_MASK) | (((s2ap as u64) & 0x3) << S2AP_SHIFT);
+            core::ptr::write_volatile(leaf_ptr, 0u64);
+            Self::tlbi_ipa(ipa);
+            core::ptr::write_volatile(leaf_ptr, new_pte);
         }
         Self::tlbi_ipa(ipa);
         Ok(())
@@ -366,8 +370,7 @@ impl Stage2Walker {
 
         let l1_table = l0_entry & PTE_ADDR_MASK;
         let l1_idx = ((ipa >> 30) & PT_INDEX_MASK) as usize;
-        let l1_entry =
-            unsafe { core::ptr::read_volatile((l1_table as *const u64).add(l1_idx)) };
+        let l1_entry = unsafe { core::ptr::read_volatile((l1_table as *const u64).add(l1_idx)) };
         if l1_entry & PTE_VALID == 0 || l1_entry & PTE_TABLE == 0 {
             return Ok(()); // Invalid or 1GB block — not our concern here
         }

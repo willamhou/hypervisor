@@ -107,5 +107,13 @@ pub fn run_tests() {
     assert_eq!(ctx6.take_pending_irq(), None);
     pass += 2;
 
+    // Test 36-38: preempted CPU ownership tracking
+    assert_eq!(ctx6.preempted_cpu(), None);
+    ctx6.set_preempted_cpu(2);
+    assert_eq!(ctx6.preempted_cpu(), Some(2));
+    ctx6.clear_preempted_cpu();
+    assert_eq!(ctx6.preempted_cpu(), None);
+    pass += 3;
+
     hypervisor::log_info!("    {} assertions passed\n", pass);
 }

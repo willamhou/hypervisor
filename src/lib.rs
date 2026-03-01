@@ -1,5 +1,12 @@
 #![no_std]
 
+#[cfg(all(feature = "multi_pcpu", feature = "multi_vm"))]
+compile_error!("features `multi_pcpu` and `multi_vm` are mutually exclusive");
+#[cfg(all(feature = "sel2", feature = "linux_guest"))]
+compile_error!("features `sel2` and `linux_guest` are mutually exclusive");
+#[cfg(all(feature = "sel2", feature = "guest"))]
+compile_error!("features `sel2` and `guest` are mutually exclusive");
+
 pub mod arch;
 pub mod devices;
 pub mod dtb;
@@ -9,14 +16,14 @@ pub mod guest_loader;
 pub mod log;
 pub mod manifest;
 pub mod mm;
-pub mod spmc_handler;
-pub mod sp_context;
-pub mod secure_stage2;
-#[cfg(feature = "sel2")]
-pub mod sel2_mmu;
 pub mod percpu;
 pub mod platform;
 pub mod scheduler;
+pub mod secure_stage2;
+#[cfg(feature = "sel2")]
+pub mod sel2_mmu;
+pub mod sp_context;
+pub mod spmc_handler;
 pub mod sync;
 pub mod uart;
 pub mod vcpu;

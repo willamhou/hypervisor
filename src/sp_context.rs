@@ -191,6 +191,7 @@ impl TryFrom<u8> for SpState {
 
 const NO_PENDING_IRQ: u32 = u32::MAX;
 const PENDING_IRQ_SLOTS: usize = 4;
+const NO_PREEMPTED_CPU: u16 = u16::MAX;
 
 /// Per-SP context: register state + metadata.
 pub struct SpContext {
@@ -212,6 +213,8 @@ pub struct SpContext {
     /// Pending virtual interrupts to inject via HCR_EL2.VI.
     /// Atomic slots so IRQ/HVC paths can update without taking a mutable SP borrow.
     pending_irqs: [AtomicU32; PENDING_IRQ_SLOTS],
+    /// CPU that last preempted this SP. Used to enforce same-CPU FFA_RUN policy.
+    preempted_cpu: core::sync::atomic::AtomicU16,
     /// INTIDs owned by this SP, delivered as virtual IRQ (up to 4, 0 = unused).
     owned_intids: [u32; 4],
 }
@@ -237,6 +240,7 @@ impl SpContext {
                 const EMPTY: AtomicU32 = AtomicU32::new(NO_PENDING_IRQ);
                 [EMPTY; PENDING_IRQ_SLOTS]
             },
+            preempted_cpu: core::sync::atomic::AtomicU16::new(NO_PREEMPTED_CPU),
             owned_intids: [0; 4],
         }
     }
@@ -412,6 +416,26 @@ impl SpContext {
         self.pending_irqs
             .iter()
             .any(|slot| slot.load(Ordering::Acquire) != NO_PENDING_IRQ)
+    }
+
+    /// Record which CPU preempted this SP most recently.
+    pub fn set_preempted_cpu(&self, cpu: usize) {
+        self.preempted_cpu.store(cpu as u16, Ordering::Release);
+    }
+
+    /// Return the CPU that preempted this SP, if any.
+    pub fn preempted_cpu(&self) -> Option<usize> {
+        let cpu = self.preempted_cpu.load(Ordering::Acquire);
+        if cpu == NO_PREEMPTED_CPU {
+            None
+        } else {
+            Some(cpu as usize)
+        }
+    }
+
+    /// Clear recorded preempted CPU ownership.
+    pub fn clear_preempted_cpu(&self) {
+        self.preempted_cpu.store(NO_PREEMPTED_CPU, Ordering::Release);
     }
 
     /// Return the first non-zero owned INTID, if any.
