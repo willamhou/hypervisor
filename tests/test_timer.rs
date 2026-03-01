@@ -19,7 +19,10 @@ pub fn run_timer_test() {
     // Calculate ticks for 100ms
     // 100ms = 0.1s, so ticks = freq * 0.1
     let ticks_100ms = (freq / 10) as u32;
-    hypervisor::log_info!("[TIMER TEST] Setting timer for {} ticks (100ms)\n", ticks_100ms);
+    hypervisor::log_info!(
+        "[TIMER TEST] Setting timer for {} ticks (100ms)\n",
+        ticks_100ms
+    );
 
     // Note: Skipping GIC configuration for now as it requires MMIO access
     // The GIC should be in a usable state by default in QEMU
@@ -39,7 +42,11 @@ pub fn run_timer_test() {
     // Wait for interrupt (or timer expiry)
     let start_counter = timer::get_counter();
     for i in 0..10 {
-        hypervisor::log_info!("[TIMER TEST] Iteration {}, timer status: {:#018x}\n", i, timer::get_ctl());
+        hypervisor::log_info!(
+            "[TIMER TEST] Iteration {}, timer status: {:#018x}\n",
+            i,
+            timer::get_ctl()
+        );
 
         // Check if timer fired
         if timer::is_pending() {

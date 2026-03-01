@@ -44,7 +44,10 @@ pub fn run_gicr_test() {
     let waker = gicr.read(0x0014, 4).unwrap() as u32; // vCPU 0 WAKER
     if waker != 0x06 {
         // bits 1+2 set
-        hypervisor::log_info!("[GICR] FAILED: WAKER reset should be 0x06, got {:#018x}\n", waker as u64);
+        hypervisor::log_info!(
+            "[GICR] FAILED: WAKER reset should be 0x06, got {:#018x}\n",
+            waker as u64
+        );
         return;
     }
     hypervisor::log_info!("[GICR] Test 3 PASSED\n\n");

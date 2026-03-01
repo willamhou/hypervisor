@@ -49,7 +49,9 @@ pub fn run_gicv3_virt_test() {
         hypervisor::log_info!("[GICv3 VIRT] ERROR: Priority should be 0xA0\n");
         return;
     }
-    hypervisor::log_info!("[GICv3 VIRT] LR fields verified: state=Pending, intid=27, priority=0xA0\n");
+    hypervisor::log_info!(
+        "[GICv3 VIRT] LR fields verified: state=Pending, intid=27, priority=0xA0\n"
+    );
     hypervisor::log_info!("[GICv3 VIRT] Test 2 PASSED\n\n");
 
     // Test 3: Write and read LR
@@ -84,7 +86,10 @@ pub fn run_gicv3_virt_test() {
         hypervisor::log_info!("[GICv3 VIRT] ERROR: No free LR found\n");
         return;
     }
-    hypervisor::log_info!("[GICv3 VIRT] Found free LR at index: {}\n", free_lr.unwrap());
+    hypervisor::log_info!(
+        "[GICv3 VIRT] Found free LR at index: {}\n",
+        free_lr.unwrap()
+    );
     hypervisor::log_info!("[GICv3 VIRT] Test 4 PASSED\n\n");
 
     // Test 5: Pending count
@@ -116,7 +121,10 @@ pub fn run_gicv3_virt_test() {
     GicV3VirtualInterface::clear_interrupt(27);
     let count = GicV3VirtualInterface::pending_count();
     if count != 0 {
-        hypervisor::log_info!("[GICv3 VIRT] ERROR: Expected 0 after clear, got {}\n", count);
+        hypervisor::log_info!(
+            "[GICv3 VIRT] ERROR: Expected 0 after clear, got {}\n",
+            count
+        );
         return;
     }
     hypervisor::log_info!("[GICv3 VIRT] After clear: pending count = 0\n");

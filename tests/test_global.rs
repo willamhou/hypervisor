@@ -87,7 +87,11 @@ pub fn run_global_test() {
         count += 1;
     }
     if count != 63 || last != 62 {
-        hypervisor::log_info!("[GLOBAL] FAILED: expected 63 items, last=62, got count={} last={}\n", count, last);
+        hypervisor::log_info!(
+            "[GLOBAL] FAILED: expected 63 items, last=62, got count={} last={}\n",
+            count,
+            last
+        );
         return;
     }
     hypervisor::log_info!("[GLOBAL] Test 6 PASSED\n\n");

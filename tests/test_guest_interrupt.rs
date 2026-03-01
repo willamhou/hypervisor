@@ -83,7 +83,9 @@ pub fn run_guest_interrupt_test() {
     }
 
     hypervisor::log_info!("[IRQ TEST] Guest will enable interrupts and check for pending IRQ...\n");
-    hypervisor::log_info!("[IRQ TEST] If HCR_EL2.VI is set, guest should see virtual IRQ pending...\n");
+    hypervisor::log_info!(
+        "[IRQ TEST] If HCR_EL2.VI is set, guest should see virtual IRQ pending...\n"
+    );
 
     // Inject a virtual IRQ before running
     // In a real scenario, this would be done when a physical interrupt arrives

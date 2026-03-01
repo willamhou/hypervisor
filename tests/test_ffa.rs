@@ -314,7 +314,10 @@ pub fn run_ffa_test() {
         );
         // QEMU firmware always implements PSCI — should return version (not -1)
         if result.x0 != 0xFFFF_FFFF_FFFF_FFFF && result.x0 != 0 {
-            hypervisor::log_info!("  [PASS] SMC forward PSCI_VERSION returns {:#018x}\n", result.x0);
+            hypervisor::log_info!(
+                "  [PASS] SMC forward PSCI_VERSION returns {:#018x}\n",
+                result.x0
+            );
             pass += 1;
         } else {
             hypervisor::log_info!("  [FAIL] SMC forward PSCI_VERSION: {:#018x}\n", result.x0);
@@ -854,7 +857,8 @@ pub fn run_ffa_test() {
             core::ptr::write_unaligned(tx_buf.0.as_mut_ptr() as *mut u16, 1u16); // sender VM0
             core::ptr::write_unaligned(tx_buf.0.as_mut_ptr().add(2) as *mut u16, 2u16); // receiver VM1
             core::ptr::write_unaligned(tx_buf.0.as_mut_ptr().add(4) as *mut u32, 4u32); // payload size
-            core::ptr::write_unaligned(tx_buf.0.as_mut_ptr().add(8) as *mut u32, 0xCAFE_BABE); // payload
+            core::ptr::write_unaligned(tx_buf.0.as_mut_ptr().add(8) as *mut u32, 0xCAFE_BABE);
+            // payload
         }
 
         // Test 40: MSG_SEND2 from VM0 to VM1

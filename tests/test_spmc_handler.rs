@@ -7,7 +7,16 @@ use hypervisor::ffa::{self, smc_forward::SmcResult8};
 use hypervisor::spmc_handler::dispatch_ffa;
 
 fn zero_req(fid: u64) -> SmcResult8 {
-    SmcResult8 { x0: fid, x1: 0, x2: 0, x3: 0, x4: 0, x5: 0, x6: 0, x7: 0 }
+    SmcResult8 {
+        x0: fid,
+        x1: 0,
+        x2: 0,
+        x3: 0,
+        x4: 0,
+        x5: 0,
+        x6: 0,
+        x7: 0,
+    }
 }
 
 pub fn run_tests() {
@@ -61,9 +70,9 @@ pub fn run_tests() {
     pass += 2;
 
     // Test 13-14: Register an SP, PARTITION_INFO_GET returns count=1
-    hypervisor::sp_context::register_sp(
-        hypervisor::sp_context::SpContext::new(0x8001, 0x1000, 0x2000, [0xAA; 4]),
-    );
+    hypervisor::sp_context::register_sp(hypervisor::sp_context::SpContext::new(
+        0x8001, 0x1000, 0x2000, [0xAA; 4],
+    ));
     let resp = dispatch_ffa(&zero_req(ffa::FFA_PARTITION_INFO_GET));
     assert_eq!(resp.x0, ffa::FFA_SUCCESS_32);
     assert!(resp.x2 >= 1); // at least 1 SP registered
@@ -99,13 +108,19 @@ pub fn run_tests() {
         x1: (spmd_ep_id << 16) | spmc_id,
         x2: ffa::FFA_FWK_MSG_BIT | ffa::SPMD_FWK_MSG_FFA_VERSION_REQ,
         x3: ffa::FFA_VERSION_1_1 as u64, // NWd requested version
-        x4: 0, x5: 0, x6: 0, x7: 0,
+        x4: 0,
+        x5: 0,
+        x6: 0,
+        x7: 0,
     };
     let resp = dispatch_ffa(&req);
     assert_eq!(resp.x0, ffa::FFA_MSG_SEND_DIRECT_RESP_32);
     // x1 must swap: source=SPMC_ID, dest=SPMD_EP_ID
     assert_eq!(resp.x1, (spmc_id << 16) | spmd_ep_id);
-    assert_eq!(resp.x2, ffa::FFA_FWK_MSG_BIT | ffa::SPMD_FWK_MSG_FFA_VERSION_RESP);
+    assert_eq!(
+        resp.x2,
+        ffa::FFA_FWK_MSG_BIT | ffa::SPMD_FWK_MSG_FFA_VERSION_RESP
+    );
     assert_eq!(resp.x3, ffa::FFA_VERSION_1_1 as u64);
     // Also verify x4-x7 are zeroed
     assert_eq!(resp.x4, 0);
@@ -123,7 +138,10 @@ pub fn run_tests() {
         x1: 0x6000_1000, // TX PA (4KB aligned)
         x2: 0x6000_2000, // RX PA (4KB aligned)
         x3: 1,           // 1 page
-        x4: 0, x5: 0, x6: 0, x7: 0,
+        x4: 0,
+        x5: 0,
+        x6: 0,
+        x7: 0,
     };
     let resp = dispatch_ffa(&req);
     assert_eq!(resp.x0, ffa::FFA_SUCCESS_32);
@@ -157,7 +175,10 @@ pub fn run_tests() {
         x1: 0x6000_1001, // Not aligned
         x2: 0x6000_2000,
         x3: 1,
-        x4: 0, x5: 0, x6: 0, x7: 0,
+        x4: 0,
+        x5: 0,
+        x6: 0,
+        x7: 0,
     };
     let resp = dispatch_ffa(&req);
     assert_eq!(resp.x0, ffa::FFA_ERROR);
@@ -226,7 +247,6 @@ pub fn run_tests() {
     assert_eq!(resp.x2, ffa::FFA_INVALID_PARAMETERS as u64);
     pass += 1;
 
-
     // ── SPMC memory sharing tests ───────────────────────────────────
 
     // Test: FFA_FEATURES(FFA_MEM_SHARE_32) -> SUCCESS
@@ -257,7 +277,8 @@ pub fn run_tests() {
             x3: 0x8000_0000, // IPA
             x4: 1,           // 1 page
             x5: 0x8001,      // receiver=SP1
-            x6: 0, x7: 0,
+            x6: 0,
+            x7: 0,
         };
         let resp = dispatch_ffa(&req);
         assert_eq!(resp.x0, ffa::FFA_SUCCESS_32);
@@ -275,7 +296,8 @@ pub fn run_tests() {
             x3: 0x9000_0000,
             x4: 1,
             x5: 0x9999, // non-existent SP
-            x6: 0, x7: 0,
+            x6: 0,
+            x7: 0,
         };
         let resp = dispatch_ffa(&req);
         assert_eq!(resp.x0, ffa::FFA_ERROR);
@@ -289,7 +311,11 @@ pub fn run_tests() {
             x0: ffa::FFA_MEM_RETRIEVE_REQ_32,
             x1: share_handle & 0xFFFF_FFFF,
             x2: share_handle >> 32,
-            x3: 0, x4: 0, x5: 0, x6: 0, x7: 0,
+            x3: 0,
+            x4: 0,
+            x5: 0,
+            x6: 0,
+            x7: 0,
         };
         let resp = dispatch_ffa(&req);
         assert_eq!(resp.x0, ffa::FFA_MEM_RETRIEVE_RESP);
@@ -302,7 +328,11 @@ pub fn run_tests() {
             x0: ffa::FFA_MEM_RETRIEVE_REQ_32,
             x1: share_handle & 0xFFFF_FFFF,
             x2: share_handle >> 32,
-            x3: 0, x4: 0, x5: 0, x6: 0, x7: 0,
+            x3: 0,
+            x4: 0,
+            x5: 0,
+            x6: 0,
+            x7: 0,
         };
         let resp = dispatch_ffa(&req);
         assert_eq!(resp.x0, ffa::FFA_ERROR);
@@ -316,7 +346,11 @@ pub fn run_tests() {
             x0: ffa::FFA_MEM_RECLAIM,
             x1: share_handle & 0xFFFF_FFFF,
             x2: share_handle >> 32,
-            x3: 0, x4: 0, x5: 0, x6: 0, x7: 0,
+            x3: 0,
+            x4: 0,
+            x5: 0,
+            x6: 0,
+            x7: 0,
         };
         let resp = dispatch_ffa(&req);
         assert_eq!(resp.x0, ffa::FFA_ERROR);
@@ -330,7 +364,11 @@ pub fn run_tests() {
             x0: ffa::FFA_MEM_RELINQUISH,
             x1: share_handle & 0xFFFF_FFFF,
             x2: share_handle >> 32,
-            x3: 0, x4: 0, x5: 0, x6: 0, x7: 0,
+            x3: 0,
+            x4: 0,
+            x5: 0,
+            x6: 0,
+            x7: 0,
         };
         let resp = dispatch_ffa(&req);
         assert_eq!(resp.x0, ffa::FFA_SUCCESS_32);
@@ -343,7 +381,11 @@ pub fn run_tests() {
             x0: ffa::FFA_MEM_RECLAIM,
             x1: share_handle & 0xFFFF_FFFF,
             x2: share_handle >> 32,
-            x3: 0, x4: 0, x5: 0, x6: 0, x7: 0,
+            x3: 0,
+            x4: 0,
+            x5: 0,
+            x6: 0,
+            x7: 0,
         };
         let resp = dispatch_ffa(&req);
         assert_eq!(resp.x0, ffa::FFA_SUCCESS_32);
@@ -356,7 +398,11 @@ pub fn run_tests() {
             x0: ffa::FFA_MEM_RECLAIM,
             x1: 0xDEAD,
             x2: 0,
-            x3: 0, x4: 0, x5: 0, x6: 0, x7: 0,
+            x3: 0,
+            x4: 0,
+            x5: 0,
+            x6: 0,
+            x7: 0,
         };
         let resp = dispatch_ffa(&req);
         assert_eq!(resp.x0, ffa::FFA_ERROR);
