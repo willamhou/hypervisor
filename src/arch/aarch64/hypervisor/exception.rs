@@ -169,7 +169,7 @@ pub extern "C" fn handle_exception(context: &mut VcpuContext) -> bool {
         // Halt the system completely to prevent further execution
         loop {
             unsafe {
-                core::arch::asm!("wfe");
+                core::arch::asm!("wfe", options(nostack, nomem));
             }
         }
     }
@@ -295,16 +295,16 @@ pub extern "C" fn handle_exception(context: &mut VcpuContext) -> bool {
             let ttbr1_el1: u64;
             let vbar_el1: u64;
             unsafe {
-                core::arch::asm!("mrs {}, elr_el1", out(reg) elr_el1);
-                core::arch::asm!("mrs {}, esr_el1", out(reg) esr_el1);
-                core::arch::asm!("mrs {}, spsr_el1", out(reg) spsr_el1);
-                core::arch::asm!("mrs {}, sctlr_el1", out(reg) sctlr_el1);
-                core::arch::asm!("mrs {}, sp_el1", out(reg) sp_el1);
-                core::arch::asm!("mrs {}, far_el1", out(reg) far_el1);
-                core::arch::asm!("mrs {}, tcr_el1", out(reg) tcr_el1);
-                core::arch::asm!("mrs {}, ttbr0_el1", out(reg) ttbr0_el1);
-                core::arch::asm!("mrs {}, ttbr1_el1", out(reg) ttbr1_el1);
-                core::arch::asm!("mrs {}, vbar_el1", out(reg) vbar_el1);
+                core::arch::asm!("mrs {}, elr_el1", out(reg) elr_el1, options(nostack, nomem));
+                core::arch::asm!("mrs {}, esr_el1", out(reg) esr_el1, options(nostack, nomem));
+                core::arch::asm!("mrs {}, spsr_el1", out(reg) spsr_el1, options(nostack, nomem));
+                core::arch::asm!("mrs {}, sctlr_el1", out(reg) sctlr_el1, options(nostack, nomem));
+                core::arch::asm!("mrs {}, sp_el1", out(reg) sp_el1, options(nostack, nomem));
+                core::arch::asm!("mrs {}, far_el1", out(reg) far_el1, options(nostack, nomem));
+                core::arch::asm!("mrs {}, tcr_el1", out(reg) tcr_el1, options(nostack, nomem));
+                core::arch::asm!("mrs {}, ttbr0_el1", out(reg) ttbr0_el1, options(nostack, nomem));
+                core::arch::asm!("mrs {}, ttbr1_el1", out(reg) ttbr1_el1, options(nostack, nomem));
+                core::arch::asm!("mrs {}, vbar_el1", out(reg) vbar_el1, options(nostack, nomem));
             }
             let el1_ec = (esr_el1 >> ESR_EC_SHIFT) & ESR_EC_MASK;
             crate::log_error!("[VCPU] EL1 state at crash:\n");
@@ -336,10 +336,18 @@ pub extern "C" fn handle_exception(context: &mut VcpuContext) -> bool {
             let hcr_el2: u64;
             let id_mmfr0: u64;
             unsafe {
-                core::arch::asm!("mrs {}, vtcr_el2", out(reg) vtcr_el2);
-                core::arch::asm!("mrs {}, vttbr_el2", out(reg) vttbr_el2);
-                core::arch::asm!("mrs {}, hcr_el2", out(reg) hcr_el2);
-                core::arch::asm!("mrs {}, id_aa64mmfr0_el1", out(reg) id_mmfr0);
+                core::arch::asm!("mrs {}, vtcr_el2", out(reg) vtcr_el2, options(nostack, nomem));
+                core::arch::asm!(
+                    "mrs {}, vttbr_el2",
+                    out(reg) vttbr_el2,
+                    options(nostack, nomem)
+                );
+                core::arch::asm!("mrs {}, hcr_el2", out(reg) hcr_el2, options(nostack, nomem));
+                core::arch::asm!(
+                    "mrs {}, id_aa64mmfr0_el1",
+                    out(reg) id_mmfr0,
+                    options(nostack, nomem)
+                );
             }
             let vtcr_t0sz = vtcr_el2 & 0x3F;
             let vtcr_sl0 = (vtcr_el2 >> 6) & 0x3;
@@ -848,7 +856,7 @@ fn emulate_mrs(op0: u32, op1: u32, crn: u32, crm: u32, op2: u32) -> u64 {
             // MDSCR_EL1 - Debug Status and Control
             unsafe {
                 let val: u64;
-                core::arch::asm!("mrs {}, mdscr_el1", out(reg) val);
+                core::arch::asm!("mrs {}, mdscr_el1", out(reg) val, options(nostack, nomem));
                 val
             }
         }
@@ -883,14 +891,14 @@ fn emulate_msr(op0: u32, op1: u32, crn: u32, crm: u32, op2: u32, value: u64) {
         (2, 0, 0, 2, 2) => {
             // MDSCR_EL1 - Debug Status and Control
             unsafe {
-                core::arch::asm!("msr mdscr_el1, {}", in(reg) value);
+                core::arch::asm!("msr mdscr_el1, {}", in(reg) value, options(nostack, nomem));
                 core::arch::asm!("isb", options(nostack, nomem));
             }
         }
         (2, 0, 1, 0, 4) => {
             // OSLAR_EL1 - OS Lock Access (write-only)
             unsafe {
-                core::arch::asm!("msr oslar_el1, {}", in(reg) value);
+                core::arch::asm!("msr oslar_el1, {}", in(reg) value, options(nostack, nomem));
                 core::arch::asm!("isb", options(nostack, nomem));
             }
         }
@@ -1261,7 +1269,7 @@ fn handle_psci(context: &mut VcpuContext, function_id: u64) -> bool {
                     crate::global::PENDING_CPU_ON_PER_VCPU[target_id]
                         .request(entry_point, context_id);
                     // Wake the target pCPU from WFE
-                    unsafe { core::arch::asm!("sev") };
+                    unsafe { core::arch::asm!("sev", options(nostack, nomem)) };
                 }
             }
             context.gp_regs.x0 = PSCI_SUCCESS;

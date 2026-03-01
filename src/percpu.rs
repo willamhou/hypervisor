@@ -24,7 +24,7 @@ static PER_CPU: PerCpuArray = PerCpuArray(UnsafeCell::new({
 #[inline(always)]
 pub fn current_cpu_id() -> usize {
     let mpidr: u64;
-    unsafe { core::arch::asm!("mrs {}, MPIDR_EL1", out(reg) mpidr) };
+    unsafe { core::arch::asm!("mrs {}, MPIDR_EL1", out(reg) mpidr, options(nostack, nomem)) };
     (mpidr & 0xFF) as usize
 }
 

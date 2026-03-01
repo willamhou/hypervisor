@@ -21,6 +21,7 @@ Two-pass review of the hypervisor codebase:
 | H9 | ✅ Fixed | Added `isb` after GIC sysreg `msr` writes in `gicv3.rs` (CPU + virtual interface write helpers). |
 | H10 | ✅ Fixed | Added `isb` after trapped `msr mdscr_el1` / `msr oslar_el1` in `exception.rs::emulate_msr()`. |
 | H11 | ✅ Fixed | Added `isb` in timer write helpers: `set_ctl()`, `set_cval()`, `set_tval()`, `init_hypervisor_timer()`. |
+| H8 | ✅ Fixed | Added `options(nostack, nomem)` to remaining `asm!` sites in `exception.rs`, `main.rs`, `percpu.rs`, `vm.rs`. |
 
 ---
 

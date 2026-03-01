@@ -150,8 +150,11 @@ impl Vm {
         let size_aligned =
             ((guest_mem_size + BLOCK_SIZE_2MB - 1) / BLOCK_SIZE_2MB) * BLOCK_SIZE_2MB;
 
-        crate::log_info!("[VM] Mapping region: {:#018x} - {:#018x}\n",
-            start_aligned, start_aligned + size_aligned);
+        crate::log_info!(
+            "[VM] Mapping region: {:#018x} - {:#018x}\n",
+            start_aligned,
+            start_aligned + size_aligned
+        );
 
         #[cfg(feature = "linux_guest")]
         self.init_memory_dynamic(start_aligned, size_aligned);
@@ -225,19 +228,28 @@ impl Vm {
             // Map the portion before the heap (if any)
             if start_aligned < overlap_start {
                 let before_size = overlap_start - start_aligned;
-                crate::log_info!("[VM] Guest region before heap: {:#018x} - {:#018x}\n",
-                    start_aligned, overlap_start);
+                crate::log_info!(
+                    "[VM] Guest region before heap: {:#018x} - {:#018x}\n",
+                    start_aligned,
+                    overlap_start
+                );
                 mapper
                     .map_region(start_aligned, before_size, MemoryAttribute::Normal)
                     .expect("Failed to map guest memory before heap");
             }
-            crate::log_info!("[VM] Heap gap (unmapped): {:#018x} - {:#018x}\n",
-                overlap_start, overlap_end);
+            crate::log_info!(
+                "[VM] Heap gap (unmapped): {:#018x} - {:#018x}\n",
+                overlap_start,
+                overlap_end
+            );
             // Map the portion after the heap (if any)
             if overlap_end < end_aligned {
                 let after_size = end_aligned - overlap_end;
-                crate::log_info!("[VM] Guest region after heap: {:#018x} - {:#018x}\n",
-                    overlap_end, end_aligned);
+                crate::log_info!(
+                    "[VM] Guest region after heap: {:#018x} - {:#018x}\n",
+                    overlap_end,
+                    end_aligned
+                );
                 mapper
                     .map_region(overlap_end, after_size, MemoryAttribute::Normal)
                     .expect("Failed to map guest memory after heap");
@@ -307,8 +319,8 @@ impl Vm {
             let vttbr: u64;
             let vtcr: u64;
             unsafe {
-                core::arch::asm!("mrs {}, vttbr_el2", out(reg) vttbr);
-                core::arch::asm!("mrs {}, vtcr_el2", out(reg) vtcr);
+                core::arch::asm!("mrs {}, vttbr_el2", out(reg) vttbr, options(nostack, nomem));
+                core::arch::asm!("mrs {}, vtcr_el2", out(reg) vtcr, options(nostack, nomem));
             }
             crate::global::SHARED_VTTBR.store(vttbr, Ordering::Release);
             crate::global::SHARED_VTCR.store(vtcr, Ordering::Release);
@@ -463,7 +475,7 @@ impl Vm {
                 Err("WFI") => {
                     // WFI: execute real WFI on the physical CPU.
                     // pCPU idles until next interrupt (SGI, SPI, timer).
-                    unsafe { core::arch::asm!("wfi") };
+                    unsafe { core::arch::asm!("wfi", options(nostack, nomem)) };
                 }
                 Err(_) => {
                     // Other exit — loop back
@@ -487,8 +499,11 @@ impl Vm {
         if let Some((target, entry, ctx_id)) = vs.pending_cpu_on.take() {
             let vcpu_id = (target & 0xFF) as usize;
             if vcpu_id < MAX_VCPUS && self.vcpus[vcpu_id].is_none() {
-                crate::log_info!("[VM] Booting secondary vCPU {} at entry={:#018x}\n",
-                    vcpu_id, entry);
+                crate::log_info!(
+                    "[VM] Booting secondary vCPU {} at entry={:#018x}\n",
+                    vcpu_id,
+                    entry
+                );
                 self.boot_secondary_vcpu(vcpu_id, entry, ctx_id);
             }
         }

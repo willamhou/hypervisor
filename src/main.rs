@@ -34,10 +34,18 @@ pub extern "C" fn rust_main(dtb_addr: usize) -> ! {
     hypervisor::dtb::init(dtb_addr);
     if hypervisor::dtb::is_initialized() {
         let pi = hypervisor::dtb::platform_info();
-        hypervisor::log_info!("[INIT] DTB: cpus={} ram={:#018x}+{:#018x} uart={:#018x}\n",
-            pi.num_cpus, pi.ram_base, pi.ram_size, pi.uart_base);
-        hypervisor::log_info!("[INIT] DTB: gicd={:#018x} gicr={:#018x}\n",
-            pi.gicd_base, pi.gicr_base);
+        hypervisor::log_info!(
+            "[INIT] DTB: cpus={} ram={:#018x}+{:#018x} uart={:#018x}\n",
+            pi.num_cpus,
+            pi.ram_base,
+            pi.ram_size,
+            pi.uart_base
+        );
+        hypervisor::log_info!(
+            "[INIT] DTB: gicd={:#018x} gicr={:#018x}\n",
+            pi.gicd_base,
+            pi.gicr_base
+        );
     } else {
         hypervisor::log_info!("[INIT] DTB: parse failed, using defaults\n");
     }
@@ -238,7 +246,7 @@ pub extern "C" fn rust_main(dtb_addr: usize) -> ! {
     // Halt - we'll implement proper VM execution later
     loop {
         unsafe {
-            core::arch::asm!("wfe");
+            core::arch::asm!("wfe", options(nostack, nomem));
         }
     }
 }
@@ -264,7 +272,7 @@ pub extern "C" fn rust_main_sel2(
 
     let current_el: u64;
     unsafe {
-        core::arch::asm!("mrs {}, CurrentEL", out(reg) current_el);
+        core::arch::asm!("mrs {}, CurrentEL", out(reg) current_el, options(nostack, nomem));
     }
     let el = (current_el >> 2) & 0x3;
     hypervisor::log_info!("[SPMC] Running at EL{}\n", el);
@@ -273,8 +281,12 @@ pub extern "C" fn rust_main_sel2(
     hypervisor::log_info!("[SPMC] Manifest at {:#018x}\n", manifest_addr);
     hypervisor::manifest::init(manifest_addr);
     let mi = hypervisor::manifest::manifest_info();
-    hypervisor::log_info!("[SPMC] spmc_id={:#06x} version={}.{}\n",
-        mi.spmc_id, mi.maj_ver, mi.min_ver);
+    hypervisor::log_info!(
+        "[SPMC] spmc_id={:#06x} version={}.{}\n",
+        mi.spmc_id,
+        mi.maj_ver,
+        mi.min_ver
+    );
 
     // 4. Parse hardware DTB (HW_CONFIG in x1)
     hypervisor::log_info!("[SPMC] HW config at {:#018x}\n", hw_config_addr);
@@ -319,7 +331,7 @@ pub extern "C" fn rust_main_sel2(
             let isenabler0 = (gicr_sgi_base + 0x0100) as *mut u32;
             core::ptr::write_volatile(isenabler0, ppi_mask);
 
-            core::arch::asm!("isb");
+            core::arch::asm!("isb", options(nostack, nomem));
         }
     }
 
@@ -335,10 +347,15 @@ pub extern "C" fn rust_main_sel2(
     // 5.5b. Enable S-EL1 access to physical timer/counter (CNTHCTL_EL2)
     unsafe {
         let mut cnthctl: u64;
-        core::arch::asm!("mrs {}, cnthctl_el2", out(reg) cnthctl);
+        core::arch::asm!("mrs {}, cnthctl_el2", out(reg) cnthctl, options(nostack, nomem));
         cnthctl |= hypervisor::arch::aarch64::defs::CNTHCTL_EL1PCTEN
             | hypervisor::arch::aarch64::defs::CNTHCTL_EL1PCEN;
-        core::arch::asm!("msr cnthctl_el2, {}", "isb", in(reg) cnthctl);
+        core::arch::asm!(
+            "msr cnthctl_el2, {}",
+            "isb",
+            in(reg) cnthctl,
+            options(nostack, nomem)
+        );
     }
 
     // 5.6. Build Secure Stage-2 for SP1
@@ -354,11 +371,12 @@ pub extern "C" fn rust_main_sel2(
     // Enable Secure Stage-2 by setting HCR_EL2.VM
     unsafe {
         let hcr: u64;
-        core::arch::asm!("mrs {}, hcr_el2", out(reg) hcr);
+        core::arch::asm!("mrs {}, hcr_el2", out(reg) hcr, options(nostack, nomem));
         core::arch::asm!(
             "msr hcr_el2, {hcr}",
             "isb",
             hcr = in(reg) hcr | hypervisor::arch::aarch64::defs::HCR_VM,
+            options(nostack, nomem),
         );
     }
 
@@ -378,8 +396,12 @@ pub extern "C" fn rust_main_sel2(
     };
     let sp1_entry = pkg_base + img_offset;
 
-    hypervisor::log_info!("[SPMC] SP1 package at {:#018x}, img_offset={:#018x}, entry={:#018x}\n",
-        pkg_base, img_offset, sp1_entry);
+    hypervisor::log_info!(
+        "[SPMC] SP1 package at {:#018x}, img_offset={:#018x}, entry={:#018x}\n",
+        pkg_base,
+        img_offset,
+        sp1_entry
+    );
 
     // SP1 UUID from sp_manifest.dts (byte-swapped by sp_mk_generator.py)
     let sp1_uuid: [u32; 4] = [0x12345678, 0x12345678, 0x12345678, 0x12345678];
@@ -401,6 +423,7 @@ pub extern "C" fn rust_main_sel2(
             "msr ttbr0_el1, xzr",
             "msr vbar_el1, xzr",
             "isb",
+            options(nostack, nomem),
         );
     }
 
@@ -421,7 +444,10 @@ pub extern "C" fn rust_main_sel2(
         sp1.transition_to(hypervisor::sp_context::SpState::Idle)
             .expect("SP1 transition failed");
     } else {
-        hypervisor::log_warn!("[SPMC] WARNING: SP1 did not call FFA_MSG_WAIT, x0={:#018x}\n", x0);
+        hypervisor::log_warn!(
+            "[SPMC] WARNING: SP1 did not call FFA_MSG_WAIT, x0={:#018x}\n",
+            x0
+        );
     }
 
     // Store SP1 context globally for dispatch
@@ -441,8 +467,7 @@ pub extern "C" fn rust_main_sel2(
                 hypervisor::platform::SP2_MEM_SIZE,
             )
             .expect("Failed to build SP2 Stage-2");
-            let s2_config2 =
-                hypervisor::secure_stage2::SecureStage2Config::new(mapper2.l0_addr());
+            let s2_config2 = hypervisor::secure_stage2::SecureStage2Config::new(mapper2.l0_addr());
 
             // Parse SPKG header for SP2
             let sp2_img_offset = unsafe {
@@ -475,6 +500,7 @@ pub extern "C" fn rust_main_sel2(
                     "msr ttbr0_el1, xzr",
                     "msr vbar_el1, xzr",
                     "isb",
+                    options(nostack, nomem),
                 );
             }
 
@@ -494,7 +520,10 @@ pub extern "C" fn rust_main_sel2(
                 sp2.transition_to(hypervisor::sp_context::SpState::Idle)
                     .expect("SP2 transition failed");
             } else {
-                hypervisor::log_warn!("[SPMC] WARNING: SP2 did not call FFA_MSG_WAIT, x0={:#018x}\n", x0);
+                hypervisor::log_warn!(
+                    "[SPMC] WARNING: SP2 did not call FFA_MSG_WAIT, x0={:#018x}\n",
+                    x0
+                );
             }
 
             hypervisor::sp_context::register_sp(sp2);
@@ -526,7 +555,10 @@ pub extern "C" fn rust_main_sel2(
         {
             hypervisor::log_info!("[SPMC] Secondary EP registered with SPMD\n");
         } else {
-            hypervisor::log_warn!("[SPMC] WARNING: FFA_SECONDARY_EP_REGISTER failed, x0={:#018x}\n", result.x0);
+            hypervisor::log_warn!(
+                "[SPMC] WARNING: FFA_SECONDARY_EP_REGISTER failed, x0={:#018x}\n",
+                result.x0
+            );
         }
     }
 
@@ -563,11 +595,12 @@ pub extern "C" fn rust_main_sel2_secondary(
     // for dispatch_to_sp() to work (ERET to S-EL1 requires Stage-2 enabled).
     unsafe {
         let hcr: u64;
-        core::arch::asm!("mrs {}, hcr_el2", out(reg) hcr);
+        core::arch::asm!("mrs {}, hcr_el2", out(reg) hcr, options(nostack, nomem));
         core::arch::asm!(
             "msr hcr_el2, {hcr}",
             "isb",
             hcr = in(reg) hcr | hypervisor::arch::aarch64::defs::HCR_VM,
+            options(nostack, nomem),
         );
     }
 
@@ -622,7 +655,10 @@ pub extern "C" fn rust_main_sel2_secondary(
         }
     }
 
-    hypervisor::log_info!("[SPMC] Secondary CPU {} warm-boot, signaling FFA_MSG_WAIT\n", core_id);
+    hypervisor::log_info!(
+        "[SPMC] Secondary CPU {} warm-boot, signaling FFA_MSG_WAIT\n",
+        core_id
+    );
 
     // 3. Signal SPMD: secondary init complete, receive first FF-A request.
     // FFA_MSG_WAIT tells SPMD this CPU's S-EL2 init is done.
@@ -693,10 +729,10 @@ pub extern "C" fn rust_main_secondary(cpu_id: usize) -> ! {
     // 3. HCR_EL2 is set by exception::init(). Enable Stage-2 and clear TWI.
     unsafe {
         let mut hcr: u64;
-        core::arch::asm!("mrs {}, hcr_el2", out(reg) hcr);
+        core::arch::asm!("mrs {}, hcr_el2", out(reg) hcr, options(nostack, nomem));
         hcr |= HCR_VM; // Enable Stage-2
         hcr &= !HCR_TWI; // Don't trap WFI (multi-pCPU: WFI passthrough)
-        core::arch::asm!("msr hcr_el2, {}", "isb", in(reg) hcr);
+        core::arch::asm!("msr hcr_el2, {}", "isb", in(reg) hcr, options(nostack, nomem));
     }
 
     // 4. Configure CPTR_EL2 / MDCR_EL2 (don't trap FP/SIMD/debug)
@@ -731,7 +767,7 @@ pub extern "C" fn rust_main_secondary(cpu_id: usize) -> ! {
 
     // 7. Idle loop: WFE until PSCI CPU_ON sets our request
     loop {
-        unsafe { core::arch::asm!("wfe") };
+        unsafe { core::arch::asm!("wfe", options(nostack, nomem)) };
         if let Some((entry, ctx)) = hypervisor::global::PENDING_CPU_ON_PER_VCPU[cpu_id].take() {
             hypervisor::log_info!("[SMP] pCPU {} got CPU_ON, entering guest\n", cpu_id);
             secondary_enter_guest(cpu_id, entry, ctx);
@@ -813,7 +849,7 @@ fn secondary_enter_guest(cpu_id: usize, entry: u64, ctx_id: u64) {
             }
             Err("WFI") => {
                 // WFI: execute real WFI — pCPU idles until next interrupt
-                unsafe { core::arch::asm!("wfi") };
+                unsafe { core::arch::asm!("wfi", options(nostack, nomem)) };
             }
             Err(_) => {
                 // Other exit — loop back
@@ -842,7 +878,7 @@ fn panic(info: &PanicInfo) -> ! {
 
     loop {
         unsafe {
-            core::arch::asm!("wfe");
+            core::arch::asm!("wfe", options(nostack, nomem));
         }
     }
 }
