@@ -277,6 +277,21 @@ pub struct VcpuContext {
     pub spsr_el2: u64,
 }
 
+// Compile-time layout checks for arch/aarch64/exception.S save/restore offsets.
+const _: [(); 248] = [(); core::mem::size_of::<GeneralPurposeRegs>()];
+const _: [(); 136] = [(); core::mem::size_of::<SystemRegs>()];
+const _: [(); 408] = [(); core::mem::size_of::<VcpuContext>()];
+
+const _: [(); 0] = [(); core::mem::offset_of!(VcpuContext, gp_regs)];
+const _: [(); 248] = [(); core::mem::offset_of!(VcpuContext, sys_regs)];
+const _: [(); 384] = [(); core::mem::offset_of!(VcpuContext, sp)];
+const _: [(); 392] = [(); core::mem::offset_of!(VcpuContext, pc)];
+const _: [(); 400] = [(); core::mem::offset_of!(VcpuContext, spsr_el2)];
+
+const _: [(); 0] = [(); core::mem::offset_of!(SystemRegs, sp_el1)];
+const _: [(); 8] = [(); core::mem::offset_of!(SystemRegs, elr_el1)];
+const _: [(); 16] = [(); core::mem::offset_of!(SystemRegs, spsr_el1)];
+
 impl Default for VcpuContext {
     fn default() -> Self {
         Self {

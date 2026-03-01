@@ -29,6 +29,7 @@ Two-pass review of the hypervisor codebase:
 | M6 | ✅ Fixed | Removed `.expect()` from SPMC event loop transitions in `spmc_handler.rs`; now returns FF-A error/false on transition failure. |
 | M4 | ✅ Fixed | Added `nomem` to remaining pure sysreg/TLBI/barrier `asm!` sites (`guest_loader.rs`, `main.rs`, `sel2_mmu.rs`, `stage2_walker.rs`, `mmu.rs`); kept MMIO `str/strb` sites as `nostack` only. |
 | H7 | ✅ Fixed | Added explicit `// SAFETY:` rationale for `copy_nonoverlapping` into guest RX buffers in `proxy.rs` (including bounds/non-overlap invariants). |
+| M5 | ✅ Fixed | Added compile-time `size_of`/`offset_of` assertions for `VcpuContext`/`SystemRegs` to enforce `exception.S`-dependent layout offsets. |
 
 ---
 
