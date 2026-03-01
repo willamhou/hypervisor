@@ -745,7 +745,13 @@ fn handle_mem_retrieve_req(context: &mut VcpuContext) -> bool {
     if is_vm_partition(info.receiver_id) {
         #[cfg(feature = "linux_guest")]
         {
-            let recv_vm_id = partition_id_to_vm_id(info.receiver_id).unwrap();
+            let recv_vm_id = match partition_id_to_vm_id(info.receiver_id) {
+                Some(id) => id,
+                None => {
+                    ffa_error(context, FFA_INVALID_PARAMETERS);
+                    return true;
+                }
+            };
             let l0_pa =
                 crate::global::PER_VM_VTTBR[recv_vm_id].load(core::sync::atomic::Ordering::Acquire);
             if l0_pa != 0 {
@@ -823,7 +829,13 @@ fn handle_mem_relinquish(context: &mut VcpuContext) -> bool {
     if is_vm_partition(info.receiver_id) {
         #[cfg(feature = "linux_guest")]
         {
-            let recv_vm_id = partition_id_to_vm_id(info.receiver_id).unwrap();
+            let recv_vm_id = match partition_id_to_vm_id(info.receiver_id) {
+                Some(id) => id,
+                None => {
+                    ffa_error(context, FFA_INVALID_PARAMETERS);
+                    return true;
+                }
+            };
             let l0_pa =
                 crate::global::PER_VM_VTTBR[recv_vm_id].load(core::sync::atomic::Ordering::Acquire);
             if l0_pa != 0 {
