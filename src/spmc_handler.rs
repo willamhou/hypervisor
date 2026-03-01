@@ -592,8 +592,12 @@ fn handle_sp_exit(sp: &mut crate::sp_context::SpContext, sp_id: u16) -> SmcResul
                 sp_id,
                 FIQ_PREEMPT_COUNT[cpu].load(Ordering::Relaxed)
             );
-            sp.transition_to(crate::sp_context::SpState::Preempted)
-                .expect("SP Preempted transition failed");
+            if sp
+                .transition_to(crate::sp_context::SpState::Preempted)
+                .is_err()
+            {
+                return make_error(ffa::FFA_DENIED as u64);
+            }
             sp.set_preempted_cpu(cpu);
 
             // Check if another SP has a pending interrupt (cross-SP preemption)
@@ -679,8 +683,9 @@ fn handle_sp_exit(sp: &mut crate::sp_context::SpContext, sp_id: u16) -> SmcResul
             }
             _ => {
                 // Normal exit (FFA_DIRECT_RESP, FFA_MSG_WAIT, etc.)
-                sp.transition_to(crate::sp_context::SpState::Idle)
-                    .expect("SP Idle transition failed");
+                if sp.transition_to(crate::sp_context::SpState::Idle).is_err() {
+                    return make_error(ffa::FFA_DENIED as u64);
+                }
                 sp.clear_preempted_cpu();
                 sp.clear_owner_cpu();
                 return SmcResult8 {
@@ -697,10 +702,15 @@ fn handle_sp_exit(sp: &mut crate::sp_context::SpContext, sp_id: u16) -> SmcResul
         }
 
         // Re-enter SP with the handler's result (Running→Idle→Running)
-        sp.transition_to(crate::sp_context::SpState::Idle)
-            .expect("SP Idle transition failed (re-enter)");
-        sp.transition_to(crate::sp_context::SpState::Running)
-            .expect("SP Running transition failed (re-enter)");
+        if sp.transition_to(crate::sp_context::SpState::Idle).is_err() {
+            return make_error(ffa::FFA_DENIED as u64);
+        }
+        if sp
+            .transition_to(crate::sp_context::SpState::Running)
+            .is_err()
+        {
+            return make_error(ffa::FFA_DENIED as u64);
+        }
 
         let cpu = sel2_cpu_id();
         SP_IRQ_PREEMPTED[cpu].store(false, Ordering::Release);
@@ -902,12 +912,17 @@ fn dispatch_interrupt_to_sp(sp_id: u16) -> bool {
     clear_secure_stage2();
     let preempted = SP_IRQ_PREEMPTED[cpu].swap(false, Ordering::Acquire);
     if preempted {
-        sp.transition_to(crate::sp_context::SpState::Preempted)
-            .expect("SP Preempted transition failed");
+        if sp
+            .transition_to(crate::sp_context::SpState::Preempted)
+            .is_err()
+        {
+            return false;
+        }
         sp.set_preempted_cpu(cpu);
     } else {
-        sp.transition_to(crate::sp_context::SpState::Idle)
-            .expect("SP Idle transition failed");
+        if sp.transition_to(crate::sp_context::SpState::Idle).is_err() {
+            return false;
+        }
         sp.clear_preempted_cpu();
         sp.clear_owner_cpu();
     }

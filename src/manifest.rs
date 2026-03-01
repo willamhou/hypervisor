@@ -3,6 +3,7 @@
 
 #[cfg(feature = "sel2")]
 use crate::ffa::smc_forward;
+use core::cell::UnsafeCell;
 
 /// Parsed SPMC manifest properties.
 pub struct SpMcManifest {
@@ -11,7 +12,15 @@ pub struct SpMcManifest {
     pub min_ver: u16,
 }
 
-static mut MANIFEST: Option<SpMcManifest> = None;
+struct ManifestCell(UnsafeCell<Option<SpMcManifest>>);
+unsafe impl Sync for ManifestCell {}
+
+static MANIFEST: ManifestCell = ManifestCell(UnsafeCell::new(None));
+static DEFAULT_MANIFEST: SpMcManifest = SpMcManifest {
+    spmc_id: 0x8000,
+    maj_ver: 1,
+    min_ver: 1,
+};
 
 /// Parse TOS_FW_CONFIG DTB passed in x0 by SPMD.
 ///
@@ -45,7 +54,7 @@ pub fn init(manifest_addr: usize) {
                 .and_then(|p| p.as_usize())
                 .unwrap_or(1) as u16;
             unsafe {
-                MANIFEST = Some(SpMcManifest {
+                *MANIFEST.0.get() = Some(SpMcManifest {
                     spmc_id,
                     maj_ver: maj,
                     min_ver: min,
@@ -61,7 +70,7 @@ pub fn init(manifest_addr: usize) {
 
 fn set_defaults() {
     unsafe {
-        MANIFEST = Some(SpMcManifest {
+        *MANIFEST.0.get() = Some(SpMcManifest {
             spmc_id: 0x8000,
             maj_ver: 1,
             min_ver: 1,
@@ -71,11 +80,7 @@ fn set_defaults() {
 
 /// Get parsed manifest.
 pub fn manifest_info() -> &'static SpMcManifest {
-    unsafe {
-        (*core::ptr::addr_of!(MANIFEST))
-            .as_ref()
-            .expect("manifest not initialized")
-    }
+    unsafe { (*MANIFEST.0.get()).as_ref().unwrap_or(&DEFAULT_MANIFEST) }
 }
 
 /// Signal SPMD that SPMC init is complete via FFA_MSG_WAIT.

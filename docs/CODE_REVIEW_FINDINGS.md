@@ -23,6 +23,10 @@ Two-pass review of the hypervisor codebase:
 | H11 | ✅ Fixed | Added `isb` in timer write helpers: `set_ctl()`, `set_cval()`, `set_tval()`, `init_hypervisor_timer()`. |
 | H8 | ✅ Fixed | Added `options(nostack, nomem)` to remaining `asm!` sites in `exception.rs`, `main.rs`, `percpu.rs`, `vm.rs`. |
 | M1 | ✅ Fixed | Replaced FF-A call path `.unwrap()` in `proxy.rs` (MEM_RETRIEVE/MEM_RELINQUISH receiver VM ID) with explicit `FFA_INVALID_PARAMETERS` return. |
+| H6 | ✅ Fixed | `sp_context` no longer exposes `get_sp_mut() -> &'static mut SpContext`; access now goes through lock + `SpDispatchGuard`. |
+| M2 | ✅ Fixed | Replaced `static mut MANIFEST` with `UnsafeCell` wrapper in `manifest.rs`. |
+| M3 | ✅ Fixed | Replaced `static mut PROXY_TX_BUF/PROXY_RX_BUF` with `UnsafeCell` wrappers in `proxy.rs`. |
+| M6 | ✅ Fixed | Removed `.expect()` from SPMC event loop transitions in `spmc_handler.rs`; now returns FF-A error/false on transition failure. |
 
 ---
 

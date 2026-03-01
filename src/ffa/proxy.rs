@@ -5,6 +5,8 @@
 //! memory sharing operations (pKVM-compatible).
 
 use core::sync::atomic::{AtomicBool, Ordering};
+#[cfg(feature = "tfa_boot")]
+use core::cell::UnsafeCell;
 
 #[cfg(feature = "linux_guest")]
 use crate::arch::aarch64::defs::*;
@@ -23,10 +25,15 @@ static SPMC_PRESENT: AtomicBool = AtomicBool::new(false);
 struct AlignedPage([u8; 4096]);
 
 #[cfg(feature = "tfa_boot")]
-#[allow(dead_code)] // Reserved for future MEM_SHARE descriptor forwarding to SPMC
-static mut PROXY_TX_BUF: AlignedPage = AlignedPage([0u8; 4096]);
+struct ProxyPageCell(UnsafeCell<AlignedPage>);
 #[cfg(feature = "tfa_boot")]
-static mut PROXY_RX_BUF: AlignedPage = AlignedPage([0u8; 4096]);
+unsafe impl Sync for ProxyPageCell {}
+
+#[cfg(feature = "tfa_boot")]
+#[allow(dead_code)] // Reserved for future MEM_SHARE descriptor forwarding to SPMC
+static PROXY_TX_BUF: ProxyPageCell = ProxyPageCell(UnsafeCell::new(AlignedPage([0u8; 4096])));
+#[cfg(feature = "tfa_boot")]
+static PROXY_RX_BUF: ProxyPageCell = ProxyPageCell(UnsafeCell::new(AlignedPage([0u8; 4096])));
 
 /// Whether the proxy's RXTX buffers have been successfully registered with SPMD.
 #[cfg(feature = "tfa_boot")]
@@ -44,8 +51,8 @@ pub fn init() {
         crate::log_info!("[FFA] TF-A boot: SPMC present (build-time)\n");
 
         // Register proxy RXTX buffers with SPMD for PARTITION_INFO relay
-        let tx_pa = &raw const PROXY_TX_BUF as u64;
-        let rx_pa = &raw const PROXY_RX_BUF as u64;
+        let tx_pa = PROXY_TX_BUF.0.get() as u64;
+        let rx_pa = PROXY_RX_BUF.0.get() as u64;
         let result = smc_forward::forward_smc8(
             FFA_RXTX_MAP,
             tx_pa,
@@ -385,7 +392,7 @@ fn handle_partition_info_get(context: &mut VcpuContext) -> bool {
         // rx_ipa was validated in handle_rxtx_map() to be within guest RAM.
         // Both are identity-mapped: VA == PA at EL2, IPA == PA for guest.
         unsafe {
-            let src = &raw const PROXY_RX_BUF as *const u8;
+            let src = PROXY_RX_BUF.0.get() as *const u8;
             let dst = mbox.rx_ipa as *mut u8;
             core::ptr::copy_nonoverlapping(src, dst, bytes);
         }
