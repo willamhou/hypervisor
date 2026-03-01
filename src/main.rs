@@ -623,7 +623,7 @@ pub extern "C" fn rust_main_sel2_secondary(
             cptr_tsm = const CPTR_TSM,
             cptr_tcpac = const CPTR_TCPAC,
             out("x0") _,
-            options(nostack),
+            options(nostack, nomem),
         );
     }
 
@@ -751,7 +751,7 @@ pub extern "C" fn rust_main_secondary(cpu_id: usize) -> ! {
             cptr_tsm = const CPTR_TSM,
             cptr_tcpac = const CPTR_TCPAC,
             out("x0") _,
-            options(nostack),
+            options(nostack, nomem),
         );
     }
 

@@ -443,7 +443,7 @@ impl Stage2Walker {
                 "tlbi vmalls12e1is",
                 "dsb ish",
                 "isb",
-                options(nostack),
+                options(nostack, nomem),
             );
         }
     }
@@ -458,7 +458,7 @@ impl Stage2Walker {
                 "dsb ish",
                 "isb",
                 ipa = in(reg) ipa_shifted,
-                options(nostack),
+                options(nostack, nomem),
             );
         }
     }

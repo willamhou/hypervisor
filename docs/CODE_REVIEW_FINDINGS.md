@@ -27,6 +27,8 @@ Two-pass review of the hypervisor codebase:
 | M2 | ✅ Fixed | Replaced `static mut MANIFEST` with `UnsafeCell` wrapper in `manifest.rs`. |
 | M3 | ✅ Fixed | Replaced `static mut PROXY_TX_BUF/PROXY_RX_BUF` with `UnsafeCell` wrappers in `proxy.rs`. |
 | M6 | ✅ Fixed | Removed `.expect()` from SPMC event loop transitions in `spmc_handler.rs`; now returns FF-A error/false on transition failure. |
+| M4 | ✅ Fixed | Added `nomem` to remaining pure sysreg/TLBI/barrier `asm!` sites (`guest_loader.rs`, `main.rs`, `sel2_mmu.rs`, `stage2_walker.rs`, `mmu.rs`); kept MMIO `str/strb` sites as `nostack` only. |
+| H7 | ✅ Fixed | Added explicit `// SAFETY:` rationale for `copy_nonoverlapping` into guest RX buffers in `proxy.rs` (including bounds/non-overlap invariants). |
 
 ---
 

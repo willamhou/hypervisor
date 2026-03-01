@@ -116,12 +116,7 @@ const SCTLR_I: u64 = 1 << 12; // Instruction cache enable
 pub fn install_sel2_stage1_secondary() {
     unsafe {
         // TLB invalidate + barriers
-        core::arch::asm!(
-            "tlbi alle2",
-            "dsb ish",
-            "isb",
-            options(nostack),
-        );
+        core::arch::asm!("tlbi alle2", "dsb ish", "isb", options(nostack, nomem),);
 
         // Configure MMU registers (same values as primary)
         let ttbr0 = &S1_L0 as *const _ as u64;
@@ -133,18 +128,18 @@ pub fn install_sel2_stage1_secondary() {
             mair = in(reg) MAIR_VALUE,
             tcr = in(reg) TCR_VALUE,
             ttbr0 = in(reg) ttbr0,
-            options(nostack),
+            options(nostack, nomem),
         );
 
         // Enable MMU + caches
         let mut sctlr: u64;
-        core::arch::asm!("mrs {}, sctlr_el2", out(reg) sctlr, options(nostack));
+        core::arch::asm!("mrs {}, sctlr_el2", out(reg) sctlr, options(nostack, nomem));
         sctlr |= SCTLR_M | SCTLR_C | SCTLR_I;
         core::arch::asm!(
             "msr sctlr_el2, {sctlr}",
             "isb",
             sctlr = in(reg) sctlr,
-            options(nostack),
+            options(nostack, nomem),
         );
     }
 }
@@ -186,31 +181,25 @@ pub fn init_sel2_stage1() {
     // L2 index = addr >> 21. 0x0800_0000 >> 21 = 64, 0x09E0_0000 >> 21 = 79
     for idx in 64..=79 {
         let addr = (idx as u64) << 21;
-        S1_L2_LOW.0[idx].store(
-            addr | PTE_VALID | PTE_BLOCK | DEVICE_S,
-            Ordering::Relaxed,
-        );
+        S1_L2_LOW.0[idx].store(addr | PTE_VALID | PTE_BLOCK | DEVICE_S, Ordering::Relaxed);
     }
 
     // L2_LOW: Normal Secure blocks for SPMC + SPs + heap (0x0E00_0000..0x0FFF_FFFF)
     // 0x0E00_0000 >> 21 = 112, 0x0FE0_0000 >> 21 = 127
     for idx in 112..=127 {
         let addr = (idx as u64) << 21;
-        S1_L2_LOW.0[idx].store(
-            addr | PTE_VALID | PTE_BLOCK | NORMAL_S,
-            Ordering::Relaxed,
-        );
+        S1_L2_LOW.0[idx].store(addr | PTE_VALID | PTE_BLOCK | NORMAL_S, Ordering::Relaxed);
     }
 
     // ── 2. Barriers + TLB invalidate ────────────────────────────────
     unsafe {
         // Ensure all table writes are visible before enabling MMU
         core::arch::asm!(
-            "dsb  ishst",       // ensure stores are complete
-            "tlbi alle2",       // invalidate all S-EL2 TLB entries
-            "dsb  ish",         // wait for TLB invalidation
-            "isb",              // synchronize context
-            options(nostack),
+            "dsb  ishst", // ensure stores are complete
+            "tlbi alle2", // invalidate all S-EL2 TLB entries
+            "dsb  ish",   // wait for TLB invalidation
+            "isb",        // synchronize context
+            options(nostack, nomem),
         );
 
         // ── 3. Configure MMU registers ──────────────────────────────
@@ -223,18 +212,18 @@ pub fn init_sel2_stage1() {
             mair = in(reg) MAIR_VALUE,
             tcr = in(reg) TCR_VALUE,
             ttbr0 = in(reg) ttbr0,
-            options(nostack),
+            options(nostack, nomem),
         );
 
         // ── 4. Enable MMU + caches ──────────────────────────────────
         let mut sctlr: u64;
-        core::arch::asm!("mrs {}, sctlr_el2", out(reg) sctlr, options(nostack));
+        core::arch::asm!("mrs {}, sctlr_el2", out(reg) sctlr, options(nostack, nomem));
         sctlr |= SCTLR_M | SCTLR_C | SCTLR_I;
         core::arch::asm!(
             "msr sctlr_el2, {sctlr}",
             "isb",
             sctlr = in(reg) sctlr,
-            options(nostack),
+            options(nostack, nomem),
         );
     }
 }

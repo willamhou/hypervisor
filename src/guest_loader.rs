@@ -72,8 +72,11 @@ impl GuestConfig {
                         (imm26 as i32) * 4
                     };
                     let target = (load_addr as i64 + offset as i64) as u64;
-                    crate::log_info!("[GUEST] Branch to offset {:#018x}, target = {:#018x}\n",
-                        offset as u64, target);
+                    crate::log_info!(
+                        "[GUEST] Branch to offset {:#018x}, target = {:#018x}\n",
+                        offset as u64,
+                        target
+                    );
                     target
                 } else {
                     crate::log_info!("[GUEST] Using load address as entry\n");
@@ -274,7 +277,7 @@ pub fn run_guest(config: &GuestConfig) -> Result<(), &'static str> {
                 cptr_tsm = const CPTR_TSM,
                 cptr_tcpac = const CPTR_TCPAC,
                 out("x0") _,
-                options(nostack),
+                options(nostack, nomem),
             );
         }
         crate::log_info!("[GUEST] EL1/EL2 registers initialized\n");
@@ -293,7 +296,7 @@ pub fn run_guest(config: &GuestConfig) -> Result<(), &'static str> {
                 "isb",
                 twe = const HCR_TWE,
                 out("x0") _,
-                options(nostack),
+                options(nostack, nomem),
             );
             #[cfg(feature = "multi_pcpu")]
             core::arch::asm!(
@@ -305,7 +308,7 @@ pub fn run_guest(config: &GuestConfig) -> Result<(), &'static str> {
                 twe = const HCR_TWE,
                 twi = const HCR_TWI,
                 out("x0") _,
-                options(nostack),
+                options(nostack, nomem),
             );
         }
     }
@@ -333,7 +336,10 @@ pub fn run_guest(config: &GuestConfig) -> Result<(), &'static str> {
     }
 
     // Enter guest
-    crate::log_info!("[GUEST] Entering guest at {:#018x}...\n", config.entry_point);
+    crate::log_info!(
+        "[GUEST] Entering guest at {:#018x}...\n",
+        config.entry_point
+    );
     crate::log_info!("========================================\n\n");
 
     // Run VM - use SMP scheduling for Linux, single vCPU for others
@@ -456,7 +462,11 @@ fn wake_secondary_pcpus() {
         if ret == PSCI_SUCCESS {
             crate::log_info!("[SMP] PSCI CPU_ON for pCPU {} -> SUCCESS\n", cpu_id);
         } else {
-            crate::log_warn!("[SMP] PSCI CPU_ON for pCPU {} -> FAILED ({:#018x})\n", cpu_id, ret);
+            crate::log_warn!(
+                "[SMP] PSCI CPU_ON for pCPU {} -> FAILED ({:#018x})\n",
+                cpu_id,
+                ret
+            );
         }
     }
     crate::log_info!("[SMP] All secondary pCPUs signaled\n");
@@ -478,8 +488,11 @@ pub fn run_multi_vm_guests() -> Result<(), &'static str> {
 
     // --- VM 0 setup ---
     let config0 = GuestConfig::linux_default();
-    crate::log_info!("[MULTI-VM] VM 0: entry={:#018x} dtb={:#018x}\n",
-        config0.entry_point, config0.dtb_addr);
+    crate::log_info!(
+        "[MULTI-VM] VM 0: entry={:#018x} dtb={:#018x}\n",
+        config0.entry_point,
+        config0.dtb_addr
+    );
 
     let mut vm0 = Vm::new(0);
     vm0.init_memory(config0.load_addr, config0.mem_size);
@@ -506,8 +519,11 @@ pub fn run_multi_vm_guests() -> Result<(), &'static str> {
 
     // --- VM 1 setup ---
     let config1 = GuestConfig::linux_vm1();
-    crate::log_info!("[MULTI-VM] VM 1: entry={:#018x} dtb={:#018x}\n",
-        config1.entry_point, config1.dtb_addr);
+    crate::log_info!(
+        "[MULTI-VM] VM 1: entry={:#018x} dtb={:#018x}\n",
+        config1.entry_point,
+        config1.dtb_addr
+    );
 
     // Save VM 0's Stage-2 before VM 1 creates its own
     let vm0_vttbr = vm0.vttbr();
@@ -563,7 +579,7 @@ pub fn run_multi_vm_guests() -> Result<(), &'static str> {
             cptr_tsm = const CPTR_TSM,
             cptr_tcpac = const CPTR_TCPAC,
             out("x0") _,
-            options(nostack),
+            options(nostack, nomem),
         );
     }
 
@@ -576,7 +592,7 @@ pub fn run_multi_vm_guests() -> Result<(), &'static str> {
             "isb",
             twe = const HCR_TWE,
             out("x0") _,
-            options(nostack),
+            options(nostack, nomem),
         );
     }
 
@@ -724,7 +740,10 @@ fn test_ffa_vm_to_vm_integration(vm0_vttbr: u64) {
             crate::log_info!("  [PASS] 5: Receiver PTE SW = SharedBorrowed\n");
             pass += 1;
         } else {
-            crate::log_info!("  [FAIL] 5: Receiver PTE SW = {:#04x}\n", sw.unwrap_or(0xFF));
+            crate::log_info!(
+                "  [FAIL] 5: Receiver PTE SW = {:#04x}\n",
+                sw.unwrap_or(0xFF)
+            );
             fail += 1;
         }
     }
@@ -738,7 +757,10 @@ fn test_ffa_vm_to_vm_integration(vm0_vttbr: u64) {
             crate::log_info!("  [PASS] 6: Receiver S2AP = RW\n");
             pass += 1;
         } else {
-            crate::log_info!("  [FAIL] 6: Receiver S2AP = {:#04x}\n", s2ap.unwrap_or(0xFF));
+            crate::log_info!(
+                "  [FAIL] 6: Receiver S2AP = {:#04x}\n",
+                s2ap.unwrap_or(0xFF)
+            );
             fail += 1;
         }
     }
@@ -767,7 +789,10 @@ fn test_ffa_vm_to_vm_integration(vm0_vttbr: u64) {
             crate::log_info!("  [PASS] 8: Receiver page unmapped after RELINQUISH\n");
             pass += 1;
         } else {
-            crate::log_info!("  [FAIL] 8: Receiver page still mapped, SW={:#04x}\n", sw.unwrap());
+            crate::log_info!(
+                "  [FAIL] 8: Receiver page still mapped, SW={:#04x}\n",
+                sw.unwrap()
+            );
             fail += 1;
         }
     }

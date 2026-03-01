@@ -391,6 +391,11 @@ fn handle_partition_info_get(context: &mut VcpuContext) -> bool {
         // Copy descriptors from proxy RX buffer to guest RX buffer.
         // rx_ipa was validated in handle_rxtx_map() to be within guest RAM.
         // Both are identity-mapped: VA == PA at EL2, IPA == PA for guest.
+        // SAFETY:
+        // - `src` points to the proxy's dedicated 4KB RX page.
+        // - `dst` is guest RX IPA validated by `handle_rxtx_map()`.
+        // - `bytes` is bounded by `min(4096, page_count * 4096)` above.
+        // - Source and destination are distinct buffers, so non-overlap holds.
         unsafe {
             let src = PROXY_RX_BUF.0.get() as *const u8;
             let dst = mbox.rx_ipa as *mut u8;
@@ -1061,6 +1066,10 @@ fn handle_msg_send2(context: &mut VcpuContext) -> bool {
 
     // Copy header + payload from sender TX to receiver RX
     let copy_len = core::cmp::min((8 + msg_size) as usize, 4096);
+    // SAFETY:
+    // - `tx_ipa_copy` and `recv_mbox.rx_ipa` are guest mailbox IPAs validated on RXTX_MAP.
+    // - `copy_len <= 4096`, so we never exceed a single mailbox page.
+    // - Sender TX and receiver RX belong to different mailboxes, so no overlap.
     unsafe {
         core::ptr::copy_nonoverlapping(
             tx_ipa_copy as *const u8,

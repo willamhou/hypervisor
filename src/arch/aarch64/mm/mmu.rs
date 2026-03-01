@@ -565,7 +565,7 @@ impl DynamicIdentityMapper {
                 "tlbi vmalls12e1is",
                 "dsb ish",
                 "isb",
-                options(nostack),
+                options(nostack, nomem),
             );
         }
     }
@@ -580,7 +580,7 @@ impl DynamicIdentityMapper {
                 "dsb ish",
                 "isb",
                 ipa = in(reg) ipa_shifted,
-                options(nostack),
+                options(nostack, nomem),
             );
         }
     }
