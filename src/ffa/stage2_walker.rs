@@ -17,6 +17,11 @@ pub struct Stage2Walker {
 }
 
 impl Stage2Walker {
+    const MEMATTR_SHIFT: u32 = 2;
+    const MEMATTR_MASK: u64 = 0xF << Self::MEMATTR_SHIFT;
+    const MEMATTR_NORMAL: u8 = 0b1111;
+    const S2AP_RW: u8 = 0b11;
+
     #[inline(always)]
     fn entry_ptr(table: u64, idx: usize) -> *mut u64 {
         // SAFETY: callers pass a page-table base from a valid descriptor and
@@ -90,6 +95,16 @@ impl Stage2Walker {
     pub fn read_s2ap(&self, ipa: u64) -> Option<u8> {
         let pte = self.walk_to_leaf(ipa)?;
         Some(((pte >> S2AP_SHIFT) & 0x3) as u8)
+    }
+
+    /// Return true when IPA resolves to a Normal-memory, RW-mapped leaf PTE.
+    pub fn is_normal_rw_mapped(&self, ipa: u64) -> bool {
+        let Some(pte) = self.walk_to_leaf(ipa) else {
+            return false;
+        };
+        let memattr = ((pte & Self::MEMATTR_MASK) >> Self::MEMATTR_SHIFT) as u8;
+        let s2ap = ((pte & S2AP_MASK) >> S2AP_SHIFT) as u8;
+        memattr == Self::MEMATTR_NORMAL && s2ap == Self::S2AP_RW
     }
 
     /// Write S2AP bits [7:6] on the leaf PTE + TLB invalidation.

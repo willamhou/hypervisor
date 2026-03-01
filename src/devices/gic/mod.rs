@@ -28,8 +28,8 @@ fn apply_stage2_gicd_trap(
     mapper: &mut crate::arch::aarch64::mm::mmu::DynamicIdentityMapper,
 ) -> Result<(), &'static str> {
     for page in 0..16u64 {
-        let addr =
-            crate::dtb::platform_info().gicd_base + page * crate::arch::aarch64::defs::PAGE_SIZE_4KB;
+        let addr = crate::dtb::platform_info().gicd_base
+            + page * crate::arch::aarch64::defs::PAGE_SIZE_4KB;
         mapper.unmap_4kb_page(addr)?;
     }
     Ok(())

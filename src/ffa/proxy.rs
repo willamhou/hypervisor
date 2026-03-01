@@ -4,9 +4,9 @@
 //! Validates page ownership via Stage-2 PTE SW bits before allowing
 //! memory sharing operations (pKVM-compatible).
 
-use core::sync::atomic::{AtomicBool, Ordering};
 #[cfg(feature = "tfa_boot")]
 use core::cell::UnsafeCell;
+use core::sync::atomic::{AtomicBool, Ordering};
 
 #[cfg(feature = "linux_guest")]
 use crate::arch::aarch64::defs::*;
@@ -270,8 +270,9 @@ fn handle_rxtx_map(context: &mut VcpuContext) -> bool {
     // direct the proxy to write descriptors into hypervisor code/heap.
     #[cfg(feature = "linux_guest")]
     {
+        let vm_id = crate::global::current_vm_id();
         let buf_size = page_count as u64 * 4096;
-        if !is_guest_ram(tx_ipa, buf_size) || !is_guest_ram(rx_ipa, buf_size) {
+        if !is_guest_ram(vm_id, tx_ipa, buf_size) || !is_guest_ram(vm_id, rx_ipa, buf_size) {
             ffa_error(context, FFA_INVALID_PARAMETERS);
             return true;
         }
@@ -1123,9 +1124,50 @@ fn handle_msg_wait(context: &mut VcpuContext) -> bool {
 /// Prevents a malicious guest from directing the proxy to write into
 /// hypervisor memory (code, heap, page tables) via RXTX_MAP.
 #[cfg(feature = "linux_guest")]
-fn is_guest_ram(ipa: u64, len: u64) -> bool {
-    let ram_start = crate::platform::GUEST_LOAD_ADDR;
-    let ram_size = crate::platform::LINUX_MEM_SIZE;
+fn is_guest_ram(vm_id: usize, ipa: u64, len: u64) -> bool {
+    if len == 0 {
+        return false;
+    }
+    let end = match ipa.checked_add(len) {
+        Some(v) => v,
+        None => return false,
+    };
+
+    // Prefer the active Stage-2 context (VTTBR_EL2) when it matches the caller VM.
+    // In unit tests / early boot, VTTBR_EL2 may be zero or unrelated.
+    let mut active_l0: u64 = 0;
+    let mut active_vmid: u16 = 0;
+    // SAFETY: read-only system register access at EL2.
+    unsafe {
+        let mut vttbr: u64;
+        core::arch::asm!("mrs {}, vttbr_el2", out(reg) vttbr, options(nostack, nomem));
+        active_l0 = vttbr & crate::arch::aarch64::defs::PTE_ADDR_MASK;
+        active_vmid = ((vttbr >> 48) & 0xFFFF) as u16;
+    }
+
+    if active_l0 != 0 && active_vmid as usize == vm_id {
+        let walker = crate::ffa::stage2_walker::Stage2Walker::new(active_l0);
+        let first_page = ipa & !crate::arch::aarch64::defs::PAGE_MASK_4KB;
+        let last_page = (end - 1) & !crate::arch::aarch64::defs::PAGE_MASK_4KB;
+        let mut page = first_page;
+        loop {
+            if !walker.is_normal_rw_mapped(page) {
+                return false;
+            }
+            if page == last_page {
+                break;
+            }
+            page += crate::arch::aarch64::defs::PAGE_SIZE_4KB;
+        }
+        return true;
+    }
+
+    // Fallback for unit-test / early-init paths before Stage-2 is installed.
+    let (ram_start, ram_size) = match vm_id {
+        0 => (crate::platform::GUEST_LOAD_ADDR, crate::platform::LINUX_MEM_SIZE),
+        1 => (crate::platform::VM1_GUEST_LOAD_ADDR, crate::platform::VM1_LINUX_MEM_SIZE),
+        _ => return false,
+    };
     ipa >= ram_start && len <= ram_size && ipa <= ram_start + ram_size - len
 }
 

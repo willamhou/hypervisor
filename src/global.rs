@@ -457,8 +457,8 @@ pub fn inject_spi(intid: u32) {
             if target != current {
                 // Send SGI 0 to target pCPU to wake it from WFI
                 let val: u64 = 1u64 << target; // TargetList only, INTID=0
-                // SAFETY: EL2 owns this sysreg programming path and value only
-                // targets the selected CPU in Aff0.
+                                               // SAFETY: EL2 owns this sysreg programming path and value only
+                                               // targets the selected CPU in Aff0.
                 unsafe {
                     core::arch::asm!(
                         "msr icc_sgi1r_el1, {val}",

@@ -294,7 +294,7 @@ pub fn run_ffa_test() {
     // Test 16: Parse undersized descriptor → INVALID_PARAMETERS
     {
         let buf = [0u8; 16]; // Too small for FfaMemRegion (48 bytes)
-        // SAFETY: Intentionally passes undersized buffer to validate parser error handling path.
+                             // SAFETY: Intentionally passes undersized buffer to validate parser error handling path.
         let parsed = unsafe { ffa::descriptors::parse_mem_region(buf.as_ptr(), 16) };
         if let Err(code) = parsed {
             if code == ffa::FFA_INVALID_PARAMETERS {

@@ -299,8 +299,9 @@ impl Vm {
                     if reg.action != phase || reg.priority != prio {
                         continue;
                     }
-                    (reg.apply)(reg, &mut mapper)
-                        .unwrap_or_else(|_| panic!("Failed to apply Stage-2 region '{}'", reg.name));
+                    (reg.apply)(reg, &mut mapper).unwrap_or_else(|_| {
+                        panic!("Failed to apply Stage-2 region '{}'", reg.name)
+                    });
                     crate::log_info!(
                         "[VM] Stage-2 region applied: {} (prio={} {:?} {:?} {:?} {:?})\n",
                         reg.name,

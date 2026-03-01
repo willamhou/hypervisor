@@ -1142,7 +1142,7 @@ fn handle_rxtx_map(req: &SmcResult8) -> SmcResult8 {
 
     let nwd = nwd_rxtx_mut();
     if nwd.mapped {
-            return make_error(ffa::FFA_DENIED as u64);
+        return make_error(ffa::FFA_DENIED as u64);
     }
     nwd.tx_pa = tx_pa;
     nwd.rx_pa = rx_pa;
@@ -1165,7 +1165,7 @@ fn handle_rxtx_map(req: &SmcResult8) -> SmcResult8 {
 fn handle_rxtx_unmap() -> SmcResult8 {
     let nwd = nwd_rxtx_mut();
     if !nwd.mapped {
-            return make_error(ffa::FFA_DENIED as u64);
+        return make_error(ffa::FFA_DENIED as u64);
     }
     nwd.tx_pa = 0;
     nwd.rx_pa = 0;

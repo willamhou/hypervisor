@@ -396,12 +396,7 @@ impl SpContext {
 
         for slot in self.pending_irqs.iter() {
             if slot
-                .compare_exchange(
-                    NO_PENDING_IRQ,
-                    intid,
-                    Ordering::AcqRel,
-                    Ordering::Acquire,
-                )
+                .compare_exchange(NO_PENDING_IRQ, intid, Ordering::AcqRel, Ordering::Acquire)
                 .is_ok()
             {
                 return;
@@ -446,7 +441,8 @@ impl SpContext {
 
     /// Clear recorded preempted CPU ownership.
     pub fn clear_preempted_cpu(&self) {
-        self.preempted_cpu.store(NO_PREEMPTED_CPU, Ordering::Release);
+        self.preempted_cpu
+            .store(NO_PREEMPTED_CPU, Ordering::Release);
     }
 
     /// Return current owner CPU of this SP context, if any.

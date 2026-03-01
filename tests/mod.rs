@@ -59,13 +59,19 @@ register_tests!(
     ("dtb", test_dtb::run_dtb_test),
     ("allocator", test_allocator::run_allocator_test),
     ("heap", test_heap::run_heap_test),
-    ("dynamic_pagetable", test_dynamic_pagetable::run_dynamic_pt_test),
+    (
+        "dynamic_pagetable",
+        test_dynamic_pagetable::run_dynamic_pt_test
+    ),
     ("multi_vcpu", test_multi_vcpu::run_multi_vcpu_test),
     ("scheduler", test_scheduler::run_scheduler_test),
     ("vm_scheduler", test_vm_scheduler::run_vm_scheduler_test),
     ("mmio", test_mmio::run_mmio_test),
     ("gicv3_virt", test_gicv3_virt::run_gicv3_virt_test),
-    ("complete_interrupt", test_complete_interrupt::run_complete_interrupt_test),
+    (
+        "complete_interrupt",
+        test_complete_interrupt::run_complete_interrupt_test
+    ),
     ("guest", test_guest::run_test),
     ("guest_loader", test_guest_loader::run_test),
     ("simple_guest", test_simple_guest::run_test),
@@ -74,15 +80,27 @@ register_tests!(
     ("gicr", test_gicr::run_gicr_test),
     ("global", test_global::run_global_test),
     ("guest_irq", test_guest_irq::run_irq_test),
-    ("device_routing", test_device_routing::run_device_routing_test),
-    ("vm_state_isolation", test_vm_state_isolation::run_vm_state_isolation_test),
+    (
+        "device_routing",
+        test_device_routing::run_device_routing_test
+    ),
+    (
+        "vm_state_isolation",
+        test_vm_state_isolation::run_vm_state_isolation_test
+    ),
     ("vmid_vttbr", test_vmid_vttbr::run_vmid_vttbr_test),
-    ("multi_vm_devices", test_multi_vm_devices::run_multi_vm_devices_test),
+    (
+        "multi_vm_devices",
+        test_multi_vm_devices::run_multi_vm_devices_test
+    ),
     ("vm_activate", test_vm_activate::run_vm_activate_test),
     ("net_rx_ring", test_net_rx_ring::run_net_rx_ring_test),
     ("vswitch", test_vswitch::run_vswitch_test),
     ("virtio_net", test_virtio_net::run_virtio_net_test),
-    ("page_ownership", test_page_ownership::run_page_ownership_test),
+    (
+        "page_ownership",
+        test_page_ownership::run_page_ownership_test
+    ),
     ("pl031", test_pl031::run_pl031_test),
     ("ffa", test_ffa::run_ffa_test),
     ("spmc_handler", test_spmc_handler::run_tests),
@@ -91,5 +109,8 @@ register_tests!(
     ("log", test_log::run_log_test),
     // Must stay last before optional guest boots; this test does not return.
     #[cfg(not(any(feature = "linux_guest", feature = "guest")))]
-    ("guest_interrupt", test_guest_interrupt::run_guest_interrupt_test),
+    (
+        "guest_interrupt",
+        test_guest_interrupt::run_guest_interrupt_test
+    ),
 );
