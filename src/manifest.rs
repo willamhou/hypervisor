@@ -34,6 +34,7 @@ pub fn init(manifest_addr: usize) {
     }
 
     // Parse manifest DTB using fdt crate (zero-copy, no_std).
+    // SAFETY: `manifest_addr` is provided by secure boot flow as pointer to TOS_FW_CONFIG DTB blob.
     let fdt = unsafe { fdt::Fdt::from_ptr(manifest_addr as *const u8) };
     match fdt {
         Ok(fdt) => {
@@ -53,6 +54,7 @@ pub fn init(manifest_addr: usize) {
                 .and_then(|n| n.property("min_ver"))
                 .and_then(|p| p.as_usize())
                 .unwrap_or(1) as u16;
+            // SAFETY: Single global manifest cell updated during init before concurrent readers.
             unsafe {
                 *MANIFEST.0.get() = Some(SpMcManifest {
                     spmc_id,
@@ -69,6 +71,7 @@ pub fn init(manifest_addr: usize) {
 }
 
 fn set_defaults() {
+    // SAFETY: Default manifest write targets global init cell before concurrent use.
     unsafe {
         *MANIFEST.0.get() = Some(SpMcManifest {
             spmc_id: 0x8000,
@@ -80,6 +83,7 @@ fn set_defaults() {
 
 /// Get parsed manifest.
 pub fn manifest_info() -> &'static SpMcManifest {
+    // SAFETY: Returns shared ref from initialized static cell; fallback uses immutable default.
     unsafe { (*MANIFEST.0.get()).as_ref().unwrap_or(&DEFAULT_MANIFEST) }
 }
 

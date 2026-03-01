@@ -204,6 +204,7 @@ impl Vcpu {
         self.arch_state.restore();
 
         // Apply virtual interrupt state to HCR_EL2 before entering guest
+        // SAFETY: Accesses EL2 control register helpers as part of vCPU run transition.
         unsafe {
             use crate::vcpu_interrupt::{get_hcr_el2, set_hcr_el2};
             let hcr = get_hcr_el2();
@@ -212,6 +213,7 @@ impl Vcpu {
         }
 
         // Enter the guest
+        // SAFETY: `enter_guest` requires a valid pointer to this vCPU's context struct.
         let result = unsafe { enter_guest(&mut self.context as *mut VcpuContext) };
 
         // Save per-vCPU architectural state

@@ -36,6 +36,7 @@ pub mod vswitch;
 /// Simple function to write a byte slice to UART
 #[inline]
 pub fn uart_puts(s: &[u8]) {
+    // SAFETY: Writes bytes to UART MMIO TX register at fixed platform base.
     unsafe {
         let uart = platform::UART_BASE;
         for &byte in s {
@@ -83,6 +84,7 @@ pub fn uart_put_u64(value: u64) {
 
     // Print in reverse order
     for j in (0..i).rev() {
+        // SAFETY: Writes one byte at a time to UART MMIO TX register.
         unsafe {
             let uart = platform::UART_BASE;
             core::arch::asm!(

@@ -52,6 +52,7 @@ pub fn forward_smc(
     let r1: u64;
     let r2: u64;
     let r3: u64;
+    // SAFETY: Performs an EL2 `smc #0` with SMCCC register convention and declared clobbers.
     unsafe {
         core::arch::asm!(
             "smc #0",
@@ -118,6 +119,7 @@ pub fn forward_smc8(
     let r5: u64;
     let r6: u64;
     let r7: u64;
+    // SAFETY: Performs an EL2 `smc #0` with SMCCC register convention and declared clobbers.
     unsafe {
         core::arch::asm!(
             "smc #0",

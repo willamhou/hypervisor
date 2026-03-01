@@ -43,12 +43,14 @@ impl Uart {
     /// Read a register
     #[inline]
     fn read_reg(&self, offset: usize) -> u32 {
+        // SAFETY: `offset` is a PL011 MMIO register address; volatile read is required.
         unsafe { core::ptr::read_volatile(offset as *const u32) }
     }
 
     /// Write a register
     #[inline]
     fn write_reg(&self, offset: usize, value: u32) {
+        // SAFETY: `offset` is a PL011 MMIO register address; volatile write is required.
         unsafe { core::ptr::write_volatile(offset as *mut u32, value) }
     }
 }
@@ -60,6 +62,7 @@ static UART: Uart = Uart::new(UART_BASE);
 pub fn init() {
     // For QEMU virt, UART is already initialized by firmware
     // Just write a test character to verify it works
+    // SAFETY: Writes newline to PL011 DR MMIO register via inline asm.
     unsafe {
         core::arch::asm!(
             "mov x9, #0x09000000",

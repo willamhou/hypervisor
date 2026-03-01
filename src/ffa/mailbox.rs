@@ -56,5 +56,6 @@ static MAILBOXES: MailboxArray = MailboxArray(UnsafeCell::new([
 /// Multi-pCPU: each pCPU handles its own VM exclusively.
 pub fn get_mailbox(vm_id: usize) -> &'static mut FfaMailbox {
     assert!(vm_id < FFA_MAX_VMS);
+    // SAFETY: Index is bounds-checked and mailbox access follows per-VM serialization guarantees above.
     unsafe { &mut (*MAILBOXES.0.get())[vm_id] }
 }

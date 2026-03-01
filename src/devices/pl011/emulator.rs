@@ -98,6 +98,7 @@ impl VirtualUart {
 
     /// Write a character to the physical UART.
     fn output_char(&self, ch: u8) {
+        // SAFETY: Writing UART DR MMIO register via inline asm with fixed PL011 base.
         unsafe {
             let uart_base = uart_base() as usize;
             core::arch::asm!(

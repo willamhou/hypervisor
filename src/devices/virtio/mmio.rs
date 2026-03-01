@@ -370,6 +370,7 @@ impl VirtioMmioTransport<super::net::VirtioNet> {
                 buf_cap
             };
 
+            // SAFETY: Descriptor addresses come from validated virtqueue entries and copy length is bounded by `to_write`.
             unsafe {
                 let dst = buf_addr;
                 // Determine how much of header vs frame goes into this descriptor

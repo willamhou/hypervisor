@@ -1223,6 +1223,7 @@ fn handle_partition_info_get() -> SmcResult8 {
         crate::sp_context::for_each_sp(|sp| {
             let offset = count as usize * 24;
             if mapped && offset + 24 <= max_bytes {
+                // SAFETY: `rx_pa` points to mapped NWd RX buffer and each 24-byte descriptor write is bounds-checked.
                 unsafe {
                     let ptr = (rx_pa as *mut u8).add(offset);
                     // partition_id (u16 LE)

@@ -51,11 +51,13 @@ impl GicDistributor {
 
     /// Read a 32-bit register
     fn read_reg(&self, offset: u64) -> u32 {
+        // SAFETY: `base + offset` targets a valid GIC MMIO register, requiring volatile access.
         unsafe { read_volatile((self.base + offset) as *const u32) }
     }
 
     /// Write a 32-bit register
     fn write_reg(&self, offset: u64, value: u32) {
+        // SAFETY: `base + offset` targets a valid GIC MMIO register, requiring volatile access.
         unsafe { write_volatile((self.base + offset) as *mut u32, value) }
     }
 
@@ -119,11 +121,13 @@ impl GicCpuInterface {
 
     /// Read a 32-bit register
     fn read_reg(&self, offset: u64) -> u32 {
+        // SAFETY: `base + offset` targets a valid GIC CPU-interface MMIO register.
         unsafe { read_volatile((self.base + offset) as *const u32) }
     }
 
     /// Write a 32-bit register
     fn write_reg(&self, offset: u64, value: u32) {
+        // SAFETY: `base + offset` targets a valid GIC CPU-interface MMIO register.
         unsafe { write_volatile((self.base + offset) as *mut u32, value) }
     }
 

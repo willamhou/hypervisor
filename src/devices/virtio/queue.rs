@@ -125,6 +125,8 @@ impl Virtqueue {
             return false;
         }
         let avail = self.avail_addr as *const VirtqAvail;
+        // SAFETY: `avail` points to guest-provided avail ring header and is
+        // accessed via volatile read to observe device/driver synchronization.
         let avail_idx = unsafe { core::ptr::read_volatile(&(*avail).idx) };
         avail_idx != self.last_avail_idx
     }
@@ -142,6 +144,7 @@ impl Virtqueue {
         let ring_base = (self.avail_addr + 4) as *const u16;
 
         let ring_idx = (self.last_avail_idx % self.num) as usize;
+        // SAFETY: ring_idx is modulo queue size and ring_base points to avail ring.
         let head = unsafe { core::ptr::read_volatile(ring_base.add(ring_idx)) };
         self.last_avail_idx = self.last_avail_idx.wrapping_add(1);
 
@@ -169,6 +172,7 @@ impl Virtqueue {
             if (idx as u16) >= self.num {
                 break;
             }
+            // SAFETY: idx bound check above keeps descriptor-table access in range.
             let desc = unsafe { core::ptr::read_volatile(desc_base.add(idx as usize)) };
             chain.descs[chain.count] = desc;
             chain.count += 1;
@@ -192,11 +196,15 @@ impl Virtqueue {
         }
 
         let used = self.used_addr as *mut VirtqUsed;
+        // SAFETY: used ring header address is provided by driver and accessed
+        // with volatile semantics for producer/consumer synchronization.
         let used_idx = unsafe { core::ptr::read_volatile(&(*used).idx) };
         let ring_idx = (used_idx % self.num) as usize;
 
         // Used ring elements start after the VirtqUsed header (4 bytes)
         let elem_base = (self.used_addr + 4) as *mut VirtqUsedElem;
+        // SAFETY: ring_idx is modulo queue size; writes update one used elem and
+        // then atomically publish idx with release fence.
         unsafe {
             let elem = VirtqUsedElem {
                 id: head as u32,

@@ -113,6 +113,7 @@ impl VcpuArchState {
     pub fn init_for_vcpu(&mut self, vcpu_id: usize) {
         // VMPIDR: use real MPIDR as template, override Aff0 with vcpu_id
         let mpidr: u64;
+        // SAFETY: Reading MPIDR_EL1 is side-effect free and valid at EL2.
         unsafe {
             asm!("mrs {}, mpidr_el1", out(reg) mpidr, options(nostack, nomem));
         }
@@ -134,6 +135,7 @@ impl VcpuArchState {
 
     /// Save all per-vCPU registers from hardware
     pub fn save(&mut self) {
+        // SAFETY: Executed during EL2 context-switch path; all accessed registers are EL2-accessible.
         unsafe {
             // GICv3 List Registers
             asm!("mrs {}, ICH_LR0_EL2", out(reg) self.ich_lr[0], options(nostack, nomem));
@@ -197,6 +199,7 @@ impl VcpuArchState {
 
     /// Restore all per-vCPU registers to hardware
     pub fn restore(&self) {
+        // SAFETY: Restores values previously captured by `save()` for this vCPU on EL2 entry/exit path.
         unsafe {
             // CPU identity - must be set before guest runs
             asm!("msr vmpidr_el2, {}", in(reg) self.vmpidr, options(nostack, nomem));

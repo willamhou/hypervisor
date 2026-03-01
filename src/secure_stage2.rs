@@ -42,6 +42,7 @@ impl SecureStage2Config {
     /// Install Secure Stage-2 to hardware registers.
     #[cfg(feature = "sel2")]
     pub fn install(&self) {
+        // SAFETY: Programs EL2 secure translation control registers from precomputed values.
         unsafe {
             core::arch::asm!(
                 "msr s3_4_c2_c6_2, {vstcr}", // VSTCR_EL2

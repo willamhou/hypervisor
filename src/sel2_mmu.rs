@@ -114,6 +114,7 @@ const SCTLR_I: u64 = 1 << 12; // Instruction cache enable
 /// Page tables were already filled by primary CPU's `init_sel2_stage1()`.
 /// This just programs MAIR/TCR/TTBR0 and enables SCTLR_EL2.
 pub fn install_sel2_stage1_secondary() {
+    // SAFETY: Secondary CPU installs already-initialized tables and EL2 MMU registers for itself.
     unsafe {
         // TLB invalidate + barriers
         core::arch::asm!("tlbi alle2", "dsb ish", "isb", options(nostack, nomem),);
@@ -192,6 +193,7 @@ pub fn init_sel2_stage1() {
     }
 
     // ── 2. Barriers + TLB invalidate ────────────────────────────────
+    // SAFETY: One-time bootstrap sequence updates page tables/registers before concurrent execution.
     unsafe {
         // Ensure all table writes are visible before enabling MMU
         core::arch::asm!(

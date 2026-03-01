@@ -70,6 +70,8 @@ impl VirtioBlk {
 
         // Descriptor 0: request header (device-readable, 16 bytes)
         let hdr_addr = descs[0].addr;
+        // SAFETY: descriptor addresses come from validated virtqueue chain and
+        // header size matches VirtioBlkReqHeader layout.
         let header: VirtioBlkReqHeader =
             unsafe { core::ptr::read_volatile(hdr_addr as *const VirtioBlkReqHeader) };
 
@@ -92,6 +94,8 @@ impl VirtioBlk {
                         break;
                     }
 
+                    // SAFETY: bounds check above guarantees source is within disk image;
+                    // destination is guest-provided data descriptor buffer.
                     unsafe {
                         core::ptr::copy_nonoverlapping(
                             (self.disk_base + disk_off) as *const u8,
@@ -118,6 +122,8 @@ impl VirtioBlk {
                         break;
                     }
 
+                    // SAFETY: bounds check above guarantees destination is within
+                    // disk image; source is guest-provided data descriptor buffer.
                     unsafe {
                         core::ptr::copy_nonoverlapping(
                             desc.addr as *const u8,
@@ -135,6 +141,8 @@ impl VirtioBlk {
                     let desc = &descs[1];
                     let id = b"hypervisor-vda\0\0\0\0\0\0";
                     let copy_len = core::cmp::min(desc.len as usize, 20);
+                    // SAFETY: copy length is bounded by destination descriptor length
+                    // and static ID buffer size.
                     unsafe {
                         core::ptr::copy_nonoverlapping(id.as_ptr(), desc.addr as *mut u8, copy_len);
                     }
@@ -149,6 +157,7 @@ impl VirtioBlk {
 
         // Last descriptor: status byte (device-writable, 1 byte)
         let status_desc = &descs[count - 1];
+        // SAFETY: status descriptor points to guest-provided writable status byte.
         unsafe {
             core::ptr::write_volatile(status_desc.addr as *mut u8, status);
         }

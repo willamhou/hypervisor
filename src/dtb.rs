@@ -60,6 +60,7 @@ static PLATFORM_INFO: PlatformInfoCell = PlatformInfoCell {
 /// are retained — all existing behavior is preserved.
 pub fn init(dtb_addr: usize) {
     if let Some(info) = parse_host_dtb(dtb_addr) {
+        // SAFETY: one-time boot-time write to global platform info.
         unsafe {
             *PLATFORM_INFO.inner.get() = info;
         }
@@ -74,6 +75,7 @@ pub fn is_initialized() -> bool {
 
 /// Get platform info. Always available — returns defaults if DTB parsing failed.
 pub fn platform_info() -> &'static PlatformInfo {
+    // SAFETY: immutable reference to boot-initialized global platform info.
     unsafe { &*PLATFORM_INFO.inner.get() }
 }
 
@@ -99,6 +101,7 @@ fn validate_dtb_address(addr: usize) -> bool {
         return false;
     }
     // Check FDT magic (0xD00DFEED big-endian)
+    // SAFETY: address range check above restricts to plausible RAM-backed DTB area.
     let magic = unsafe { core::ptr::read_volatile(addr as *const u32) };
     u32::from_be(magic) == 0xD00D_FEED
 }
@@ -109,6 +112,7 @@ fn parse_host_dtb(dtb_addr: usize) -> Option<PlatformInfo> {
         return None;
     }
 
+    // SAFETY: validated DTB pointer is passed to `fdt` parser for read-only parsing.
     let fdt = unsafe { fdt::Fdt::from_ptr(dtb_addr as *const u8).ok()? };
 
     let mut info = PlatformInfo {

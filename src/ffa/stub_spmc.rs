@@ -58,6 +58,8 @@ pub struct MemShareRecord {
 /// are accessed under the FF-A proxy dispatch (one SMC at a time per VM).
 const MAX_SHARES: usize = 16;
 struct ShareRecordArray(UnsafeCell<[MemShareRecord; MAX_SHARES]>);
+// SAFETY: access is serialized by the FF-A dispatch path and tests run in a
+// single-core context for this stub backend.
 unsafe impl Sync for ShareRecordArray {}
 
 static SHARE_RECORDS: ShareRecordArray = ShareRecordArray(UnsafeCell::new({
@@ -92,6 +94,7 @@ pub fn record_share(
     is_lend: bool,
 ) -> Option<u64> {
     let handle = alloc_handle();
+    // SAFETY: serialized access to SHARE_RECORDS in stub dispatch path.
     let records = unsafe { &mut *SHARE_RECORDS.0.get() };
     for record in records.iter_mut() {
         if !record.active {
@@ -127,6 +130,7 @@ pub struct ShareInfo {
 
 /// Look up a share record by handle. Returns range info for reclaim.
 pub fn lookup_share(handle: u64) -> Option<ShareInfo> {
+    // SAFETY: read-only access under serialized stub dispatch path.
     let records = unsafe { &*SHARE_RECORDS.0.get() };
     for record in records.iter() {
         if record.active && record.handle == handle {
@@ -154,6 +158,7 @@ pub struct ShareInfoFull {
 
 /// Look up a share record by handle, returning full info including sender/receiver.
 pub fn lookup_share_full(handle: u64) -> Option<ShareInfoFull> {
+    // SAFETY: read-only access under serialized stub dispatch path.
     let records = unsafe { &*SHARE_RECORDS.0.get() };
     for record in records.iter() {
         if record.active && record.handle == handle {
@@ -173,6 +178,7 @@ pub fn lookup_share_full(handle: u64) -> Option<ShareInfoFull> {
 
 /// Mark a share as retrieved. Returns true if found and was not already retrieved.
 pub fn mark_retrieved(handle: u64) -> bool {
+    // SAFETY: serialized mutable access in stub dispatch path.
     let records = unsafe { &mut *SHARE_RECORDS.0.get() };
     for record in records.iter_mut() {
         if record.active && record.handle == handle && !record.retrieved {
@@ -185,6 +191,7 @@ pub fn mark_retrieved(handle: u64) -> bool {
 
 /// Mark a share as relinquished (not retrieved). Returns true if found and was retrieved.
 pub fn mark_relinquished(handle: u64) -> bool {
+    // SAFETY: serialized mutable access in stub dispatch path.
     let records = unsafe { &mut *SHARE_RECORDS.0.get() };
     for record in records.iter_mut() {
         if record.active && record.handle == handle && record.retrieved {
@@ -197,6 +204,7 @@ pub fn mark_relinquished(handle: u64) -> bool {
 
 /// Reclaim a memory share by handle. Returns true if found and removed.
 pub fn reclaim_share(handle: u64) -> bool {
+    // SAFETY: serialized mutable access in stub dispatch path.
     let records = unsafe { &mut *SHARE_RECORDS.0.get() };
     for record in records.iter_mut() {
         if record.active && record.handle == handle {

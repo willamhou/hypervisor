@@ -85,6 +85,7 @@ impl LogBuffer {
 
     /// Write bytes into the ring buffer. Overwrites oldest data if full.
     pub fn write(&self, data: &[u8]) {
+        // SAFETY: Single-producer access per CPU mutates backing bytes via interior mutability.
         let buf = unsafe { &mut *self.buf.get() };
         let mut tail = self.tail.load(Ordering::Relaxed);
 
@@ -107,6 +108,7 @@ impl LogBuffer {
     pub fn read(&self, out: &mut [u8]) -> usize {
         let mut head = self.head.load(Ordering::Acquire);
         let tail = self.tail.load(Ordering::Acquire);
+        // SAFETY: Reader takes shared snapshot and performs immutable read from ring bytes.
         let buf = unsafe { &*self.buf.get() };
 
         let mut count = 0;
@@ -167,6 +169,7 @@ fn current_cpu_id() -> usize {
     #[cfg(feature = "multi_pcpu")]
     {
         let mpidr: u64;
+        // SAFETY: Reading MPIDR_EL1 is side-effect free and valid in EL2 runtime.
         unsafe {
             core::arch::asm!("mrs {}, mpidr_el1", out(reg) mpidr, options(nostack, nomem));
         }

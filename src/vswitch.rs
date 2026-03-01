@@ -75,6 +75,8 @@ impl NetRxRing {
         if next == self.head.load(Ordering::Acquire) {
             return false; // full
         }
+        // SAFETY: SPSC discipline ensures producer writes only at `tail` while
+        // consumer reads at `head`; slot indices are disjoint by full check.
         unsafe {
             let slots = &mut *self.frames.get();
             slots[tail].buf[..len].copy_from_slice(frame);
@@ -92,6 +94,8 @@ impl NetRxRing {
             return None; // empty
         }
         let len;
+        // SAFETY: SPSC discipline ensures consumer reads only at `head` after
+        // acquire observes producer's release to `tail`.
         unsafe {
             let slots = &*self.frames.get();
             len = slots[head].len as usize;
@@ -265,6 +269,7 @@ static VSWITCH: VSwitchCell = VSwitchCell(UnsafeCell::new(VSwitch::new()));
 
 /// Public API — called from VirtioNet::process_tx() inside DEVICES lock.
 pub fn vswitch_forward(src_port: usize, frame: &[u8]) {
+    // SAFETY: VSWITCH access is serialized by device-locking rules.
     unsafe {
         (*VSWITCH.0.get()).forward(src_port, frame);
     }
@@ -272,6 +277,7 @@ pub fn vswitch_forward(src_port: usize, frame: &[u8]) {
 
 /// Register a port (called during attach_virtio_net).
 pub fn vswitch_add_port(port_id: usize) {
+    // SAFETY: port registration happens during init/attach under serialized flow.
     unsafe {
         (*VSWITCH.0.get()).add_port(port_id);
     }
@@ -279,6 +285,7 @@ pub fn vswitch_add_port(port_id: usize) {
 
 /// Reset VSwitch state (for tests).
 pub fn vswitch_reset() {
+    // SAFETY: reset used in tests/setup where switch access is serialized.
     unsafe {
         (*VSWITCH.0.get()).reset();
     }

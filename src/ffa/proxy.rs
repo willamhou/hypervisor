@@ -396,6 +396,7 @@ fn handle_partition_info_get(context: &mut VcpuContext) -> bool {
         // - `dst` is guest RX IPA validated by `handle_rxtx_map()`.
         // - `bytes` is bounded by `min(4096, page_count * 4096)` above.
         // - Source and destination are distinct buffers, so non-overlap holds.
+        // SAFETY: `src`, `dst`, and `bytes` were validated above for bounds and non-overlap.
         unsafe {
             let src = PROXY_RX_BUF.0.get() as *const u8;
             let dst = mbox.rx_ipa as *mut u8;
@@ -422,6 +423,8 @@ fn handle_partition_info_get(context: &mut VcpuContext) -> bool {
 
     for (i, sp) in stub_spmc::STUB_PARTITIONS.iter().enumerate() {
         let offset = i * 8;
+        // SAFETY: `rx_ptr` points to mapped guest RX mailbox page and writes
+        // stay within descriptor slots bounded by partition count.
         unsafe {
             let ptr = rx_ptr.add(offset);
             // Partition ID (16-bit LE)
@@ -660,6 +663,8 @@ fn parse_share_descriptor(
     // Identity mapping: IPA == PA, safe to read TX buffer directly at EL2
     let tx_ptr = mbox.tx_ipa as *const u8;
 
+    // SAFETY: `tx_ptr` comes from validated RXTX mapping and `total_length`
+    // was checked for non-zero single-fragment request above.
     let parsed = unsafe { descriptors::parse_mem_region(tx_ptr, total_length)? };
 
     Ok((
@@ -1022,6 +1027,8 @@ fn handle_msg_send2(context: &mut VcpuContext) -> bool {
 
     // Read message header from TX buffer (identity-mapped IPA)
     let tx_ipa = sender_mbox.tx_ipa;
+    // SAFETY: tx_ipa comes from validated mailbox mapping; reads are bounded to
+    // fixed header size (8 bytes) using unaligned accesses.
     let (msg_sender_id, msg_receiver_id, msg_size) = unsafe {
         let tx_ptr = tx_ipa as *const u8;
         let s = core::ptr::read_unaligned(tx_ptr as *const u16);
@@ -1070,6 +1077,7 @@ fn handle_msg_send2(context: &mut VcpuContext) -> bool {
     // - `tx_ipa_copy` and `recv_mbox.rx_ipa` are guest mailbox IPAs validated on RXTX_MAP.
     // - `copy_len <= 4096`, so we never exceed a single mailbox page.
     // - Sender TX and receiver RX belong to different mailboxes, so no overlap.
+    // SAFETY: Mailbox IPAs and bounded `copy_len` were validated above; sender/receiver buffers do not overlap.
     unsafe {
         core::ptr::copy_nonoverlapping(
             tx_ipa_copy as *const u8,

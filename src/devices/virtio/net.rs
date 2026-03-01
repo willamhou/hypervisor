@@ -62,6 +62,7 @@ impl VirtioNet {
                     let data_start = skip;
                     let data_len = buf_len - skip;
                     if data_len > 0 && frame_len + data_len <= frame_buf.len() {
+                        // SAFETY: Source descriptor pointer is guest-provided; destination is in-bounds local buffer with checked length.
                         unsafe {
                             core::ptr::copy_nonoverlapping(
                                 buf_addr.add(data_start),
@@ -74,6 +75,7 @@ impl VirtioNet {
                 } else {
                     // Pure frame data
                     if frame_len + buf_len <= frame_buf.len() {
+                        // SAFETY: Source descriptor pointer is guest-provided; destination is in-bounds local buffer with checked length.
                         unsafe {
                             core::ptr::copy_nonoverlapping(
                                 buf_addr,

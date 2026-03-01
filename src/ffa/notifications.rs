@@ -86,6 +86,7 @@ fn endpoint_index(part_id: u16) -> Option<usize> {
 
 fn get_state(part_id: u16) -> Result<&'static mut EndpointNotifState, i32> {
     let idx = endpoint_index(part_id).ok_or(FFA_INVALID_PARAMETERS)?;
+    // SAFETY: `idx` comes from validated endpoint mapping and points into static notification array.
     Ok(unsafe { &mut (*NOTIF_STATE.0.get())[idx] })
 }
 
@@ -198,6 +199,7 @@ pub fn get(receiver: u16) -> Result<u64, i32> {
 pub fn info_get() -> (usize, [u16; 4]) {
     let mut ids = [0u16; 4];
     let mut count = 0usize;
+    // SAFETY: Shared read-only snapshot of static notification state for scanning pending bits.
     let states = unsafe { &*NOTIF_STATE.0.get() };
 
     // Scan VMs

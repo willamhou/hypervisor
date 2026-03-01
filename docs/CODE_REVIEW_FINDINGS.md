@@ -34,7 +34,7 @@ Two-pass review of the hypervisor codebase:
 | H3 | ✅ Fixed | `mmu.rs` now documents stage-2 walker/table unsafe operations; pointer/volatile access consolidated via helper APIs. |
 | H4 | ✅ Fixed | `global.rs` UnsafeCell/volatile/ring-buffer unsafe paths now include explicit single-pCPU and producer/consumer safety invariants. |
 | H5 | ✅ Fixed | `spmc_handler.rs` replaced `static mut NWD_RXTX` with `UnsafeCell` wrapper and added safety contracts for shared state and context-switch unsafe calls. |
-| H1 | 🟡 In Progress | Global unsafe comment coverage improved from 6.6% (20/305) to 71.2% (193/271); recent rounds covered context-switch paths plus `main.rs`, `gicv3.rs`, `timer.rs`, and `guest_loader.rs`. Remaining modules still need SAFETY convergence. |
+| H1 | ✅ Fixed | `src/` unsafe comment coverage is now 100.0% (271/271) with all production unsafe blocks carrying nearby `// SAFETY:` rationale. Repository-wide (including `tests/`) is 94.1% (271/288). |
 
 ---
 
@@ -52,7 +52,7 @@ Two-pass review of the hypervisor codebase:
 
 | ID | Rule | File | Description |
 |----|------|------|-------------|
-| H1 | §2.2 SAFETY | Global | SAFETY docs are still incomplete globally; coverage improved to 71.2% (193/271). Continue converging remaining modules. |
+| H1 | §2.2 SAFETY | Global | Fixed for production code: `src/` is now 100.0% (271/271) with explicit `// SAFETY:` rationale adjacent to unsafe blocks. |
 | H2 | §2.2 | `src/ffa/stage2_walker.rs` | Fixed: page-table unsafe derefs/volatile accesses now documented and centralized via helper APIs. |
 | H3 | §2.2 | `src/arch/aarch64/mm/mmu.rs` | Fixed: stage-2 page table arithmetic unsafe paths now carry explicit SAFETY invariants and helper encapsulation. |
 | H4 | §2.2 | `src/global.rs` | Fixed: UnsafeCell/global ring-buffer unsafe accesses now document single-pCPU and lock-free producer/consumer invariants. |

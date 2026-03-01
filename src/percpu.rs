@@ -24,6 +24,7 @@ static PER_CPU: PerCpuArray = PerCpuArray(UnsafeCell::new({
 #[inline(always)]
 pub fn current_cpu_id() -> usize {
     let mpidr: u64;
+    // SAFETY: Reading MPIDR_EL1 is side-effect free and valid for CPU index discovery.
     unsafe { core::arch::asm!("mrs {}, MPIDR_EL1", out(reg) mpidr, options(nostack, nomem)) };
     (mpidr & 0xFF) as usize
 }
@@ -38,5 +39,6 @@ pub fn current_cpu_id() -> usize {
 #[inline]
 pub fn this_cpu() -> *mut PerCpuContext {
     let id = current_cpu_id();
+    // SAFETY: Per-CPU affinity guarantees unique mutable access to this CPU's slot.
     unsafe { &raw mut (*PER_CPU.0.get())[id] }
 }

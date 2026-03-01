@@ -47,6 +47,7 @@ const PCELLID3: u64 = 0xFFC;
 /// Read the virtual counter (CNTVCT_EL0).
 fn read_cntvct() -> u64 {
     let val: u64;
+    // SAFETY: Reading architectural virtual counter register is valid at EL2.
     unsafe {
         core::arch::asm!(
             "mrs {}, cntvct_el0",
@@ -60,6 +61,7 @@ fn read_cntvct() -> u64 {
 /// Read the counter frequency (CNTFRQ_EL0).
 fn read_cntfrq() -> u64 {
     let val: u64;
+    // SAFETY: Reading architectural counter frequency register is valid at EL2.
     unsafe {
         core::arch::asm!(
             "mrs {}, cntfrq_el0",

@@ -25,9 +25,11 @@ impl BumpAllocator {
         if self.free_head != 0 {
             let page = self.free_head;
             // Read the next pointer from the first 8 bytes of this free page
+            // SAFETY: Free-list nodes store next pointer in first u64 of a previously freed 4KB page.
             let next = unsafe { core::ptr::read_volatile(page as *const u64) };
             self.free_head = next;
             // Zero the page before returning
+            // SAFETY: `page` points to a valid 4KB page owned by allocator.
             unsafe {
                 core::ptr::write_bytes(page as *mut u8, 0, 4096);
             }

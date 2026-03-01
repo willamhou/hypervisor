@@ -36,12 +36,14 @@ impl<T> SpinLock<T> {
 impl<T> core::ops::Deref for SpinLockGuard<'_, T> {
     type Target = T;
     fn deref(&self) -> &T {
+        // SAFETY: Ticket lock guarantees immutable access while guard is held.
         unsafe { &*self.lock.data.get() }
     }
 }
 
 impl<T> core::ops::DerefMut for SpinLockGuard<'_, T> {
     fn deref_mut(&mut self) -> &mut T {
+        // SAFETY: Ticket lock guarantees unique mutable access while guard is held.
         unsafe { &mut *self.lock.data.get() }
     }
 }
@@ -55,6 +57,7 @@ impl<T> Drop for SpinLockGuard<'_, T> {
         // Currently spin_loop() emits YIELD, but SEV is cheap and
         // future-proofs against switching to WFE.
         #[cfg(target_arch = "aarch64")]
+        // SAFETY: `sev` is a synchronization hint and does not violate memory safety.
         unsafe {
             core::arch::asm!("sev", options(nostack, nomem))
         };
