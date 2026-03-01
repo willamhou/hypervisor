@@ -265,41 +265,55 @@ impl Vm {
                 .expect("Failed to map guest memory");
         }
 
-        // Map entire GIC region as DEVICE (passthrough), then selectively
-        // unmap GICD and all GICR frames so guest accesses trap to EL2
-        // for emulation via VirtualGicd / VirtualGicr.
-        mapper
-            .map_region(
-                platform::GIC_REGION_BASE,
-                platform::GIC_REGION_SIZE,
-                MemoryAttribute::Device,
-            )
-            .expect("Failed to map GIC region");
+        // Apply linker-registered Stage-2 policies in deterministic order:
+        // 1) action phase: Map first, Trap second
+        // 2) priority ascending inside each phase
+        let regs = crate::mm::region_registry::vm_stage2_region_registrations();
+        for phase in [
+            crate::mm::region_registry::RegionAction::Map,
+            crate::mm::region_registry::RegionAction::Trap,
+        ] {
+            let mut applied_priority: Option<u32> = None;
+            loop {
+                let mut next_priority: Option<u32> = None;
+                for reg in regs.iter() {
+                    if reg.action != phase {
+                        continue;
+                    }
+                    if let Some(p) = applied_priority {
+                        if reg.priority <= p {
+                            continue;
+                        }
+                    }
+                    match next_priority {
+                        None => next_priority = Some(reg.priority),
+                        Some(p) if reg.priority < p => next_priority = Some(reg.priority),
+                        _ => {}
+                    }
+                }
+                let Some(prio) = next_priority else {
+                    break;
+                };
 
-        // Unmap GICD (64KB = 16 × 4KB pages) for full trap-and-emulate.
-        // Guest GICD accesses trap as Data Aborts → VirtualGicd.
-        // The hypervisor still accesses physical GICD at EL2 (bypasses Stage-2).
-        for page in 0..16u64 {
-            let addr = crate::dtb::platform_info().gicd_base + page * PAGE_SIZE_4KB;
-            mapper
-                .unmap_4kb_page(addr)
-                .expect("Failed to unmap GICD page");
-        }
-        crate::log_info!("[VM] GICD unmapped (trap to EL2 via VirtualGicd)\n");
-
-        // Unmap all GICR frames (each = 128KB = 32 × 4KB pages)
-        for cpu in 0..platform::num_cpus() {
-            let base = crate::dtb::gicr_rd_base(cpu);
-            for page in 0..32u64 {
-                let addr = base + page * PAGE_SIZE_4KB;
-                mapper
-                    .unmap_4kb_page(addr)
-                    .expect("Failed to unmap GICR page");
+                for reg in regs.iter() {
+                    if reg.action != phase || reg.priority != prio {
+                        continue;
+                    }
+                    (reg.apply)(reg, &mut mapper)
+                        .unwrap_or_else(|_| panic!("Failed to apply Stage-2 region '{}'", reg.name));
+                    crate::log_info!(
+                        "[VM] Stage-2 region applied: {} (prio={} {:?} {:?} {:?} {:?})\n",
+                        reg.name,
+                        reg.priority,
+                        reg.mem_type,
+                        reg.perm,
+                        reg.exec,
+                        reg.action
+                    );
+                }
+                applied_priority = Some(prio);
             }
         }
-        crate::log_info!("[VM] All GICRs unmapped (trap to EL2 via VirtualGicr)\n");
-
-        // UART (0x09000000) is NOT mapped — all accesses trap to VirtualUart
 
         // Install Stage-2 translation with VMID
         let config = crate::arch::aarch64::mm::mmu::Stage2Config::new_with_vmid(

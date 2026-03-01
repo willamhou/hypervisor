@@ -18,6 +18,12 @@ SECTIONS
         *(.rodata .rodata.*)
     }
 
+    .hv_vm_stage2_regions : ALIGN(8) {
+        __hv_vm_stage2_regions_start = .;
+        KEEP(*(.hv_vm_stage2_regions))
+        __hv_vm_stage2_regions_end = .;
+    }
+
     .data : {
         *(.data .data.*)
     }

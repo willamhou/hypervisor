@@ -536,11 +536,14 @@ pub struct SpDispatchGuard {
 
 impl SpDispatchGuard {
     pub fn sp_mut(&mut self) -> &mut SpContext {
-        // SAFETY: `SpDispatchGuard` is only constructed after acquiring the
-        // per-slot dispatch lock, so this mutable borrow is unique.
-        let contexts = unsafe { &mut *SP_STORE.contexts.get() };
-        contexts[self.slot]
-            .as_mut()
+        // SAFETY: per-slot dispatch lock guarantees exclusive access for this
+        // slot. Use raw-pointer indexing to avoid creating `&mut` to the whole
+        // array (which would alias with other slots on other CPUs).
+        let slot = unsafe {
+            let base = (*SP_STORE.contexts.get()).as_mut_ptr();
+            &mut *base.add(self.slot)
+        };
+        slot.as_mut()
             .expect("SP slot empty while dispatch guard held")
     }
 }

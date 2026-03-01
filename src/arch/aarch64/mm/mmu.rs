@@ -317,6 +317,8 @@ pub enum MemoryAttribute {
     Normal,
     /// Device memory (MMIO)
     Device,
+    /// Device memory (MMIO), read-only
+    DeviceReadOnly,
     /// Read-only memory
     ReadOnly,
 }
@@ -429,6 +431,9 @@ impl DynamicIdentityMapper {
         let attr_bits = match attr {
             MemoryAttribute::Normal => (0b1111 << 2) | (0b11 << 6) | (0b11 << 8) | (1 << 10),
             MemoryAttribute::Device => (0b0000 << 2) | (0b11 << 6) | (0b00 << 8) | (1 << 10),
+            MemoryAttribute::DeviceReadOnly => {
+                (0b0000 << 2) | (0b01 << 6) | (0b00 << 8) | (1 << 10)
+            }
             MemoryAttribute::ReadOnly => (0b1111 << 2) | (0b01 << 6) | (0b11 << 8) | (1 << 10),
         };
         (pa & !BLOCK_MASK_2MB) | attr_bits | PTE_VALID
@@ -554,6 +559,9 @@ impl DynamicIdentityMapper {
         let attr_bits = match attr {
             MemoryAttribute::Normal => (0b1111 << 2) | (0b11 << 6) | (0b11 << 8) | (1 << 10),
             MemoryAttribute::Device => (0b0000 << 2) | (0b11 << 6) | (0b00 << 8) | (1 << 10),
+            MemoryAttribute::DeviceReadOnly => {
+                (0b0000 << 2) | (0b01 << 6) | (0b00 << 8) | (1 << 10)
+            }
             MemoryAttribute::ReadOnly => (0b1111 << 2) | (0b01 << 6) | (0b11 << 8) | (1 << 10),
         };
         // L3 page: bit[1] = 1 (page), bit[0] = 1 (valid)
