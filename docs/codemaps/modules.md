@@ -1,6 +1,6 @@
 # Modules Codemap
 
-> Freshness: 2026-02-20 | 50+ source files across 17 directories
+> Freshness: 2026-03-02 | 60+ source files across 20+ directories
 
 ## Module Tree
 
@@ -17,13 +17,20 @@ src/
 ├── platform.rs                     board constants + DTB-backed num_cpus()
 ├── dtb.rs                          host DTB parsing via fdt crate
 ├── vswitch.rs                      L2 virtual switch: MAC learning, frame forwarding, NetRxRing
+├── log.rs                          structured logging macros (log_info!, log_debug!)
+├── manifest.rs                     SPMC manifest parser (TOS_FW_CONFIG DTB)
+├── secure_stage2.rs                Secure Stage-2 config (VSTTBR_EL2/VSTCR_EL2) for SP isolation
+├── sel2_mmu.rs                     S-EL2 Stage-1 identity map: NS=1 for NWd DRAM, Device for GIC
+├── sp_context.rs                   Per-SP state machine, VcpuContext wrapper, INTID ownership
+├── spmc_handler.rs                 S-EL2 SPMC event loop + FF-A dispatch + SP lifecycle
 ├── percpu.rs                       per-CPU context (MPIDR → PerCpuContext)
 ├── sync.rs                         ticket SpinLock<T>
 ├── uart.rs                         physical PL011 driver + fmt::Write
 ├── mm/
 │   ├── mod.rs                      re-exports BumpAllocator
 │   ├── allocator.rs                BumpAllocator (page-level)
-│   └── heap.rs                     global heap init, alloc_page(), GlobalAlloc impl
+│   ├── heap.rs                     global heap init, alloc_page(), GlobalAlloc impl
+│   └── region_registry.rs          Stage-2 region registration with attrs
 ├── arch/
 │   ├── mod.rs                      arch dispatch (aarch64 only currently)
 │   ├── traits.rs                   portable traits: Stage2Mapper, InterruptController, etc.
@@ -52,7 +59,8 @@ src/
 │   ├── memory.rs                   PageOwnership enum, validate_page_for_share()
 │   ├── stage2_walker.rs            Lightweight Stage-2 walker from VTTBR: SW bits, S2AP, map/unmap
 │   ├── descriptors.rs              FF-A v1.1 composite memory region descriptor parsing
-│   └── smc_forward.rs              forward_smc() to EL3 via smc #0, probe_spmc()
+│   ├── smc_forward.rs              forward_smc() to EL3 via smc #0, probe_spmc()
+│   └── notifications.rs            Per-partition 64-bit notification bitmaps
 └── devices/
     ├── mod.rs                      Device enum, DeviceManager, MmioDevice trait
     ├── gic/
@@ -82,6 +90,9 @@ src/
 | `handle_exception(ctx)` | `exception.rs` | Sync exception handler (called from asm) |
 | `handle_irq_exception(ctx)` | `exception.rs` | IRQ handler (called from asm) |
 | `enter_guest(ctx)` | `exception.S` | Context switch to EL1, ERET |
+| `rust_main_sel2(manifest, hw_config, core_id)` | `main.rs` | S-EL2 SPMC entry |
+| `rust_main_sel2_secondary()` | `main.rs` | S-EL2 secondary CPU warm-boot |
+| `spmc_event_loop()` | `spmc_handler.rs` | SPMC dispatch loop |
 
 ## Feature-Gated Modules
 
@@ -91,6 +102,8 @@ src/
 | `multi_pcpu` | `rust_main_secondary`, `SpinLock<DeviceManager>`, `TPIDR_EL2` context, physical SGI send, `ensure_vtimer_enabled()`, `SHARED_VTTBR/VTCR`, `PENDING_CPU_ON_PER_VCPU` |
 | `multi_vm` | `run_multi_vm_guests()`, `GuestConfig::linux_vm1()`, VM1 memory partition, per-VM VSwitch ports, per-VM virtio-net |
 | `guest` | Zephyr boot path in `main.rs` |
+| `sel2` | `boot_sel2.S`, `spmc_handler.rs`, `sp_context.rs`, `secure_stage2.rs`, `sel2_mmu.rs`, `manifest.rs`, S-EL2 Stage-1 MMU, Secure Stage-2 |
+| `tfa_boot` | `ffa::proxy::init()` SPMC detection, NS proxy RXTX with SPMD, SMC forwarding, PARTITION_INFO_GET forwarding |
 
 ## Cross-Module Dependencies
 
@@ -148,6 +161,8 @@ dtb ◀── platform, distributor, redistributor, pl011, guest_loader
 | `EXCEPTION_COUNT` | exception | `AtomicU32` | single-pCPU only |
 | `SPMC_PRESENT` | ffa/proxy | `AtomicBool` | runtime SPMC detection flag |
 | `MAILBOXES` | ffa/mailbox | `[UnsafeCell<Mailbox>; MAX_VMS]` | per-VM RXTX buffers |
+| `SP_STORE` | sp_context | `UnsafeCell<[SpContext; MAX_SPS]>` | per-SP state (sel2 only) |
+| `SPMC_SHARE_RECORDS` | spmc_handler | `[SpmcShareRecord; 8]` | SPMC memory sharing (sel2 only) |
 
 ## Assembly Interface
 
@@ -161,6 +176,11 @@ exception.S exports:
   exception_vector_table → installed into VBAR_EL2
   enter_guest(ctx)       → save EL2 callee-saved, restore guest regs, ERET
                          → on trap: save guest regs, call handle_exception/handle_irq_exception
+
+boot_sel2.S exports:
+  _start_sel2             → rust_main_sel2(manifest, hw_config, core_id)
+  secondary_entry_sel2    → rust_main_sel2_secondary()
+  sel2_pcpu_stacks        → 3×16KB BSS for secondary CPUs
 
 Rust → ASM contract:
   VcpuContext must be #[repr(C)] — field offsets used by exception.S

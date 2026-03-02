@@ -1,17 +1,20 @@
 # ARM64 Hypervisor
 
-A bare-metal Type-1 hypervisor for ARM64 (AArch64) written in Rust. Runs at EL2 and manages guest VMs at EL1, targeting QEMU virt machine. Boots Linux 6.12.12 to BusyBox shell with 4 vCPUs, virtio-blk storage, virtio-net networking, multi-VM support, and FF-A v1.1 proxy with VM-to-VM memory sharing.
+A bare-metal Type-1 hypervisor for ARM64 (AArch64) written in Rust. Runs at EL2 and manages guest VMs at EL1, targeting QEMU virt machine. Boots Linux 6.12.12 to BusyBox shell with 4 vCPUs, virtio-blk storage, virtio-net networking, multi-VM support, and FF-A v1.1 proxy with VM-to-VM memory sharing. Dual boot modes: NS-EL2 hypervisor via TF-A boot chain (BL33) and S-EL2 SPMC (BL32) managing Secure Partitions. Integrates with pKVM at NS-EL2 for protected VM management.
 
 ## Project Goals
 
 - Build a production-style ARM64 Type-1 hypervisor from scratch for educational and research purposes
 - Full hardware-assisted virtualization: Stage-2 MMU, GICv3 virtual interface, HW timer injection
 - Boot real operating systems (Linux, Zephyr) as guest VMs
-- Prepare architecture for future ARM security extensions: FF-A, Secure EL2 (TEE), RME/CCA
+- Dual-world architecture: S-EL2 SPMC managing Secure Partitions + pKVM at NS-EL2 for Normal World
 
 ## Features
 
-- **FF-A v1.1 Proxy**: Firmware Framework for Arm — SMC interception, stub SPMC with 2 SPs, page ownership validation, VM-to-VM memory sharing (RETRIEVE/RELINQUISH), descriptor parsing, SMC forwarding to EL3
+- **S-EL2 SPMC**: Hypervisor as BL32 SPMC at S-EL2 -- manages Secure Partitions (SP1 Hello + SP2 IRQ), DIRECT_REQ/RESP messaging, memory sharing, NS interrupt preemption, secure vIRQ injection via HCR_EL2.VI
+- **TF-A Boot Chain**: BL1->BL2->BL31(SPMD)->BL32(SPMC)->BL33(hypervisor) with manifest FDT parsing
+- **pKVM Integration**: pKVM at NS-EL2 + our SPMC at S-EL2, 4-CPU SMP, FF-A v1.1 discovery, AOSP android16-6.12 kernel
+- **FF-A v1.1 Proxy**: Firmware Framework for Arm -- SMC interception, stub SPMC with 2 SPs, page ownership validation, VM-to-VM memory sharing (RETRIEVE/RELINQUISH), descriptor parsing, SMC forwarding to EL3
 - **Virtio-net + VSwitch**: L2 virtual switch with MAC learning, per-VM MAC addresses, inter-VM frame forwarding, auto-IP assignment
 - **Multi-VM**: 2 Linux VMs time-sliced on 1 pCPU with per-VM Stage-2, VMID-tagged TLBs, independent device managers
 - **Multi-pCPU**: 4 vCPUs on 4 physical CPUs (1:1 affinity) with PSCI boot, TPIDR_EL2 per-CPU context
@@ -22,12 +25,13 @@ A bare-metal Type-1 hypervisor for ARM64 (AArch64) written in Rust. Runs at EL2 
 - **Device Emulation**: PL011 UART (TX+RX), PL031 RTC, GIC Distributor/Redistributor, virtio-mmio
 - **Stage-2 Memory**: Dynamic page tables (2MB blocks + 4KB pages), VMID-tagged TLBs, heap gap protection
 - **Linux Guest Boot**: Boots Linux 6.12.12 (custom defconfig) to BusyBox shell with 4 CPUs, virtio-blk, virtio-net
+- **Android Boot**: Android-configured kernel (PL031 RTC, Binder IPC, binderfs, minimal init, 1GB RAM)
 
 ## Current Status
 
-**Progress**: Milestones 0-2 complete, M3 (FF-A) in progress — proxy, memory sharing, VM-to-VM implemented
-**Tests**: 30 test suites (~171 assertions), all passing
-**Code**: ~16,000 lines (src + tests)
+**Progress**: Milestones 0-4 complete, including FF-A v1.1, TF-A boot chain, S-EL2 SPMC, and pKVM integration
+**Tests**: 33 test suites (~312 assertions), all passing
+**Code**: ~23,000 lines (src + tests + asm)
 
 ### Milestone Overview
 
@@ -39,18 +43,23 @@ M2: Enhanced Features      █████████████████�
     2.2 Dynamic Memory     ████████████████████ 100%
     2.3 Multi-vCPU         ████████████████████ 100%
     2.4 API Documentation  ████████████████████ 100%
-M3: FF-A                   ████████████░░░░░░░░  60%
-M4: Secure EL2 / TEE      ░░░░░░░░░░░░░░░░░░░░   0%
+M3: FF-A v1.1              ████████████████████ 100%
+M4: Secure EL2 / SPMC     ████████████████████ 100%
+    4.1 TF-A Boot Chain    ████████████████████ 100%
+    4.2 BL33 Hypervisor    ████████████████████ 100%
+    4.3 S-EL2 SPMC (BL32)  ████████████████████ 100%
+    4.4 SP Boot + Dispatch ████████████████████ 100%
+    4.5 pKVM Integration   ████████████████████ 100%
 M5: RME & CCA             ░░░░░░░░░░░░░░░░░░░░   0%
 ```
 
 ### Latest Updates
 
-- **FF-A v1.1 Proxy**: SMC trap, stub SPMC (2 SPs), page ownership via Stage-2 PTE SW bits, VM-to-VM memory sharing
-- **VM-to-VM Memory Sharing**: MEM_RETRIEVE_REQ/RELINQUISH with dynamic Stage-2 page mapping across VMs
-- **Virtio-net + VSwitch**: L2 virtual switch, per-VM MAC (52:54:00:00:00:{id+1}), auto-IP (10.0.0.{id+1}/24)
-- **Multi-VM**: 2 Linux VMs time-sliced on 1 pCPU, both boot to BusyBox shell
-- **Multi-pCPU**: 4 vCPUs on 4 physical CPUs with PSCI boot and physical IPI delivery
+- **pKVM + SPMC**: pKVM at NS-EL2 + our SPMC at S-EL2 -- boots to BusyBox shell with 4 CPUs
+- **E2E Memory Sharing**: NWd SHARE -> SP RETRIEVE -> SP write -> SP RELINQUISH -> NWd verify -> NWd RECLAIM
+- **Multi-SP Dispatch**: SP1 (Hello) + SP2 (IRQ) with per-SP INTID ownership and cross-SP preemption
+- **NS Interrupt Preemption**: IRQ during SP -> FFA_INTERRUPT -> FFA_RUN resume
+- **S-EL2 Stage-1 MMU**: Identity map with NS=1 for NWd DRAM, secondary CPU warm-boot
 
 ## Quick Start
 
@@ -68,14 +77,20 @@ sudo apt install qemu-system-arm gcc-aarch64-linux-gnu
 ### Build & Run
 
 ```bash
-make                # Build hypervisor
-make run            # Build and run tests in QEMU (exit: Ctrl+A then X)
-make run-linux      # Boot Linux guest (4 vCPUs on 1 pCPU, virtio-blk)
-make run-linux-smp  # Boot Linux guest (4 vCPUs on 4 pCPUs)
-make run-multi-vm   # Boot 2 Linux VMs time-sliced on 1 pCPU
-make debug          # Run with GDB server on port 1234
-make clippy         # Run linter
-make fmt            # Format code
+make                    # Build hypervisor
+make run                # Build and run tests in QEMU (exit: Ctrl+A then X)
+make run-linux          # Boot Linux guest (4 vCPUs on 1 pCPU, virtio-blk)
+make run-linux-smp      # Boot Linux guest (4 vCPUs on 4 pCPUs)
+make run-multi-vm       # Boot 2 Linux VMs time-sliced on 1 pCPU
+make run-android        # Boot Android-configured kernel (PL031 RTC, Binder, 1GB RAM)
+make run-sel2           # Boot TF-A with BL32 at S-EL2
+make run-tfa-linux      # Boot TF-A -> hypervisor (BL33) -> Linux
+make run-spmc           # Boot TF-A -> our SPMC (BL32) at S-EL2
+make run-tfa-linux-ffa  # Boot TF-A -> SPMC -> hypervisor (BL33) -> Linux (FF-A)
+make run-pkvm           # Boot pKVM (NS-EL2) + our SPMC (S-EL2)
+make debug              # Run with GDB server on port 1234
+make clippy             # Run linter
+make fmt                # Format code
 ```
 
 ### Debugging
@@ -96,19 +111,24 @@ gdb-multiarch target/aarch64-unknown-none/debug/hypervisor
 ### Privilege Model
 
 ```
-┌─────────────────────────────────────────────┐
-│  Guest OS (Linux / Zephyr)       EL1        │
-│  ─ Uses virtual ICC registers               │
-│  ─ Stage-2 translated memory               │
-├─────────────────────────────────────────────┤
-│  Hypervisor                      EL2        │
-│  ─ Exception handling & MMIO emulation      │
-│  ─ GICv3 List Register management           │
-│  ─ Stage-2 page table control               │
-├─────────────────────────────────────────────┤
-│  Hardware (QEMU virt)                       │
-│  ─ GICv3, PL011, Generic Timer             │
-└─────────────────────────────────────────────┘
+┌─────────────────────────────────────────────────────────────┐
+│  Guest OS (Linux / Android / Zephyr)              NS-EL1   │
+├─────────────────────────────────────────────────────────────┤
+│  pKVM (protected KVM)                             NS-EL2   │
+│  - Normal World VM management                              │
+├─────────────────────────────────────────────────────────────┤
+│  Secure Partitions (SP1 Hello, SP2 IRQ)           S-EL1    │
+├─────────────────────────────────────────────────────────────┤
+│  Our Hypervisor (SPMC role)                       S-EL2    │
+│  - SPMC event loop, FF-A dispatch                          │
+│  - Secure Stage-2, SP lifecycle                            │
+├─────────────────────────────────────────────────────────────┤
+│  TF-A BL31 + SPMD                                EL3      │
+│  - SMC relay, world switch                                 │
+├─────────────────────────────────────────────────────────────┤
+│  Hardware (QEMU virt)                                      │
+│  - GICv3, PL011, PL031, Generic Timer, virtio-mmio        │
+└─────────────────────────────────────────────────────────────┘
 ```
 
 ### Exception Handling Flow
@@ -155,6 +175,14 @@ Restore context → ERET back to guest
 | FF-A Stub SPMC | `src/ffa/stub_spmc.rs` | Simulated Secure Partitions |
 | FF-A Descriptors | `src/ffa/descriptors.rs` | Memory region descriptor parsing |
 | FF-A SMC Forward | `src/ffa/smc_forward.rs` | SMC forwarding to EL3 |
+| FF-A Notifications | `src/ffa/notifications.rs` | Per-partition notification bitmaps |
+| SPMC Handler | `src/spmc_handler.rs` | S-EL2 SPMC event loop + FF-A dispatch |
+| SP Context | `src/sp_context.rs` | Per-SP state machine, INTID ownership |
+| Secure Stage-2 | `src/secure_stage2.rs` | VSTTBR/VSTCR config for SP isolation |
+| S-EL2 MMU | `src/sel2_mmu.rs` | S-EL2 Stage-1 identity map (NS=1 for NWd) |
+| Manifest Parser | `src/manifest.rs` | TOS_FW_CONFIG DTB parsing |
+| Region Registry | `src/mm/region_registry.rs` | Stage-2 region registration |
+| Log | `src/log.rs` | Structured logging macros |
 | DTB Parser | `src/dtb.rs` | Runtime hardware discovery from host DTB |
 | Global State | `src/global.rs` | Per-VM atomics, UART RX ring, pending SGIs/SPIs |
 | Guest Loader | `src/guest_loader.rs` | Linux/Zephyr boot configuration |
@@ -179,7 +207,7 @@ Restore context → ERET back to guest
 
 ## Testing
 
-30 test suites (~171 assertions) run automatically on `make run`:
+33 test suites (~312 assertions) run automatically on `make run`:
 
 | Test | Description |
 |------|-------------|
@@ -212,6 +240,10 @@ Restore context → ERET back to guest
 | `test_virtio_net` | VirtioNet: device_id/features/queues/config/mac |
 | `test_page_ownership` | Stage-2 PTE SW bits: ownership transitions |
 | `test_ffa` | FF-A proxy: VERSION/ID_GET/FEATURES/RXTX/messaging/memory/VM-to-VM |
+| `test_spmc_handler` | SPMC dispatch: VERSION/FEATURES/DIRECT_REQ/memory/multi-SP (54 assertions) |
+| `test_sp_context` | SpContext: state machine, INTID ownership, pending IRQ (28 assertions) |
+| `test_secure_stage2` | SecureStage2Config: VSTTBR/VSTCR validation (4 assertions) |
+| `test_log` | Structured logging macros |
 | `test_guest_interrupt` | Guest interrupt injection + exception vector |
 
 ## Roadmap
@@ -226,16 +258,20 @@ Restore context → ERET back to guest
 - Multi-VM: 2 Linux VMs time-sliced on 1 pCPU with per-VM Stage-2 and VMID TLBs
 - DTB runtime parsing: hardware discovery from host device tree
 - Virtio-net + VSwitch: L2 virtual switch, inter-VM networking, auto-IP
-- FF-A v1.1 proxy: SMC trap, stub SPMC, page ownership, descriptor parsing, SMC forwarding
+- FF-A v1.1 proxy: SMC trap, stub SPMC, page ownership, descriptor parsing, SMC forwarding, notifications, indirect messaging
 - VM-to-VM FF-A memory sharing: MEM_RETRIEVE_REQ/RELINQUISH with dynamic Stage-2 mapping
+- Android boot: PL031 RTC emulation, Binder IPC, binderfs, minimal init, 1GB RAM
+- TF-A boot chain: BL1->BL2->BL31(SPMD)->BL32(SPMC)->BL33(hypervisor), manifest FDT parsing
+- S-EL2 SPMC: SPMC event loop, SP1 (Hello) + SP2 (IRQ) at S-EL1, DIRECT_REQ/RESP, Secure Stage-2
+- End-to-end DIRECT_REQ: NS proxy -> SPMD -> SPMC -> SP (x4 += 0x1000 proof)
+- RXTX + PARTITION_INFO_GET forwarding, Linux FF-A driver discovery
+- NS interrupt preemption: IRQ during SP -> FFA_INTERRUPT -> FFA_RUN resume
+- Multi-SP + secure vIRQ injection: per-SP INTID ownership, HCR_EL2.VI, cross-SP preemption
+- pKVM integration: pKVM at NS-EL2 + our SPMC at S-EL2, 4-CPU SMP, FF-A v1.1 discovery
+- E2E memory sharing: NWd SHARE -> SP RETRIEVE -> SP write -> SP RELINQUISH -> NWd verify -> NWd RECLAIM
 
 ### In Progress
 
-- **M3 — FF-A**: ~60% complete — proxy, memory sharing, VM-to-VM done; remaining: real SPMC integration, multi-endpoint sharing, FFA_NOTIFICATION
-
-### Planned
-
-- **M4 — Secure EL2**: TEE support, S-EL2 implementation, OP-TEE integration
 - **M5 — RME & CCA**: Realm Management Extension, Confidential Compute Architecture
 
 See [DEVELOPMENT_PLAN.md](DEVELOPMENT_PLAN.md) for the full roadmap.

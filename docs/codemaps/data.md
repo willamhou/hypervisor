@@ -1,6 +1,6 @@
 # Data Models Codemap
 
-> Freshness: 2026-02-17 | Key structs, enums, and their relationships
+> Freshness: 2026-03-02 | Key structs, enums, and their relationships
 
 ## Core Domain Types
 
@@ -108,6 +108,8 @@ enum Device {
     Gicd(VirtualGicd),
     Gicr(VirtualGicr),
     VirtioBlk(VirtioMmioTransport<VirtioBlk>),
+    VirtioNet(VirtioMmioTransport<VirtioNet>),
+    Pl031(VirtualPl031),
 }
 
 struct DeviceManager {
@@ -178,6 +180,12 @@ struct VirtioBlk {
     disk_base: u64,                  // physical address of in-memory image
     disk_size: u64,                  // bytes
 }
+
+// src/devices/virtio/net.rs
+struct VirtioNet {
+    mac: [u8; 6],                    // per-VM MAC (52:54:00:00:00:{id+1})
+    status: u16,                     // link status
+}
 ```
 
 ### UART Emulation
@@ -189,6 +197,64 @@ struct VirtualUart {
     ifls: u32, imsc: u32, ris: u32, dmacr: u32,
     rx_buf: [u8; 64],               // RX FIFO
     rx_head: usize, rx_tail: usize,
+}
+```
+
+### PL031 RTC Emulation
+
+```rust
+// src/devices/pl031.rs
+struct VirtualPl031 {
+    load_value: u32,                 // RTCLR value
+    enabled: bool,                   // RTCCR bit 0
+}
+```
+
+## S-EL2 / SPMC Types
+
+```rust
+// src/sp_context.rs
+struct SpContext {
+    id: u16,                         // SP partition ID (0x8001, 0x8002)
+    state: SpState,                  // Reset→Idle→Running→Blocked→Preempted
+    vcpu_ctx: VcpuContext,           // guest registers
+    owned_intids: [Option<u32>; 4],  // per-SP INTID ownership
+    pending_irq: Option<u32>,        // queued virtual interrupt
+}
+
+enum SpState { Reset, Idle, Running, Blocked, Preempted }
+
+// src/spmc_handler.rs
+struct SpmcShareRecord {
+    handle: u64,
+    sender: u16,
+    receiver: u16,
+    page_count: usize,
+    pages: [u64; 4],                 // up to 4 pages
+    retrieved: bool,
+}
+
+// src/secure_stage2.rs
+struct SecureStage2Config {
+    vsttbr: u64,                     // VSTTBR_EL2 value
+    vstcr: u64,                      // VSTCR_EL2 value
+}
+
+// src/manifest.rs
+struct SpMcManifest {
+    spmc_id: u16,                    // FF-A SPMC ID (0x8000)
+    maj_ver: u32,
+    min_ver: u32,
+}
+```
+
+## FF-A Notification Types
+
+```rust
+// src/ffa/notifications.rs
+struct NotificationState {
+    bitmap: [u64; 8],                // per-partition 64-bit bitmaps
+    bindings: [NotifBinding; 8],     // endpoint bindings
 }
 ```
 
@@ -328,12 +394,19 @@ Vcpu ──contains──▶ VcpuArchState    (42-field hw save/restore)
 Vcpu ──contains──▶ VirtualInterruptState
 
 DeviceManager ──contains──▶ [Option<Device>; 8]
-Device ──variants──▶ VirtualUart | VirtualGicd | VirtualGicr | VirtioMmioTransport<VirtioBlk>
-VirtioMmioTransport<T> ──contains──▶ T (VirtioBlk) + Virtqueue
+Device ──variants──▶ VirtualUart | VirtualGicd | VirtualGicr
+                     | VirtioMmioTransport<VirtioBlk>
+                     | VirtioMmioTransport<VirtioNet>
+                     | VirtualPl031
+VirtioMmioTransport<T> ──contains──▶ T (VirtioBlk/VirtioNet) + Virtqueue
 
 GlobalDeviceManager ──wraps──▶ DeviceManager (UnsafeCell or SpinLock)
 VmGlobalState ──contains──▶ PendingCpuOn
 
 DynamicIdentityMapper ──allocates──▶ PageTable (via heap)
 PlatformInfo ◀──read by── distributor, redistributor, pl011, platform, guest_loader
+
+SpContext ──contains──▶ VcpuContext
+SpMcManifest ◀──parsed by── main.rs (sel2 boot)
+SecureStage2Config ◀──built by── spmc_handler
 ```

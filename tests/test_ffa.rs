@@ -641,7 +641,9 @@ pub fn run_ffa_test() {
     }
 
     // Test 29: FFA_RUN returns NOT_SUPPORTED (no real SPMC)
-    {
+    // Under tfa_boot, SPMC_PRESENT=true so FFA_RUN is forwarded to real SPMC
+    // which returns a scheduling result, not FFA_ERROR. Skip in that case.
+    if !cfg!(feature = "tfa_boot") {
         let mut ctx = VcpuContext::default();
         ctx.gp_regs.x0 = ffa::FFA_RUN;
         ctx.gp_regs.x1 = (0x8001u64 << 16) | 0; // SP1, vCPU 0
@@ -870,9 +872,9 @@ pub fn run_ffa_test() {
 
         // Test 40: MSG_SEND2 from VM0 to VM1
         // Test 41: MSG_WAIT by VM1 returns pending message
-        // Under tfa_boot (implies linux_guest), is_guest_ram() rejects stack-allocated
-        // RXTX buffers (hypervisor memory, not guest RAM). Skip these tests.
-        if !cfg!(feature = "tfa_boot") {
+        // Under linux_guest, is_guest_ram() rejects stack-allocated RXTX buffers
+        // (hypervisor memory, not guest RAM). Skip these tests.
+        if !cfg!(feature = "linux_guest") {
             {
                 let mut ctx = VcpuContext::default();
                 ctx.gp_regs.x0 = ffa::FFA_MSG_SEND2;

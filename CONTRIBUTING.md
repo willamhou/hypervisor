@@ -29,18 +29,33 @@ make clean    # Clean build artifacts
 make check    # Check code without building
 make clippy   # Run clippy linter
 make fmt      # Format code
+
+# Guest boot targets
+make run-android      # Boot Android-configured kernel
+make run-sel2         # Boot TF-A with BL32 at S-EL2
+make run-tfa-linux    # Boot TF-A → hypervisor (BL33) → Linux
+make run-spmc         # Boot TF-A → our SPMC (BL32) at S-EL2
+make run-tfa-linux-ffa # Boot TF-A → SPMC → BL33 → Linux (FF-A)
+make run-pkvm         # Boot pKVM (NS-EL2) + our SPMC (S-EL2)
+
+# Build infrastructure (Docker-based)
+make build-tfa        # Build TF-A flash.bin (Docker)
+make build-tfa-bl33   # Build TF-A with PRELOADED_BL33
+make build-spmc       # Build hypervisor as S-EL2 SPMC binary
+make build-tfa-spmc   # Build TF-A with real SPMC + SPs
+make build-pkvm-kernel # Build AOSP kernel for pKVM (Docker)
+make build-tfa-pkvm   # Build TF-A flash-pkvm.bin
 ```
 
 ### Testing
 
-All tests run automatically during `make run`. The output shows pass/fail status for each test suite.
+33 test suites (~312 assertions) run automatically during `make run`. The output shows pass/fail status for each test suite. Test registry uses macro-based registration in `tests/mod.rs`.
 
 To add a new test:
 
 1. Create `tests/test_<name>.rs` with a `pub fn run_<name>_test()` function
 2. Add `pub mod test_<name>;` to `tests/mod.rs`
-3. Add `pub use test_<name>::run_<name>_test;` to `tests/mod.rs`
-4. Call `tests::run_<name>_test();` from `src/main.rs`
+3. Add entry to `register_tests!()` macro in `tests/mod.rs` (main.rs no longer needs editing)
 
 ## Project Structure
 
@@ -60,6 +75,12 @@ hypervisor/
 │   ├── sync.rs              # Ticket SpinLock<T>
 │   ├── uart.rs              # Physical PL011 driver
 │   ├── percpu.rs            # Per-CPU context (MPIDR → PerCpuContext)
+│   ├── log.rs               # Structured logging macros
+│   ├── manifest.rs          # SPMC manifest parser (TOS_FW_CONFIG DTB)
+│   ├── secure_stage2.rs     # Secure Stage-2 config (VSTTBR/VSTCR)
+│   ├── sel2_mmu.rs          # S-EL2 Stage-1 identity map
+│   ├── sp_context.rs        # Per-SP state machine, INTID ownership
+│   ├── spmc_handler.rs      # S-EL2 SPMC event loop + FF-A dispatch
 │   ├── arch/
 │   │   ├── traits.rs        # Portable trait definitions
 │   │   └── aarch64/
@@ -88,9 +109,20 @@ hypervisor/
 │   │   ├── memory.rs        # Page ownership tracking
 │   │   ├── stage2_walker.rs # Stage-2 PTE walker for SW bits
 │   │   ├── descriptors.rs   # Memory region descriptor parsing
+│   │   ├── notifications.rs # Per-partition notification bitmaps
 │   │   └── smc_forward.rs   # SMC forwarding to EL3
 │   └── mm/                  # Heap allocator
-└── tests/                   # 30 test suites (~171 assertions)
+│       └── region_registry.rs # Stage-2 region registration
+└── tests/                   # 33 test suites (~312 assertions)
+```
+
+The `Device` enum uses enum-dispatch (no dynamic dispatch):
+
+```
+Device ──variants──▶ VirtualUart | VirtualGicd | VirtualGicr
+                   | VirtioMmioTransport<VirtioBlk>
+                   | VirtioMmioTransport<VirtioNet>
+                   | VirtualPl031
 ```
 
 ## Code Style
@@ -167,6 +199,20 @@ pub fn function(param: Type) -> Result<T, E> { ... }
 - EL2 code: `src/arch/aarch64/hypervisor/`
 - Memory management: `src/arch/aarch64/mm/`
 - Peripherals: `src/arch/aarch64/peripherals/`
+
+### Feature Flags
+
+| Feature | Implies | Description |
+|---------|---------|-------------|
+| `(default)` | — | Unit tests only, no guest boot |
+| `guest` | — | Zephyr guest loading |
+| `linux_guest` | — | Linux guest with DynamicIdentityMapper, GICR trap, virtio |
+| `multi_pcpu` | `linux_guest` | 4 vCPUs on 4 pCPUs (1:1 affinity) |
+| `multi_vm` | `linux_guest` | 2 VMs time-sliced on 1 pCPU |
+| `sel2` | — | S-EL2 SPMC mode (BL32) |
+| `tfa_boot` | `linux_guest` | TF-A boot with real SPMC |
+
+Note: `multi_pcpu` and `multi_vm` are mutually exclusive. `sel2` is mutually exclusive with all others.
 
 ## Commit Messages
 
