@@ -661,8 +661,93 @@ _start:
 
     adr     x0, str_pass
     bl      uart_print
-    b       .Ldone
+    b       .Ltest_14
 .Lfail_13:
+    adr     x0, str_fail
+    bl      uart_print
+
+    /* ============ Test 14: Alternating SP1/SP2 DIRECT_REQ (x4 stability) ============ */
+.Ltest_14:
+    adr     x0, str_t14
+    bl      uart_print
+
+    /* 4 rounds: SP1→SP2→SP1→SP2, each with distinct x4 */
+    /* Round 1: SP1, x4=0x0100 → expect 0x1100 */
+    ldr     x0, =FFA_DIRECT_REQ_32
+    movz    x1, #0x8001
+    movk    x1, #0x0001, lsl #16
+    mov     x2, xzr
+    movz    x3, #0xA001
+    movz    x4, #0x0100
+    mov     x5, xzr
+    mov     x6, xzr
+    mov     x7, xzr
+    smc     #0
+    ldr     x9, =FFA_DIRECT_RESP_32
+    cmp     x0, x9
+    b.ne    .Lfail_14
+    movz    x9, #0x1100
+    cmp     x4, x9
+    b.ne    .Lfail_14
+
+    /* Round 2: SP2, x4=0x0200 → expect 0x1200 */
+    ldr     x0, =FFA_DIRECT_REQ_32
+    movz    x1, #0x8002
+    movk    x1, #0x0001, lsl #16
+    mov     x2, xzr
+    movz    x3, #0xA002
+    movz    x4, #0x0200
+    mov     x5, xzr
+    mov     x6, xzr
+    mov     x7, xzr
+    smc     #0
+    ldr     x9, =FFA_DIRECT_RESP_32
+    cmp     x0, x9
+    b.ne    .Lfail_14
+    movz    x9, #0x1200
+    cmp     x4, x9
+    b.ne    .Lfail_14
+
+    /* Round 3: SP1, x4=0x0300 → expect 0x1300 */
+    ldr     x0, =FFA_DIRECT_REQ_32
+    movz    x1, #0x8001
+    movk    x1, #0x0001, lsl #16
+    mov     x2, xzr
+    movz    x3, #0xA003
+    movz    x4, #0x0300
+    mov     x5, xzr
+    mov     x6, xzr
+    mov     x7, xzr
+    smc     #0
+    ldr     x9, =FFA_DIRECT_RESP_32
+    cmp     x0, x9
+    b.ne    .Lfail_14
+    movz    x9, #0x1300
+    cmp     x4, x9
+    b.ne    .Lfail_14
+
+    /* Round 4: SP2, x4=0x0400 → expect 0x1400 */
+    ldr     x0, =FFA_DIRECT_REQ_32
+    movz    x1, #0x8002
+    movk    x1, #0x0001, lsl #16
+    mov     x2, xzr
+    movz    x3, #0xA004
+    movz    x4, #0x0400
+    mov     x5, xzr
+    mov     x6, xzr
+    mov     x7, xzr
+    smc     #0
+    ldr     x9, =FFA_DIRECT_RESP_32
+    cmp     x0, x9
+    b.ne    .Lfail_14
+    movz    x9, #0x1400
+    cmp     x4, x9
+    b.ne    .Lfail_14
+
+    adr     x0, str_pass
+    bl      uart_print
+    b       .Ldone
+.Lfail_14:
     adr     x0, str_fail
     bl      uart_print
 
@@ -720,6 +805,8 @@ str_t12:
     .asciz "  Test 12: MEM_SHARE + RECLAIM ..... "
 str_t13:
     .asciz "  Test 13: MEM_SHARE lifecycle E2E . "
+str_t14:
+    .asciz "  Test 14: Alternating SP1/SP2 ..... "
 str_pass:
     .asciz "PASS\r\n"
 str_fail:

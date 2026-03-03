@@ -418,5 +418,67 @@ pub fn run_tests() {
         pass += 1;
     }
 
+    // ── G4: FFA_RUN accepts Preempted state (non-sel2 returns NOT_SUPPORTED) ──
+
+    // Push SP1 through Reset → Idle → Running → Preempted via with_sp_locked
+    {
+        use hypervisor::sp_context::{with_sp_locked, SpState};
+        let ok = with_sp_locked(0x8001, |sp| {
+            sp.transition_to(SpState::Idle).unwrap();
+            sp.transition_to(SpState::Running).unwrap();
+            sp.transition_to(SpState::Preempted).unwrap();
+        });
+        assert!(ok.is_some()); // lock acquired
+        pass += 1;
+
+        // Now FFA_RUN should pass the Preempted check and return NOT_SUPPORTED
+        // (unit-test path has no enter_guest)
+        let mut req = zero_req(ffa::FFA_RUN);
+        req.x1 = 0x8001 << 16;
+        let resp = dispatch_ffa(&req);
+        assert_eq!(resp.x0, ffa::FFA_ERROR);
+        assert_eq!(resp.x2, ffa::FFA_NOT_SUPPORTED as u64);
+        pass += 2;
+
+        // Restore SP1 to Idle for subsequent tests
+        let restored = with_sp_locked(0x8001, |sp| {
+            sp.transition_to(SpState::Running).unwrap();
+            sp.transition_to(SpState::Idle).unwrap();
+        });
+        assert!(restored.is_some());
+    }
+
+    // ── G5: Global SP store helper functions ──
+
+    {
+        use hypervisor::sp_context::{
+            find_sp_with_pending_irq, first_owned_intid_for, set_pending_irq_for,
+            take_pending_irq_for,
+        };
+
+        // G5-1: first_owned_intid_for — SP2 owns INTID 29
+        assert_eq!(first_owned_intid_for(0x8002), Some(29));
+        assert_eq!(first_owned_intid_for(0x8001), None); // SP1 has no owned INTIDs
+        assert_eq!(first_owned_intid_for(0x9999), None); // non-existent SP
+        pass += 3;
+
+        // G5-2: set_pending_irq_for + find_sp_with_pending_irq + take_pending_irq_for
+        assert_eq!(find_sp_with_pending_irq(), None); // nothing pending
+        assert!(set_pending_irq_for(0x8002, 29)); // set for SP2
+        assert_eq!(find_sp_with_pending_irq(), Some(0x8002));
+        assert_eq!(take_pending_irq_for(0x8002), Some(29));
+        assert_eq!(find_sp_with_pending_irq(), None); // consumed
+        assert_eq!(take_pending_irq_for(0x8002), None); // already consumed
+        pass += 6;
+
+        // G5-3: set_pending_irq_for non-existent SP returns false
+        assert!(!set_pending_irq_for(0x9999, 42));
+        pass += 1;
+
+        // G5-4: take_pending_irq_for non-existent SP returns None
+        assert_eq!(take_pending_irq_for(0x9999), None);
+        pass += 1;
+    }
+
     hypervisor::log_info!("    {} assertions passed\n", pass);
 }

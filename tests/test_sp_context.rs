@@ -125,5 +125,74 @@ pub fn run_tests() {
     assert_eq!(ctx6.owner_cpu(), None);
     pass += 4;
 
+    // ── G1: Complete illegal state transition matrix (7 remaining) ──
+
+    // Test 43-44: Idle → Preempted / Blocked are invalid
+    let mut ctx_g1 = SpContext::new(0x9001, 0x0e300000, 0x0e400000, [0; 4]);
+    ctx_g1.transition_to(SpState::Idle).unwrap();
+    assert!(ctx_g1.transition_to(SpState::Preempted).is_err());
+    assert!(ctx_g1.transition_to(SpState::Blocked).is_err());
+    pass += 2;
+
+    // Test 45-46: Reset → Preempted / Blocked are invalid
+    let mut ctx_g1b = SpContext::new(0x9002, 0x0e300000, 0x0e400000, [0; 4]);
+    assert!(ctx_g1b.transition_to(SpState::Preempted).is_err());
+    assert!(ctx_g1b.transition_to(SpState::Blocked).is_err());
+    pass += 2;
+
+    // Test 47-48: Blocked → Idle / Preempted are invalid
+    let mut ctx_g1c = SpContext::new(0x9003, 0x0e300000, 0x0e400000, [0; 4]);
+    ctx_g1c.transition_to(SpState::Idle).unwrap();
+    ctx_g1c.transition_to(SpState::Running).unwrap();
+    ctx_g1c.transition_to(SpState::Blocked).unwrap();
+    assert!(ctx_g1c.transition_to(SpState::Idle).is_err());
+    assert!(ctx_g1c.transition_to(SpState::Preempted).is_err());
+    pass += 2;
+
+    // Test 49: Preempted → Blocked is invalid
+    let mut ctx_g1d = SpContext::new(0x9004, 0x0e300000, 0x0e400000, [0; 4]);
+    ctx_g1d.transition_to(SpState::Idle).unwrap();
+    ctx_g1d.transition_to(SpState::Running).unwrap();
+    ctx_g1d.transition_to(SpState::Preempted).unwrap();
+    assert!(ctx_g1d.transition_to(SpState::Blocked).is_err());
+    pass += 1;
+
+    // ── G2: CAS (try_transition) failure semantics ──
+
+    // Test 50: SP in Idle, CAS expect Running → fail with Err(Idle)
+    let mut ctx_g2 = SpContext::new(0x9005, 0x0e300000, 0x0e400000, [0; 4]);
+    ctx_g2.transition_to(SpState::Idle).unwrap();
+    let result = ctx_g2.try_transition(SpState::Running, SpState::Preempted);
+    assert_eq!(result, Err(SpState::Idle));
+    pass += 1;
+
+    // Test 51: SP in Running, CAS expect Idle → fail with Err(Running)
+    ctx_g2.transition_to(SpState::Running).unwrap();
+    let result = ctx_g2.try_transition(SpState::Idle, SpState::Running);
+    assert_eq!(result, Err(SpState::Running));
+    pass += 1;
+
+    // Test 52: CAS success path — Running → Preempted
+    let result = ctx_g2.try_transition(SpState::Running, SpState::Preempted);
+    assert_eq!(result, Ok(()));
+    assert_eq!(ctx_g2.state(), SpState::Preempted);
+    pass += 2;
+
+    // ── G3: IRQ queue overflow ──
+
+    // Test 54-58: Fill 4 slots, 5th is dropped, drain returns 4 then None
+    let ctx_g3 = SpContext::new(0x9006, 0x0e300000, 0x0e400000, [0; 4]);
+    ctx_g3.set_pending_irq(100);
+    ctx_g3.set_pending_irq(101);
+    ctx_g3.set_pending_irq(102);
+    ctx_g3.set_pending_irq(103);
+    ctx_g3.set_pending_irq(104); // 5th — should be dropped (log warning)
+    assert_eq!(ctx_g3.take_pending_irq(), Some(100));
+    assert_eq!(ctx_g3.take_pending_irq(), Some(101));
+    assert_eq!(ctx_g3.take_pending_irq(), Some(102));
+    assert_eq!(ctx_g3.take_pending_irq(), Some(103));
+    assert_eq!(ctx_g3.take_pending_irq(), None); // 104 was dropped
+    pass += 5;
+
     hypervisor::log_info!("    {} assertions passed\n", pass);
 }
