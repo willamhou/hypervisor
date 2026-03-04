@@ -1,6 +1,6 @@
 # Data Models Codemap
 
-> Freshness: 2026-03-02 | Key structs, enums, and their relationships
+> Freshness: 2026-03-03 | Key structs, enums, and their relationships
 
 ## Core Domain Types
 
@@ -215,12 +215,20 @@ struct VirtualPl031 {
 ```rust
 // src/sp_context.rs
 struct SpContext {
+    ctx: VcpuContext,                // guest registers
+    el1_state: SpEl1State,           // EL1 sysreg save/restore for world switches
     id: u16,                         // SP partition ID (0x8001, 0x8002)
-    state: SpState,                  // Reset→Idle→Running→Blocked→Preempted
-    vcpu_ctx: VcpuContext,           // guest registers
-    owned_intids: [Option<u32>; 4],  // per-SP INTID ownership
-    pending_irq: Option<u32>,        // queued virtual interrupt
+    state: AtomicU8,                 // Reset→Idle→Running→Blocked→Preempted (atomic for multi-CPU)
+    entry: u64,                      // entry point address
+    vsttbr: u64,                     // Secure Stage-2 VSTTBR
+    uuid: [u32; 4],                  // 128-bit UUID
+    pending_irqs: [AtomicU32; 4],    // atomic IRQ queue (FIFO, overflow drops)
+    preempted_cpu: AtomicU16,        // CPU that last preempted this SP
+    owner_cpu: AtomicU16,            // current logical owner CPU (CAS claim/migrate)
+    owned_intids: [u32; 4],          // per-SP INTID ownership
 }
+// Key methods: try_transition(expected, new) — CAS state change
+// Global helpers: with_sp_locked(), find_sp_with_pending_irq(), set_pending_irq_for()
 
 enum SpState { Reset, Idle, Running, Blocked, Preempted }
 

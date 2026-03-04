@@ -1,6 +1,6 @@
 # Architecture Codemap
 
-> Freshness: 2026-03-02 | Source: 60 `.rs` files + 3 `.S` files | Single external dep: `fdt 0.1.5`
+> Freshness: 2026-03-03 | Source: 60 `.rs` files + 3 `.S` files | Single external dep: `fdt 0.1.5`
 
 ## System Overview
 
