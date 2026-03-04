@@ -9,7 +9,7 @@
 
 ## 📊 当前进度概览
 
-**整体完成度**: 🟢 **96%** (Milestone 0-2 + Options A-G + M3 Sprint 3.1/3.1b/3.1c/3.2 + M4 Sprint 4.1/4.2/4.3/4.4A/4.4B + Sprint 5.1/5.2 + Phase C/D + M4.5 ✅)
+**整体完成度**: 🟢 **97%** (Milestone 0-2 + Options A-G + M3 Sprint 3.1/3.1b/3.1c/3.2 + M4 Sprint 4.1/4.2/4.3/4.4A/4.4B + Sprint 5.1/5.2 + Phase C/D + M4.5 + M4.6 S1/S2 ✅)
 
 ```
 M0: 项目启动          ████████████████████ 100% ✅
@@ -19,13 +19,13 @@ M3: FF-A              ██████████████████░�
 M4: S-EL2 SPMC        ████████████████████ 100% ✅ (Sprint 4.1/4.2/4.3/4.4A/4.4B ✅)
 M4→5 Bridge           ████████████████████ 100% ✅ (Sprint 5.1/5.2 ✅, Phase C/D ✅)
 M4.5: pKVM 集成       ████████████████████ 100% ✅ (pKVM boot ✅, FF-A nVHE ✅, FF-A protected ✅)
-M4.6: SPMC 功能补全   ░░░░░░░░░░░░░░░░░░░░   0% ⏸️ (内存管理 + 通知 + 间接消息)
+M4.6: SPMC 功能补全   ████████████░░░░░░░░  60% 🔧 (S1 内存管理 ✅, S2 E2E共享 ✅, 通知 ✅, S3 间接消息 ⏸️)
 M5: RME & CCA         ░░░░░░░░░░░░░░░░░░░░   0% ⏸️
 Android Boot          ██████████░░░░░░░░░░  50% ✅ (Phase 2 完成)
 ```
 
-**测试覆盖**: ~282 assertions / 33 test suites (100% pass)
-**代码量**: ~18000 行
+**测试覆盖**: ~347 assertions / 33 test suites (100% pass)
+**代码量**: ~19000 行
 **Linux启动**: 4 vCPU, BusyBox shell, virtio-blk, virtio-net, multi-VM, FF-A proxy
 **Android启动**: 4 vCPU, PL031 RTC, Binder IPC, minimal init, 1GB RAM
 **编译警告**: 最小化
