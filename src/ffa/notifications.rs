@@ -69,8 +69,12 @@ static NOTIF_STATE: SpinLock<[EndpointNotifState; MAX_ENDPOINTS]> = SpinLock::ne
 /// Map partition ID to endpoint index.
 /// VMs: partition ID 1..=MAX_VMS → index 0..MAX_VMS-1
 /// SPs: 0x8001 → FFA_MAX_VMS, 0x8002 → FFA_MAX_VMS+1
+/// Host: 0x0000 (FFA_HOST_ID) → FFA_MAX_VMS+2 (used by pKVM for sched notifications)
 fn endpoint_index(part_id: u16) -> Option<usize> {
-    if let Some(vm_id) = ffa::partition_id_to_vm_id(part_id) {
+    if part_id == 0x0000 {
+        // FFA_HOST_ID — pKVM uses this for scheduler notification bitmaps
+        Some(FFA_MAX_VMS + 2)
+    } else if let Some(vm_id) = ffa::partition_id_to_vm_id(part_id) {
         Some(vm_id)
     } else if part_id == 0x8001 {
         Some(FFA_MAX_VMS)

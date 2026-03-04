@@ -29,20 +29,17 @@
 
 ## Medium Effort (1-4 hours each)
 
-### ME-1: Fix pKVM sched callback -95 (FFA_HOST_ID in notifications)
-- **File**: `src/ffa/notifications.rs:75-84`
-- **Why**: pKVM calls `FFA_NOTIFICATION_BITMAP_CREATE` with partition ID 0x0000 (`FFA_HOST_ID`). `endpoint_index()` returns `None` for 0x0000 → `FFA_INVALID_PARAMETERS` → `-95 EOPNOTSUPP`. The sched callback is the **last remaining pKVM -95 gap**.
-- **Fix**: Add `0x0000 => Some(MAX_ENDPOINTS - 1)` case in `endpoint_index()`
-- **Test**: N-new test: `BITMAP_CREATE(0x0000)` → SUCCESS
-- **Verify**: `make run-pkvm` — no more `-95` in dmesg
+### ~~ME-1: Fix pKVM BITMAP_CREATE -22 (FFA_HOST_ID in notifications)~~ ✅
+- **Commit**: (pending)
+- **Fix**: Added `0x0000 => Some(FFA_MAX_VMS + 2)` case in `endpoint_index()`
+- **Result**: BITMAP_CREATE `-22` eliminated. Remaining `-95` messages are **informational** (`pr_info`):
+  - `Notification setup failed -95, not enabled` — SRI/NPI not implemented (FFA_FEATURES x1=1/2)
+  - `Failed to register driver sched callback -95` — cascade from above
+- **Note**: SRI (Schedule Receiver Interrupt) requires SPMC donating SGIs to NWd via GIC — tracked as ME-7
 
-### ME-2: Forward MEM_SHARE/RECLAIM to real SPMC in `tfa_boot` mode
-- **Files**: `src/ffa/proxy.rs:617-638`, `PROXY_TX_BUF`
-- **Why**: When `SPMC_PRESENT=true`, `handle_mem_share_or_lend()` still calls `stub_spmc::record_share()` instead of forwarding to real SPMC. Needed for `make run-tfa-linux-ffa` memory sharing.
-- **Steps**:
-  1. Copy parsed descriptor into `PROXY_TX_BUF`
-  2. Call `forward_ffa_to_spmc()` with original x0-x7
-  3. Forward RECLAIM similarly
+### ~~ME-2: Forward MEM_SHARE/RECLAIM to real SPMC in `tfa_boot` mode~~ ✅
+- **Commit**: `de9526c`
+- Dual record (local + forward) with SPMC handle, TX buffer relay, RECLAIM ordering
 
 ### ME-3: SPMC-side MSG_SEND2 + MSG_WAIT (Sprint S3)
 - **File**: `src/spmc_handler.rs`
@@ -68,6 +65,16 @@
 - **File**: `src/ffa/smc_forward.rs:181`
 - **Why**: Always returns `false` because QEMU's EL3 crashes on FFA_VERSION. Needs TF-A detection heuristic.
 - **Fix**: Check PSCI version minor field (TF-A returns specific patterns) or add compile-time `tfa_present` flag
+
+### ME-7: SRI/NPI — Schedule Receiver Interrupt + Notification Pending Interrupt
+- **Files**: `src/spmc_handler.rs` (FFA_FEATURES), GIC SGI configuration
+- **Why**: Linux FF-A driver calls `FFA_FEATURES(x1=1)` (NPI) and `FFA_FEATURES(x1=2)` (SRI) to get donated SGI INTIDs from SPMC. Our SPMC returns NOT_SUPPORTED → informational `-95` in dmesg.
+- **Impact**: pKVM boots fine without this — messages are `pr_info()`, not fatal
+- **Steps**:
+  1. SPMC allocates two SGI INTIDs (e.g. SGI 8 for NPI, SGI 9 for SRI)
+  2. FFA_FEATURES(x1=1/2) returns donated INTID in w2
+  3. GIC configuration: route SGIs from Secure to Non-Secure world
+  4. Trigger SRI/NPI SGIs from S-EL2 when notifications are set/pending
 
 ---
 
@@ -101,9 +108,10 @@
 
 1. ~~**QW-1 + QW-2 + QW-3 + QW-4**~~ ✅ Done (commit `f1793a7`)
 2. ~~**ME-4** (SpinLock migration)~~ ✅ Done (commit `0ad9fbe`)
-3. **ME-1** (sched callback -95) — last pKVM gap, high user-visible impact
-4. **ME-2** (forward MEM_SHARE to real SPMC) — needed for real E2E sharing
+3. ~~**ME-2** (forward MEM_SHARE to real SPMC)~~ ✅ Done (commit `de9526c`)
+4. ~~**ME-1** (BITMAP_CREATE -22)~~ ✅ Done (BITMAP_CREATE fixed, SRI/NPI deferred to ME-7)
 5. **ME-3** (MSG_SEND2) — needed for indirect messaging
-6. **LE-1** (SecureStage2Walker) — core SPMC memory sharing upgrade
-7. **LE-2** (dedup refactor) — code quality, not blocking features
-8. **LE-3** (RME) — next major milestone
+6. **ME-7** (SRI/NPI) — eliminates informational pKVM `-95` messages
+7. **LE-1** (SecureStage2Walker) — core SPMC memory sharing upgrade
+8. **LE-2** (dedup refactor) — code quality, not blocking features
+9. **LE-3** (RME) — next major milestone
