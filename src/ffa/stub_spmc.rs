@@ -120,6 +120,44 @@ pub fn record_share(
     None // No free slots
 }
 
+/// Record a memory share with a pre-assigned handle (from real SPMC).
+///
+/// Used when forwarding to real SPMC: proxy keeps a local record for NS Stage-2
+/// page ownership tracking, using the SPMC's handle for later RECLAIM lookup.
+pub fn record_share_with_handle(
+    handle: u64,
+    sender_id: u16,
+    receiver_id: u16,
+    ranges: &[(u64, u32)],
+    total_page_count: u32,
+    is_lend: bool,
+) -> bool {
+    // SAFETY: serialized access to SHARE_RECORDS in stub dispatch path.
+    let records = unsafe { &mut *SHARE_RECORDS.0.get() };
+    for record in records.iter_mut() {
+        if !record.active {
+            let mut stored_ranges = [(0u64, 0u32); MAX_SHARE_RANGES];
+            let count = ranges.len().min(MAX_SHARE_RANGES);
+            for (i, &r) in ranges.iter().take(count).enumerate() {
+                stored_ranges[i] = r;
+            }
+            *record = MemShareRecord {
+                handle,
+                sender_id,
+                receiver_id,
+                ranges: stored_ranges,
+                range_count: count,
+                total_page_count,
+                active: true,
+                is_lend,
+                retrieved: false,
+            };
+            return true;
+        }
+    }
+    false // No free slots
+}
+
 /// Share record info returned by lookup.
 pub struct ShareInfo {
     pub ranges: [(u64, u32); MAX_SHARE_RANGES],

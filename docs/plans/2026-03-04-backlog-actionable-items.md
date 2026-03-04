@@ -1,31 +1,29 @@
 # Backlog: Actionable Items (Post M4.6 S2)
 
 **Date**: 2026-03-04
+**Updated**: 2026-03-04
 **Status**: Backlog — prioritize as needed
 **Prereq**: All 33 test suites pass, ~347 assertions, 14/14 BL33 tests, pKVM boots
 
 ---
 
-## Quick Wins (< 1 hour each)
+## Quick Wins (< 1 hour each) — ALL DONE
 
-### QW-1: Replace bare `4096` with `PAGE_SIZE_4KB` in spmc_handler.rs
-- **File**: `src/spmc_handler.rs` lines ~1524, 1540, 1592, 1608
-- **Why**: Inconsistency — rest of codebase uses `PAGE_SIZE_4KB` constant
-- **Risk**: None (cosmetic)
+### ~~QW-1: Replace bare `4096` with `PAGE_SIZE_4KB` in spmc_handler.rs~~ ✅
+- **Commit**: `f1793a7`
+- Replaced 5 bare `4096` with `PAGE_SIZE_4KB` constant
 
-### QW-2: `is_valid_receiver()` ignores real SPs in `tfa_boot` mode
-- **File**: `src/ffa/mod.rs:116`
-- **Why**: `is_valid_receiver()` calls `stub_spmc::is_valid_sp()` which hardcodes 0x8001/0x8002. In `tfa_boot` with real SPs, dynamically booted SPs beyond those two IDs would be rejected.
-- **Fix**: One-line: also check `sp_context::is_registered_sp()` when `cfg(feature = "sel2")`
+### ~~QW-2: `is_valid_receiver()` ignores real SPs in `tfa_boot` mode~~ ✅
+- **Commit**: `f1793a7`
+- Added `sp_context::is_registered_sp()` check under `#[cfg(feature = "sel2")]`
 
-### QW-3: Upgrade PSCI version claim from v0.2 to v1.0
-- **File**: `src/arch/aarch64/hypervisor/exception.rs:1063`
-- **Why**: We return `PSCI_VERSION_0_2 = 0x00000002` but already support PSCI 1.0 features (FEATURES, SYSTEM_RESET2)
-- **Fix**: Change constant to `0x00010000`
+### ~~QW-3: Upgrade PSCI version claim from v0.2 to v1.0~~ ✅
+- **Commit**: `f1793a7`
+- Changed constant to `0x00010000`, Linux detects `PSCIv1.0`
 
-### QW-4: Remove or annotate PROXY_TX_BUF
-- **File**: `src/ffa/proxy.rs:33`
-- **Why**: `#[allow(dead_code)]` 4KB buffer "reserved for future MEM_SHARE descriptor forwarding to SPMC" — never written. Either remove (saves 4KB BSS) or wire up in ME-4.
+### ~~QW-4: Remove or annotate PROXY_TX_BUF~~ ✅
+- **Commit**: `f1793a7`
+- Removed stale `#[allow(dead_code)]` (buffer IS used for RXTX_MAP)
 
 ---
 
@@ -55,11 +53,11 @@
   3. MSG_WAIT: if `msg_pending`, return immediately with message
 - **Reference**: Mirror `handle_msg_send2()`/`handle_msg_wait()` from proxy.rs (~80 LOC each)
 
-### ME-4: Concurrent safety hardening (SpinLock migration)
-- **Files**: `src/spmc_handler.rs`, `src/ffa/notifications.rs`, `src/sp_context.rs`
-- **Why**: `NWD_RXTX`, `SPMC_SHARES`, `NotifStateArray` all use `UnsafeCell` with "SPMC event loop serialized" safety comments. With 4-CPU pKVM, two CPUs can enter S-EL2 event loop simultaneously.
-- **Fix**: Wrap each in `SpinLock<T>` (or at minimum add `AtomicBool` guards)
-- **Risk**: Medium — must not break existing 95 + 58 test assertions
+### ~~ME-4: Concurrent safety hardening (SpinLock migration)~~ ✅
+- **Commit**: `0ad9fbe`
+- Replaced `UnsafeCell` with `SpinLock` for NWD_RXTX, SPMC_SHARES, NOTIF_STATE
+- Removed 3 `unsafe impl Sync`, added proper lock ordering (copy-then-drop)
+- All 33 test suites pass, pKVM 4-CPU regression verified
 
 ### ME-5: FFA_MEM_FRAG_TX/RX fragmentation support
 - **Files**: `src/ffa/proxy.rs`, `src/spmc_handler.rs`
@@ -101,9 +99,9 @@
 
 ## Suggested Priority Order
 
-1. **ME-1** (sched callback -95) — last pKVM gap, high user-visible impact
-2. **QW-1 + QW-2 + QW-3** — batch quick cosmetic fixes
-3. **ME-4** (SpinLock migration) — prerequisite for correctness under pKVM 4-CPU
+1. ~~**QW-1 + QW-2 + QW-3 + QW-4**~~ ✅ Done (commit `f1793a7`)
+2. ~~**ME-4** (SpinLock migration)~~ ✅ Done (commit `0ad9fbe`)
+3. **ME-1** (sched callback -95) — last pKVM gap, high user-visible impact
 4. **ME-2** (forward MEM_SHARE to real SPMC) — needed for real E2E sharing
 5. **ME-3** (MSG_SEND2) — needed for indirect messaging
 6. **LE-1** (SecureStage2Walker) — core SPMC memory sharing upgrade

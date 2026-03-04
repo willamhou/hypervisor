@@ -613,7 +613,78 @@ fn handle_mem_share_or_lend(context: &mut VcpuContext, is_lend: bool) -> bool {
 
     let sender_id = expected_sender;
 
-    // Record the share in stub SPMC
+    // If SPMC present and receiver is an SP, forward to real SPMC
+    #[cfg(feature = "tfa_boot")]
+    if SPMC_PRESENT.load(Ordering::Relaxed) && receiver_id >= FFA_SPMC_ID {
+        // Copy descriptor to proxy TX buffer (SPMC reads from NWD_RXTX.tx_pa = proxy TX)
+        if mbox.mapped {
+            let total_length = context.gp_regs.x1 as usize;
+            if total_length > 4096 {
+                ffa_error(context, FFA_INVALID_PARAMETERS);
+                return true;
+            }
+            // SAFETY: tx_ipa is validated guest RAM, PROXY_TX_BUF is our 4KB page,
+            // total_length <= 4096, source and destination are distinct.
+            unsafe {
+                let src = mbox.tx_ipa as *const u8;
+                let dst = &mut (*PROXY_TX_BUF.0.get()).0 as *mut [u8; 4096] as *mut u8;
+                core::ptr::copy_nonoverlapping(src, dst, total_length);
+            }
+        }
+
+        // Forward SMC to real SPMC via SPMD
+        let result = smc_forward::forward_smc8(
+            context.gp_regs.x0,
+            context.gp_regs.x1,
+            context.gp_regs.x2,
+            context.gp_regs.x3,
+            context.gp_regs.x4,
+            context.gp_regs.x5,
+            context.gp_regs.x6,
+            context.gp_regs.x7,
+        );
+
+        if result.x0 != FFA_SUCCESS_32 {
+            // SPMC rejected — rollback local SW bit transitions
+            #[cfg(feature = "linux_guest")]
+            {
+                let walker = stage2_walker::Stage2Walker::from_vttbr();
+                if walker.has_stage2() {
+                    let owned_sw = memory::PageOwnership::Owned as u8;
+                    let rw_s2ap = (S2AP_RW >> S2AP_SHIFT) as u8;
+                    for i in 0..range_count {
+                        let (base_ipa, page_count) = ranges[i];
+                        for p in 0..page_count as u64 {
+                            let ipa = base_ipa + p * PAGE_SIZE_4KB;
+                            let _ = walker.write_sw_bits(ipa, owned_sw);
+                            let _ = walker.set_s2ap(ipa, rw_s2ap);
+                        }
+                    }
+                }
+            }
+            context.gp_regs.x0 = result.x0;
+            context.gp_regs.x2 = result.x2;
+            return true;
+        }
+
+        // Use SPMC's handle for local record (page ownership tracking on RECLAIM)
+        let spmc_handle = (result.x2 & 0xFFFF_FFFF) | ((result.x3 & 0xFFFF_FFFF) << 32);
+        stub_spmc::record_share_with_handle(
+            spmc_handle,
+            sender_id,
+            receiver_id,
+            &ranges[..range_count],
+            total_page_count,
+            is_lend,
+        );
+
+        context.gp_regs.x0 = result.x0;
+        context.gp_regs.x2 = result.x2;
+        context.gp_regs.x3 = result.x3;
+        return true;
+    }
+
+    // Stub SPMC path (no real SPMC or VM-to-VM sharing)
     let handle = match stub_spmc::record_share(
         sender_id,
         receiver_id,
@@ -630,7 +701,6 @@ fn handle_mem_share_or_lend(context: &mut VcpuContext, is_lend: bool) -> bool {
 
     // Return success with handle
     context.gp_regs.x0 = FFA_SUCCESS_32;
-    // Handle is 64-bit, returned in x2 (low) and x3 (high)
     context.gp_regs.x2 = handle & 0xFFFF_FFFF;
     context.gp_regs.x3 = handle >> 32;
     true
@@ -685,23 +755,69 @@ fn parse_share_descriptor(
 fn handle_mem_reclaim(context: &mut VcpuContext) -> bool {
     let handle = (context.gp_regs.x1 & 0xFFFF_FFFF) | ((context.gp_regs.x2 & 0xFFFF_FFFF) << 32);
 
-    // Look up share record (need IPA info for restoration + retrieved status)
+    // Look up local share record (need IPA ranges for SW bit restoration)
     let info = match stub_spmc::lookup_share_full(handle) {
         Some(info) => info,
         None => {
+            // No local record — forward directly if SPMC present
+            #[cfg(feature = "tfa_boot")]
+            if SPMC_PRESENT.load(Ordering::Relaxed) {
+                return forward_ffa_to_spmc(context);
+            }
             ffa_error(context, FFA_INVALID_PARAMETERS);
             return true;
         }
     };
 
-    // Block reclaim while share is still retrieved by receiver
+    // For SP receivers with real SPMC: forward RECLAIM first (checks SP retrieve state)
+    #[cfg(feature = "tfa_boot")]
+    if SPMC_PRESENT.load(Ordering::Relaxed) && info.receiver_id >= FFA_SPMC_ID {
+        let result = smc_forward::forward_smc8(
+            FFA_MEM_RECLAIM,
+            context.gp_regs.x1,
+            context.gp_regs.x2,
+            context.gp_regs.x3,
+            0,
+            0,
+            0,
+            0,
+        );
+        if result.x0 != FFA_SUCCESS_32 {
+            // SPMC rejected (e.g., SP hasn't relinquished yet) — don't touch local state
+            context.gp_regs.x0 = result.x0;
+            context.gp_regs.x2 = result.x2;
+            return true;
+        }
+
+        // SPMC accepted — restore local pages + remove record
+        #[cfg(feature = "linux_guest")]
+        {
+            let walker = stage2_walker::Stage2Walker::from_vttbr();
+            if walker.has_stage2() {
+                let owned_sw = memory::PageOwnership::Owned as u8;
+                let rw_s2ap = (S2AP_RW >> S2AP_SHIFT) as u8;
+                for i in 0..info.range_count {
+                    let (base_ipa, page_count) = info.ranges[i];
+                    for p in 0..page_count as u64 {
+                        let ipa = base_ipa + p * PAGE_SIZE_4KB;
+                        let _ = walker.write_sw_bits(ipa, owned_sw);
+                        let _ = walker.set_s2ap(ipa, rw_s2ap);
+                    }
+                }
+            }
+        }
+        stub_spmc::reclaim_share(handle);
+        context.gp_regs.x0 = FFA_SUCCESS_32;
+        return true;
+    }
+
+    // Non-SPMC path: block reclaim while share is still retrieved by receiver
     if info.retrieved {
         ffa_error(context, FFA_DENIED);
         return true;
     }
 
     // Restore pages to Owned + S2AP_RW.
-    // Only when running actual VMs (linux_guest feature), not unit tests.
     #[cfg(feature = "linux_guest")]
     {
         let walker = stage2_walker::Stage2Walker::from_vttbr();
@@ -719,7 +835,6 @@ fn handle_mem_reclaim(context: &mut VcpuContext) -> bool {
         }
     }
 
-    // Now remove the record
     stub_spmc::reclaim_share(handle);
     context.gp_regs.x0 = FFA_SUCCESS_32;
     true
