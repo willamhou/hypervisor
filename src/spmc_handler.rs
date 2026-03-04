@@ -1052,6 +1052,14 @@ pub fn dispatch_ffa(req: &SmcResult8) -> SmcResult8 {
                     | ffa::FFA_MEM_RETRIEVE_REQ_32
                     | ffa::FFA_MEM_RELINQUISH
                     | ffa::FFA_MEM_RECLAIM
+                    | ffa::FFA_NOTIFICATION_BITMAP_CREATE
+                    | ffa::FFA_NOTIFICATION_BITMAP_DESTROY
+                    | ffa::FFA_NOTIFICATION_BIND
+                    | ffa::FFA_NOTIFICATION_UNBIND
+                    | ffa::FFA_NOTIFICATION_SET
+                    | ffa::FFA_NOTIFICATION_GET
+                    | ffa::FFA_NOTIFICATION_INFO_GET_32
+                    | ffa::FFA_NOTIFICATION_INFO_GET_64
             );
             if supported {
                 SmcResult8 {
@@ -1120,6 +1128,87 @@ pub fn dispatch_ffa(req: &SmcResult8) -> SmcResult8 {
         ffa::FFA_MEM_RECLAIM => handle_spmc_mem_reclaim(req),
         ffa::FFA_MEM_DONATE_32 | ffa::FFA_MEM_DONATE_64 => {
             make_error(ffa::FFA_NOT_SUPPORTED as u64)
+        }
+
+        // ── Notifications ──────────────────────────────────────────────
+        ffa::FFA_NOTIFICATION_BITMAP_CREATE => {
+            let part_id = req.x1 as u16;
+            match crate::ffa::notifications::bitmap_create(part_id) {
+                Ok(()) => make_success(),
+                Err(code) => make_error(code as u64),
+            }
+        }
+        ffa::FFA_NOTIFICATION_BITMAP_DESTROY => {
+            let part_id = req.x1 as u16;
+            match crate::ffa::notifications::bitmap_destroy(part_id) {
+                Ok(()) => make_success(),
+                Err(code) => make_error(code as u64),
+            }
+        }
+        ffa::FFA_NOTIFICATION_BIND => {
+            let sender = ((req.x1 >> 16) & 0xFFFF) as u16;
+            let receiver = (req.x1 & 0xFFFF) as u16;
+            let flags = req.x2 as u32;
+            let bitmap = req.x3 | (req.x4 << 32);
+            match crate::ffa::notifications::bind(sender, receiver, flags, bitmap) {
+                Ok(()) => make_success(),
+                Err(code) => make_error(code as u64),
+            }
+        }
+        ffa::FFA_NOTIFICATION_UNBIND => {
+            let sender = ((req.x1 >> 16) & 0xFFFF) as u16;
+            let receiver = (req.x1 & 0xFFFF) as u16;
+            let bitmap = req.x3 | (req.x4 << 32);
+            match crate::ffa::notifications::unbind(sender, receiver, bitmap) {
+                Ok(()) => make_success(),
+                Err(code) => make_error(code as u64),
+            }
+        }
+        ffa::FFA_NOTIFICATION_SET => {
+            let sender = ((req.x1 >> 16) & 0xFFFF) as u16;
+            let receiver = (req.x1 & 0xFFFF) as u16;
+            let bitmap = req.x3 | (req.x4 << 32);
+            match crate::ffa::notifications::set(sender, receiver, bitmap) {
+                Ok(()) => make_success(),
+                Err(code) => make_error(code as u64),
+            }
+        }
+        ffa::FFA_NOTIFICATION_GET => {
+            let receiver = req.x1 as u16;
+            match crate::ffa::notifications::get(receiver) {
+                Ok(pending) => SmcResult8 {
+                    x0: ffa::FFA_SUCCESS_32,
+                    x1: 0,
+                    x2: pending,
+                    x3: 0,
+                    x4: 0,
+                    x5: 0,
+                    x6: 0,
+                    x7: 0,
+                },
+                Err(code) => make_error(code as u64),
+            }
+        }
+        ffa::FFA_NOTIFICATION_INFO_GET_32 | ffa::FFA_NOTIFICATION_INFO_GET_64 => {
+            let (count, ids) = crate::ffa::notifications::info_get();
+            if count == 0 {
+                make_error(ffa::FFA_NO_DATA as u64)
+            } else {
+                let mut packed: u64 = 0;
+                for i in 0..count.min(4) {
+                    packed |= (ids[i] as u64) << (i * 16);
+                }
+                SmcResult8 {
+                    x0: ffa::FFA_SUCCESS_32,
+                    x1: 0,
+                    x2: count as u64,
+                    x3: packed,
+                    x4: 0,
+                    x5: 0,
+                    x6: 0,
+                    x7: 0,
+                }
+            }
         }
 
         _ => make_error(ffa::FFA_NOT_SUPPORTED as u64),
@@ -1558,6 +1647,20 @@ fn handle_spmc_mem_reclaim(req: &SmcResult8) -> SmcResult8 {
             x7: 0,
         },
         Err(code) => make_error(code as u64),
+    }
+}
+
+/// Build an FFA_SUCCESS response with all-zero payload.
+fn make_success() -> SmcResult8 {
+    SmcResult8 {
+        x0: ffa::FFA_SUCCESS_32,
+        x1: 0,
+        x2: 0,
+        x3: 0,
+        x4: 0,
+        x5: 0,
+        x6: 0,
+        x7: 0,
     }
 }
 

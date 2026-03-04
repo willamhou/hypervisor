@@ -668,6 +668,124 @@ pub fn run_tests() {
         pass += 1;
     }
 
+    // ── N1-N9: SPMC notification lifecycle ──
+
+    // N1: BITMAP_CREATE for SP1 → SUCCESS
+    {
+        let mut req = zero_req(ffa::FFA_NOTIFICATION_BITMAP_CREATE);
+        req.x1 = 0x8001;
+        let resp = dispatch_ffa(&req);
+        assert_eq!(resp.x0, ffa::FFA_SUCCESS_32);
+        pass += 1;
+    }
+
+    // N2: FEATURES(NOTIFICATION_BITMAP_CREATE) → SUCCESS
+    {
+        let mut req = zero_req(ffa::FFA_FEATURES);
+        req.x1 = ffa::FFA_NOTIFICATION_BITMAP_CREATE;
+        let resp = dispatch_ffa(&req);
+        assert_eq!(resp.x0, ffa::FFA_SUCCESS_32);
+        pass += 1;
+    }
+
+    // N3: BIND SP2→SP1, bitmap=0x1 → SUCCESS
+    {
+        let req = SmcResult8 {
+            x0: ffa::FFA_NOTIFICATION_BIND,
+            x1: (0x8002u64 << 16) | 0x8001, // sender=SP2, receiver=SP1
+            x2: 0,
+            x3: 0x1, // bitmap low
+            x4: 0,   // bitmap high
+            x5: 0,
+            x6: 0,
+            x7: 0,
+        };
+        let resp = dispatch_ffa(&req);
+        assert_eq!(resp.x0, ffa::FFA_SUCCESS_32);
+        pass += 1;
+    }
+
+    // N4: SET SP2→SP1, bitmap=0x1 → SUCCESS
+    {
+        let req = SmcResult8 {
+            x0: ffa::FFA_NOTIFICATION_SET,
+            x1: (0x8002u64 << 16) | 0x8001,
+            x2: 0,
+            x3: 0x1,
+            x4: 0,
+            x5: 0,
+            x6: 0,
+            x7: 0,
+        };
+        let resp = dispatch_ffa(&req);
+        assert_eq!(resp.x0, ffa::FFA_SUCCESS_32);
+        pass += 1;
+    }
+
+    // N5: GET SP1 → pending=0x1
+    {
+        let mut req = zero_req(ffa::FFA_NOTIFICATION_GET);
+        req.x1 = 0x8001;
+        let resp = dispatch_ffa(&req);
+        assert_eq!(resp.x0, ffa::FFA_SUCCESS_32);
+        assert_eq!(resp.x2, 0x1);
+        pass += 2;
+    }
+
+    // N6: GET SP1 again → cleared
+    {
+        let mut req = zero_req(ffa::FFA_NOTIFICATION_GET);
+        req.x1 = 0x8001;
+        let resp = dispatch_ffa(&req);
+        assert_eq!(resp.x0, ffa::FFA_SUCCESS_32);
+        assert_eq!(resp.x2, 0);
+        pass += 1;
+    }
+
+    // N7: UNBIND SP2→SP1 → SUCCESS
+    {
+        let req = SmcResult8 {
+            x0: ffa::FFA_NOTIFICATION_UNBIND,
+            x1: (0x8002u64 << 16) | 0x8001,
+            x2: 0,
+            x3: 0x1,
+            x4: 0,
+            x5: 0,
+            x6: 0,
+            x7: 0,
+        };
+        let resp = dispatch_ffa(&req);
+        assert_eq!(resp.x0, ffa::FFA_SUCCESS_32);
+        pass += 1;
+    }
+
+    // N8: SET after UNBIND → DENIED
+    {
+        let req = SmcResult8 {
+            x0: ffa::FFA_NOTIFICATION_SET,
+            x1: (0x8002u64 << 16) | 0x8001,
+            x2: 0,
+            x3: 0x1,
+            x4: 0,
+            x5: 0,
+            x6: 0,
+            x7: 0,
+        };
+        let resp = dispatch_ffa(&req);
+        assert_eq!(resp.x0, ffa::FFA_ERROR);
+        assert_eq!(resp.x2, ffa::FFA_DENIED as u64);
+        pass += 1;
+    }
+
+    // N9: BITMAP_DESTROY SP1 → SUCCESS
+    {
+        let mut req = zero_req(ffa::FFA_NOTIFICATION_BITMAP_DESTROY);
+        req.x1 = 0x8001;
+        let resp = dispatch_ffa(&req);
+        assert_eq!(resp.x0, ffa::FFA_SUCCESS_32);
+        pass += 1;
+    }
+
     // ── G4: FFA_RUN accepts Preempted state (non-sel2 returns NOT_SUPPORTED) ──
 
     // Push SP1 through Reset → Idle → Running → Preempted via with_sp_locked
