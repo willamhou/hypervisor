@@ -10,6 +10,8 @@
 //! PARTITION_INFO_GET from NWd directly to the SPMC. The SPMC manages NWd
 //! RXTX state and writes PARTITION_INFO descriptors to the NWd RX buffer.
 
+#[cfg(feature = "sel2")]
+use crate::arch::aarch64::defs::PAGE_SIZE_4KB;
 use crate::ffa;
 use crate::ffa::smc_forward::SmcResult8;
 use crate::sync::SpinLock;
@@ -1285,7 +1287,7 @@ fn handle_partition_info_get() -> SmcResult8 {
             let nwd = NWD_RXTX.lock();
             let m = nwd.mapped;
             let r = nwd.rx_pa;
-            let b = if m { nwd.page_count as usize * 4096 } else { 0 };
+            let b = if m { nwd.page_count as usize * PAGE_SIZE_4KB as usize } else { 0 };
             (m, r, b)
         };
 
@@ -1495,7 +1497,7 @@ fn handle_spmc_mem_retrieve(req: &SmcResult8, _current_sp: Option<(u16, u64)>) -
                 for i in 0..range_count {
                     let (base_ipa, page_count) = ranges[i];
                     for p in 0..page_count as u64 {
-                        let ipa = base_ipa + p * 4096;
+                        let ipa = base_ipa + p * PAGE_SIZE_4KB;
                         walker.map_page(ipa, 0b11, 0b10); // S2AP_RW, SW=SHARED_BORROWED
                     }
                 }
@@ -1511,7 +1513,7 @@ fn handle_spmc_mem_retrieve(req: &SmcResult8, _current_sp: Option<(u16, u64)>) -
                 for i in 0..range_count {
                     let (base_ipa, page_count) = ranges[i];
                     for p in 0..page_count as u64 {
-                        let ipa = base_ipa + p * 4096;
+                        let ipa = base_ipa + p * PAGE_SIZE_4KB;
                         walker.map_page(ipa, 0b11, 0b10); // S2AP_RW, SW=SHARED_BORROWED
                     }
                 }
@@ -1563,7 +1565,7 @@ fn handle_spmc_mem_relinquish(req: &SmcResult8, _current_sp: Option<(u16, u64)>)
                 for i in 0..range_count {
                     let (base_ipa, page_count) = ranges[i];
                     for p in 0..page_count as u64 {
-                        let ipa = base_ipa + p * 4096;
+                        let ipa = base_ipa + p * PAGE_SIZE_4KB;
                         walker.unmap_page(ipa);
                     }
                 }
@@ -1579,7 +1581,7 @@ fn handle_spmc_mem_relinquish(req: &SmcResult8, _current_sp: Option<(u16, u64)>)
                 for i in 0..range_count {
                     let (base_ipa, page_count) = ranges[i];
                     for p in 0..page_count as u64 {
-                        let ipa = base_ipa + p * 4096;
+                        let ipa = base_ipa + p * PAGE_SIZE_4KB;
                         walker.unmap_page(ipa);
                     }
                 }

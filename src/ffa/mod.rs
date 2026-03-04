@@ -113,5 +113,15 @@ pub fn is_vm_partition(part_id: u16) -> bool {
 
 /// Check if a partition ID is a valid receiver (VM or SP).
 pub fn is_valid_receiver(part_id: u16) -> bool {
-    is_vm_partition(part_id) || stub_spmc::is_valid_sp(part_id)
+    if is_vm_partition(part_id) {
+        return true;
+    }
+    if stub_spmc::is_valid_sp(part_id) {
+        return true;
+    }
+    #[cfg(feature = "sel2")]
+    if crate::sp_context::is_registered_sp(part_id) {
+        return true;
+    }
+    false
 }

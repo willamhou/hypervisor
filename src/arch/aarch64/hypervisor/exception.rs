@@ -1059,8 +1059,8 @@ const PSCI_FEATURES: u64 = 0x8400000A;
 const PSCI_SUCCESS: u64 = 0;
 const PSCI_NOT_SUPPORTED: u64 = 0xFFFFFFFF; // -1 as unsigned
 
-// PSCI version: v0.2
-const PSCI_VERSION_0_2: u64 = 0x00000002;
+// PSCI version: v1.0 (major=1, minor=0)
+const PSCI_VERSION_1_0: u64 = 0x00010000;
 
 // Jailhouse debug console constants
 // HVC #0x4a48 is "JH" in ASCII - Jailhouse hypercall signature
@@ -1242,7 +1242,7 @@ fn handle_psci(context: &mut VcpuContext, function_id: u64) -> bool {
     match function_id {
         PSCI_VERSION => {
             // Return PSCI v0.2
-            context.gp_regs.x0 = PSCI_VERSION_0_2;
+            context.gp_regs.x0 = PSCI_VERSION_1_0;
             crate::log_info!("[PSCI] VERSION -> 0.2\n");
             true
         }

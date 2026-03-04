@@ -30,7 +30,6 @@ struct ProxyPageCell(UnsafeCell<AlignedPage>);
 unsafe impl Sync for ProxyPageCell {}
 
 #[cfg(feature = "tfa_boot")]
-#[allow(dead_code)] // Reserved for future MEM_SHARE descriptor forwarding to SPMC
 static PROXY_TX_BUF: ProxyPageCell = ProxyPageCell(UnsafeCell::new(AlignedPage([0u8; 4096])));
 #[cfg(feature = "tfa_boot")]
 static PROXY_RX_BUF: ProxyPageCell = ProxyPageCell(UnsafeCell::new(AlignedPage([0u8; 4096])));
