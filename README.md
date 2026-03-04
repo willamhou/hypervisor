@@ -30,7 +30,7 @@ A bare-metal Type-1 hypervisor for ARM64 (AArch64) written in Rust. Runs at EL2 
 ## Current Status
 
 **Progress**: Milestones 0-4 complete, including FF-A v1.1, TF-A boot chain, S-EL2 SPMC, and pKVM integration
-**Tests**: 33 test suites (~337 assertions), all passing
+**Tests**: 33 test suites (~347 assertions), all passing
 **Code**: ~23,000 lines (src + tests + asm)
 
 ### Milestone Overview
@@ -207,7 +207,7 @@ Restore context → ERET back to guest
 
 ## Testing
 
-33 test suites (~337 assertions) run automatically on `make run`:
+33 test suites (~347 assertions) run automatically on `make run`:
 
 | Test | Description |
 |------|-------------|
@@ -240,7 +240,7 @@ Restore context → ERET back to guest
 | `test_virtio_net` | VirtioNet: device_id/features/queues/config/mac |
 | `test_page_ownership` | Stage-2 PTE SW bits: ownership transitions |
 | `test_ffa` | FF-A proxy: VERSION/ID_GET/FEATURES/RXTX/messaging/memory/VM-to-VM |
-| `test_spmc_handler` | SPMC dispatch: VERSION/FEATURES/DIRECT_REQ/memory/multi-SP/FFA_RUN/helpers (85 assertions) |
+| `test_spmc_handler` | SPMC dispatch: VERSION/FEATURES/DIRECT_REQ/memory/multi-SP/FFA_RUN/helpers/notifications (95 assertions) |
 | `test_sp_context` | SpContext: state machine, CAS, illegal transitions, INTID ownership, IRQ overflow (58 assertions) |
 | `test_secure_stage2` | SecureStage2Config: VSTTBR/VSTCR validation (4 assertions) |
 | `test_log` | Structured logging macros |

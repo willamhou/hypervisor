@@ -446,7 +446,7 @@ pub fn run_xxx_test() {
 
 | Category | Location | Invocation |
 |----------|----------|------------|
-| Unit tests | `src/tests/` | `make run` (33 suites, ~337 assertions) |
+| Unit tests | `src/tests/` | `make run` (33 suites, ~347 assertions) |
 | BL33 integration | `tfa/bl33_ffa_test/start.S` | `make run-spmc` (14 tests) |
 | Linux FF-A | `guest/linux/ffa-test/` | `make run-pkvm` (kernel module) |
 

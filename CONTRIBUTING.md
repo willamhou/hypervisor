@@ -49,7 +49,7 @@ make build-tfa-pkvm   # Build TF-A flash-pkvm.bin
 
 ### Testing
 
-33 test suites (~337 assertions) run automatically during `make run`. The output shows pass/fail status for each test suite. Test registry uses macro-based registration in `tests/mod.rs`.
+33 test suites (~347 assertions) run automatically during `make run`. The output shows pass/fail status for each test suite. Test registry uses macro-based registration in `tests/mod.rs`.
 
 To add a new test:
 
@@ -113,7 +113,7 @@ hypervisor/
 │   │   └── smc_forward.rs   # SMC forwarding to EL3
 │   └── mm/                  # Heap allocator
 │       └── region_registry.rs # Stage-2 region registration
-└── tests/                   # 33 test suites (~337 assertions)
+└── tests/                   # 33 test suites (~347 assertions)
 ```
 
 The `Device` enum uses enum-dispatch (no dynamic dispatch):
