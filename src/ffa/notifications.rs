@@ -1,10 +1,10 @@
 //! FF-A v1.1 Notification state management.
 //!
 //! Per-endpoint notification bitmaps with sender-receiver bind tracking.
-//! Follows the same global state pattern as `mailbox.rs`.
+//! All access is guarded by `SpinLock` for multi-CPU safety.
 
 use crate::ffa::{self, FFA_DENIED, FFA_INVALID_PARAMETERS, FFA_MAX_VMS};
-use core::cell::UnsafeCell;
+use crate::sync::SpinLock;
 
 /// Maximum number of endpoints (VMs + SPs) with notification support.
 const MAX_ENDPOINTS: usize = 8;
@@ -55,10 +55,7 @@ impl EndpointNotifState {
     }
 }
 
-struct NotifStateArray(UnsafeCell<[EndpointNotifState; MAX_ENDPOINTS]>);
-unsafe impl Sync for NotifStateArray {}
-
-static NOTIF_STATE: NotifStateArray = NotifStateArray(UnsafeCell::new([
+static NOTIF_STATE: SpinLock<[EndpointNotifState; MAX_ENDPOINTS]> = SpinLock::new([
     EndpointNotifState::new(),
     EndpointNotifState::new(),
     EndpointNotifState::new(),
@@ -67,7 +64,7 @@ static NOTIF_STATE: NotifStateArray = NotifStateArray(UnsafeCell::new([
     EndpointNotifState::new(),
     EndpointNotifState::new(),
     EndpointNotifState::new(),
-]));
+]);
 
 /// Map partition ID to endpoint index.
 /// VMs: partition ID 1..=MAX_VMS → index 0..MAX_VMS-1
@@ -84,31 +81,27 @@ fn endpoint_index(part_id: u16) -> Option<usize> {
     }
 }
 
-fn get_state(part_id: u16) -> Result<&'static mut EndpointNotifState, i32> {
-    let idx = endpoint_index(part_id).ok_or(FFA_INVALID_PARAMETERS)?;
-    // SAFETY: `idx` comes from validated endpoint mapping and points into static notification array.
-    Ok(unsafe { &mut (*NOTIF_STATE.0.get())[idx] })
-}
-
 /// Create notification bitmap for an endpoint.
 pub fn bitmap_create(part_id: u16) -> Result<(), i32> {
-    let state = get_state(part_id)?;
-    if state.enabled {
+    let idx = endpoint_index(part_id).ok_or(FFA_INVALID_PARAMETERS)?;
+    let mut states = NOTIF_STATE.lock();
+    if states[idx].enabled {
         return Err(FFA_DENIED);
     }
-    state.enabled = true;
+    states[idx].enabled = true;
     Ok(())
 }
 
 /// Destroy notification bitmap for an endpoint.
 pub fn bitmap_destroy(part_id: u16) -> Result<(), i32> {
-    let state = get_state(part_id)?;
-    if !state.enabled {
+    let idx = endpoint_index(part_id).ok_or(FFA_INVALID_PARAMETERS)?;
+    let mut states = NOTIF_STATE.lock();
+    if !states[idx].enabled {
         return Err(FFA_DENIED);
     }
-    state.enabled = false;
-    state.pending = 0;
-    for bind in state.binds.iter_mut() {
+    states[idx].enabled = false;
+    states[idx].pending = 0;
+    for bind in states[idx].binds.iter_mut() {
         *bind = NotifBind::new();
     }
     Ok(())
@@ -119,7 +112,9 @@ pub fn bind(sender: u16, receiver: u16, _flags: u32, bitmap: u64) -> Result<(), 
     if bitmap == 0 {
         return Err(FFA_INVALID_PARAMETERS);
     }
-    let state = get_state(receiver)?;
+    let idx = endpoint_index(receiver).ok_or(FFA_INVALID_PARAMETERS)?;
+    let mut states = NOTIF_STATE.lock();
+    let state = &mut states[idx];
     if !state.enabled {
         return Err(FFA_DENIED);
     }
@@ -146,7 +141,9 @@ pub fn bind(sender: u16, receiver: u16, _flags: u32, bitmap: u64) -> Result<(), 
 
 /// Unbind a sender from notification IDs on a receiver.
 pub fn unbind(sender: u16, receiver: u16, bitmap: u64) -> Result<(), i32> {
-    let state = get_state(receiver)?;
+    let idx = endpoint_index(receiver).ok_or(FFA_INVALID_PARAMETERS)?;
+    let mut states = NOTIF_STATE.lock();
+    let state = &mut states[idx];
 
     for bind in state.binds.iter_mut() {
         if bind.active && bind.sender_id == sender && bind.bitmap & bitmap != 0 {
@@ -163,7 +160,9 @@ pub fn unbind(sender: u16, receiver: u16, bitmap: u64) -> Result<(), i32> {
 
 /// Set pending notification bits on a receiver.
 pub fn set(sender: u16, receiver: u16, bitmap: u64) -> Result<(), i32> {
-    let state = get_state(receiver)?;
+    let idx = endpoint_index(receiver).ok_or(FFA_INVALID_PARAMETERS)?;
+    let mut states = NOTIF_STATE.lock();
+    let state = &mut states[idx];
     if !state.enabled {
         return Err(FFA_DENIED);
     }
@@ -185,7 +184,9 @@ pub fn set(sender: u16, receiver: u16, bitmap: u64) -> Result<(), i32> {
 
 /// Get and clear pending notification bits for a receiver.
 pub fn get(receiver: u16) -> Result<u64, i32> {
-    let state = get_state(receiver)?;
+    let idx = endpoint_index(receiver).ok_or(FFA_INVALID_PARAMETERS)?;
+    let mut states = NOTIF_STATE.lock();
+    let state = &mut states[idx];
     if !state.enabled {
         return Err(FFA_DENIED);
     }
@@ -199,8 +200,7 @@ pub fn get(receiver: u16) -> Result<u64, i32> {
 pub fn info_get() -> (usize, [u16; 4]) {
     let mut ids = [0u16; 4];
     let mut count = 0usize;
-    // SAFETY: Shared read-only snapshot of static notification state for scanning pending bits.
-    let states = unsafe { &*NOTIF_STATE.0.get() };
+    let states = NOTIF_STATE.lock();
 
     // Scan VMs
     for vm_id in 0..FFA_MAX_VMS {

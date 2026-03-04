@@ -12,6 +12,8 @@
 
 use crate::ffa;
 use crate::ffa::smc_forward::SmcResult8;
+use crate::sync::SpinLock;
+#[cfg(feature = "sel2")]
 use core::cell::UnsafeCell;
 #[cfg(feature = "sel2")]
 use core::sync::atomic::Ordering;
@@ -135,30 +137,12 @@ struct NwdRxtxState {
     mapped: bool,
 }
 
-struct NwdRxtxCell(UnsafeCell<NwdRxtxState>);
-
-// SAFETY: SPMC FF-A message handling is serialized in the event loop.
-// No concurrent mutable access is allowed to the NWd RXTX registration state.
-unsafe impl Sync for NwdRxtxCell {}
-
-static NWD_RXTX: NwdRxtxCell = NwdRxtxCell(UnsafeCell::new(NwdRxtxState {
+static NWD_RXTX: SpinLock<NwdRxtxState> = SpinLock::new(NwdRxtxState {
     tx_pa: 0,
     rx_pa: 0,
     page_count: 0,
     mapped: false,
-}));
-
-#[inline(always)]
-fn nwd_rxtx_mut() -> &'static mut NwdRxtxState {
-    // SAFETY: guarded by SPMC event-loop serialization; no aliasing mutable refs.
-    unsafe { &mut *NWD_RXTX.0.get() }
-}
-
-#[inline(always)]
-fn nwd_rxtx_ref() -> &'static NwdRxtxState {
-    // SAFETY: callers only take immutable snapshots; mutation remains serialized.
-    unsafe { &*NWD_RXTX.0.get() }
-}
+});
 
 // ── SPMC-side memory share records ──────────────────────────────────
 
@@ -177,12 +161,7 @@ struct SpmcShareRecord {
     retrieved: bool,
 }
 
-struct SpmcShareArray(UnsafeCell<[SpmcShareRecord; MAX_SPMC_SHARES]>);
-// SAFETY: accesses are serialized by the SPMC event loop and per-request
-// execution; no concurrent mutable aliases are created.
-unsafe impl Sync for SpmcShareArray {}
-
-static SPMC_SHARES: SpmcShareArray = SpmcShareArray(UnsafeCell::new({
+static SPMC_SHARES: SpinLock<[SpmcShareRecord; MAX_SPMC_SHARES]> = SpinLock::new({
     const EMPTY: SpmcShareRecord = SpmcShareRecord {
         handle: 0,
         sender_id: 0,
@@ -197,7 +176,7 @@ static SPMC_SHARES: SpmcShareArray = SpmcShareArray(UnsafeCell::new({
         EMPTY, EMPTY, EMPTY, EMPTY, EMPTY, EMPTY, EMPTY, EMPTY, EMPTY, EMPTY, EMPTY, EMPTY, EMPTY,
         EMPTY, EMPTY, EMPTY,
     ]
-}));
+});
 
 static SPMC_NEXT_HANDLE: AtomicU64 = AtomicU64::new(1);
 
@@ -213,8 +192,7 @@ fn record_spmc_share(
     is_lend: bool,
 ) -> Option<u64> {
     let handle = spmc_alloc_handle();
-    // SAFETY: event-loop execution is single-threaded for SPMC requests.
-    let records = unsafe { &mut *SPMC_SHARES.0.get() };
+    let mut records = SPMC_SHARES.lock();
     for record in records.iter_mut() {
         if !record.active {
             let mut stored = [(0u64, 0u32); MAX_SHARE_RANGES];
@@ -242,8 +220,7 @@ fn record_spmc_share(
 fn lookup_spmc_share(
     handle: u64,
 ) -> Option<(u16, u16, [(u64, u32); MAX_SHARE_RANGES], usize, bool, bool)> {
-    // SAFETY: immutable access under event-loop serialization.
-    let records = unsafe { &*SPMC_SHARES.0.get() };
+    let records = SPMC_SHARES.lock();
     for record in records.iter() {
         if record.active && record.handle == handle {
             return Some((
@@ -261,8 +238,7 @@ fn lookup_spmc_share(
 
 /// Mark a share as retrieved. Returns true if successful.
 fn mark_spmc_retrieved(handle: u64) -> bool {
-    // SAFETY: event-loop execution is single-threaded for SPMC requests.
-    let records = unsafe { &mut *SPMC_SHARES.0.get() };
+    let mut records = SPMC_SHARES.lock();
     for record in records.iter_mut() {
         if record.active && record.handle == handle && !record.retrieved {
             record.retrieved = true;
@@ -274,8 +250,7 @@ fn mark_spmc_retrieved(handle: u64) -> bool {
 
 /// Mark a share as relinquished. Returns true if successful.
 fn mark_spmc_relinquished(handle: u64) -> bool {
-    // SAFETY: event-loop execution is single-threaded for SPMC requests.
-    let records = unsafe { &mut *SPMC_SHARES.0.get() };
+    let mut records = SPMC_SHARES.lock();
     for record in records.iter_mut() {
         if record.active && record.handle == handle && record.retrieved {
             record.retrieved = false;
@@ -287,8 +262,7 @@ fn mark_spmc_relinquished(handle: u64) -> bool {
 
 /// Reclaim (delete) a share record. Fails if still retrieved.
 fn reclaim_spmc_share(handle: u64) -> Result<(), i32> {
-    // SAFETY: event-loop execution is single-threaded for SPMC requests.
-    let records = unsafe { &mut *SPMC_SHARES.0.get() };
+    let mut records = SPMC_SHARES.lock();
     for record in records.iter_mut() {
         if record.active && record.handle == handle {
             if record.retrieved {
@@ -1229,7 +1203,7 @@ fn handle_rxtx_map(req: &SmcResult8) -> SmcResult8 {
         return make_error(ffa::FFA_INVALID_PARAMETERS as u64);
     }
 
-    let nwd = nwd_rxtx_mut();
+    let mut nwd = NWD_RXTX.lock();
     if nwd.mapped {
         return make_error(ffa::FFA_DENIED as u64);
     }
@@ -1252,7 +1226,7 @@ fn handle_rxtx_map(req: &SmcResult8) -> SmcResult8 {
 
 /// Handle FFA_RXTX_UNMAP — clear NWd's RXTX registration.
 fn handle_rxtx_unmap() -> SmcResult8 {
-    let nwd = nwd_rxtx_mut();
+    let mut nwd = NWD_RXTX.lock();
     if !nwd.mapped {
         return make_error(ffa::FFA_DENIED as u64);
     }
@@ -1275,7 +1249,7 @@ fn handle_rxtx_unmap() -> SmcResult8 {
 
 /// Handle FFA_RX_RELEASE — acknowledge NWd has consumed the RX buffer.
 fn handle_rx_release() -> SmcResult8 {
-    if !nwd_rxtx_ref().mapped {
+    if !NWD_RXTX.lock().mapped {
         return make_error(ffa::FFA_DENIED as u64);
     }
     // No-op: we write descriptors synchronously in PARTITION_INFO_GET.
@@ -1307,13 +1281,12 @@ fn handle_partition_info_get() -> SmcResult8 {
     // Write descriptors to NWd's RX buffer (sel2 mode) or just count (unit tests).
     #[cfg(feature = "sel2")]
     {
-        let nwd = nwd_rxtx_ref();
-        let mapped = nwd.mapped;
-        let rx_pa = nwd.rx_pa;
-        let max_bytes = if mapped {
-            nwd.page_count as usize * 4096
-        } else {
-            0
+        let (mapped, rx_pa, max_bytes) = {
+            let nwd = NWD_RXTX.lock();
+            let m = nwd.mapped;
+            let r = nwd.rx_pa;
+            let b = if m { nwd.page_count as usize * 4096 } else { 0 };
+            (m, r, b)
         };
 
         crate::sp_context::for_each_sp(|sp| {
@@ -1420,10 +1393,11 @@ fn handle_spmc_mem_share(req: &SmcResult8, is_lend: bool) -> SmcResult8 {
 
     #[cfg(feature = "sel2")]
     {
-        let nwd = nwd_rxtx_ref();
-        let mapped = nwd.mapped;
+        let (mapped, tx_pa) = {
+            let nwd = NWD_RXTX.lock();
+            (nwd.mapped, nwd.tx_pa)
+        };
         if mapped {
-            let tx_pa = nwd.tx_pa;
             let total_length = req.x1 as usize;
             // SAFETY: `tx_pa` comes from validated RXTX_MAP registration and
             // `total_length` is bounded by the FF-A request payload length.
