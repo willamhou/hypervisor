@@ -45,7 +45,7 @@ make fmt          # Format code
 - `multi_pcpu` — Multi-pCPU support (implies `linux_guest`): 1:1 vCPU-to-pCPU affinity, PSCI boot, TPIDR_EL2 context, SpinLock devices
 - `multi_vm` — Multi-VM support (implies `linux_guest`): 2 VMs time-sliced on 1 pCPU, per-VM Stage-2/VMID, per-VM DeviceManager
 - `sel2` — S-EL2 SPMC mode: hypervisor as BL32 (SPMC role), separate boot_sel2.S entry, linker base 0x0e100000 (secure DRAM), manifest parsing, FFA_MSG_WAIT handshake, secondary CPU warm-boot via FFA_SECONDARY_EP_REGISTER
-- `tfa_boot` — TF-A boot mode (implies `linux_guest`): sets SPMC_PRESENT=true at compile time, NS proxy registers RXTX with SPMD, forwards DIRECT_REQ and PARTITION_INFO_GET to real SPMC via 8-register SMC
+- `tfa_boot` — TF-A boot mode (implies `linux_guest`): sets SPMC_PRESENT=true at compile time, NS proxy registers RXTX with SPMD, forwards DIRECT_REQ, PARTITION_INFO_GET, and MEM_SHARE/LEND/RECLAIM (SP receivers) to real SPMC via 8-register SMC
 
 **Note**: `multi_pcpu` and `multi_vm` are mutually exclusive — both imply `linux_guest` but use different scheduling models. `sel2` is mutually exclusive with all others. `tfa_boot` is used with `run-tfa-linux` when a real SPMC is available at S-EL2.
 
@@ -91,7 +91,7 @@ Exception Vector (arch/aarch64/exception.S) — save context
   ↓
 handle_exception() (src/arch/aarch64/hypervisor/exception.rs)
   ├─ WFI → return false (exit to scheduler)
-  ├─ HVC → handle_psci() (CPU_ON, CPU_OFF, SYSTEM_RESET) or HF_INTERRUPT_GET (sel2: returns pending INTID)
+  ├─ HVC → handle_psci() (PSCI v1.0: CPU_ON, CPU_OFF, SYSTEM_RESET) or HF_INTERRUPT_GET (sel2: returns pending INTID)
   ├─ SMC → handle_smc() → PSCI or FF-A proxy or forward to EL3
   ├─ Data Abort → HPFAR_EL2 for IPA → decode instruction → MMIO dispatch
   ├─ MSR/MRS trap → handle ICC_SGI1R_EL1 (SGI emulation), sysreg emulation
@@ -196,7 +196,7 @@ VirtioMmioTransport<VirtioNet>  @ 0x0a000200 (SPI 17 = INTID 49)
 
 Implements the FF-A (Firmware Framework for Arm) v1.1 hypervisor proxy role (pKVM-compatible). Guest SMC calls trapped via `HCR_EL2.TSC=1` (bit 19) are routed through `handle_smc()` → `ffa::proxy::handle_ffa_call()`.
 
-**Supported calls**: FFA_VERSION, FFA_ID_GET, FFA_SPM_ID_GET, FFA_FEATURES, FFA_RXTX_MAP/UNMAP, FFA_RX_RELEASE, FFA_PARTITION_INFO_GET, FFA_MSG_SEND_DIRECT_REQ, FFA_MSG_SEND2, FFA_MSG_WAIT, FFA_RUN, FFA_MEM_SHARE/LEND/RETRIEVE_REQ/RELINQUISH/RECLAIM, FFA_NOTIFICATION_BITMAP_CREATE/DESTROY/BIND/UNBIND/SET/GET/INFO_GET. FFA_MEM_DONATE is blocked (returns NOT_SUPPORTED). VM-to-VM memory sharing: sender shares pages via MEM_SHARE, receiver maps them via MEM_RETRIEVE_REQ (dynamic Stage-2 page mapping), receiver unmaps via MEM_RELINQUISH, sender reclaims via MEM_RECLAIM. PARTITION_INFO_GET: when SPMC_PRESENT, forwards to SPMD and copies 24-byte descriptors from proxy RX to guest RX; otherwise uses 8-byte stub descriptors.
+**Supported calls**: FFA_VERSION, FFA_ID_GET, FFA_SPM_ID_GET, FFA_FEATURES, FFA_RXTX_MAP/UNMAP, FFA_RX_RELEASE, FFA_PARTITION_INFO_GET, FFA_MSG_SEND_DIRECT_REQ, FFA_MSG_SEND2, FFA_MSG_WAIT, FFA_RUN, FFA_MEM_SHARE/LEND/RETRIEVE_REQ/RELINQUISH/RECLAIM, FFA_NOTIFICATION_BITMAP_CREATE/DESTROY/BIND/UNBIND/SET/GET/INFO_GET. FFA_MEM_DONATE is blocked (returns NOT_SUPPORTED). VM-to-VM memory sharing: sender shares pages via MEM_SHARE, receiver maps them via MEM_RETRIEVE_REQ (dynamic Stage-2 page mapping), receiver unmaps via MEM_RELINQUISH, sender reclaims via MEM_RECLAIM. When `tfa_boot` + SP receiver (part_id >= 0x8000): MEM_SHARE/LEND/RECLAIM forwarded to real SPMC via SPMD, with dual record (local SW bits + SPMC handle via `record_share_with_handle()`). PARTITION_INFO_GET: when SPMC_PRESENT, forwards to SPMD and copies 24-byte descriptors from proxy RX to guest RX; otherwise uses 8-byte stub descriptors. Notification bitmaps support FFA_HOST_ID (0x0000) for pKVM host scheduler — `endpoint_index()` maps it to slot `FFA_MAX_VMS + 2`.
 
 **Stub SPMC** (`src/ffa/stub_spmc.rs`): Simulates 2 Secure Partitions (SP1=0x8001, SP2=0x8002) for testing without a real Secure World. Direct messaging echoes x4-x7 back. Memory sharing tracks multi-range records with `MemShareRecord` (up to 4 ranges per share, `ShareInfo`/`ShareInfoFull` for reclaim/retrieve). `mark_retrieved()`/`mark_relinquished()` track retrieve state; `MEM_RECLAIM` blocked while retrieved.
 
@@ -276,6 +276,8 @@ Falls back to QEMU virt defaults if DTB parse fails (e.g., QEMU passes addr=0 wi
 | `VSWITCH` | `UnsafeCell<VSwitch>` | L2 virtual switch with MAC learning table |
 
 `VmGlobalState` contains per-VM: `pending_sgis[MAX_VCPUS]`, `pending_spis[MAX_VCPUS]`, `terminal_exit[MAX_VCPUS]`, `vcpu_online_mask`, `current_vcpu_id`, `pending_cpu_on`, `preemption_exit`. Accessed via `vm_state(vm_id)` or `current_vm_state()`.
+
+**SPMC globals** (sel2 feature, `SpinLock`-protected for per-CPU SPMD concurrency): `NWD_RXTX` (NWd RXTX buffer state), `SPMC_SHARES` (memory share records), `NOTIF_STATE` (notification bitmaps). SpinLock required because pKVM's per-CPU SPMD breaks the single-event-loop serialization assumption.
 
 ### Device Manager Pattern
 

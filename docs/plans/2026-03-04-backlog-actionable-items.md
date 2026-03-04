@@ -30,7 +30,7 @@
 ## Medium Effort (1-4 hours each)
 
 ### ~~ME-1: Fix pKVM BITMAP_CREATE -22 (FFA_HOST_ID in notifications)~~ ✅
-- **Commit**: (pending)
+- **Commit**: `b19b7f0`
 - **Fix**: Added `0x0000 => Some(FFA_MAX_VMS + 2)` case in `endpoint_index()`
 - **Result**: BITMAP_CREATE `-22` eliminated. Remaining `-95` messages are **informational** (`pr_info`):
   - `Notification setup failed -95, not enabled` — SRI/NPI not implemented (FFA_FEATURES x1=1/2)
