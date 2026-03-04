@@ -418,6 +418,256 @@ pub fn run_tests() {
         pass += 1;
     }
 
+    // ── T1: Multi-page MEM_SHARE lifecycle (3 pages) ──
+    let multi_handle: u64;
+    {
+        let req = SmcResult8 {
+            x0: ffa::FFA_MEM_SHARE_32,
+            x1: 0x0001 << 16, // sender=1
+            x2: 0,
+            x3: 0xB000_0000, // IPA
+            x4: 3,           // 3 pages
+            x5: 0x8001,      // receiver=SP1
+            x6: 0,
+            x7: 0,
+        };
+        let resp = dispatch_ffa(&req);
+        assert_eq!(resp.x0, ffa::FFA_SUCCESS_32);
+        multi_handle = resp.x2 | (resp.x3 << 32);
+        assert!(multi_handle > 0);
+        pass += 2;
+    }
+    // T1 RETRIEVE → RETRIEVE_RESP
+    {
+        let req = SmcResult8 {
+            x0: ffa::FFA_MEM_RETRIEVE_REQ_32,
+            x1: multi_handle & 0xFFFF_FFFF,
+            x2: multi_handle >> 32,
+            x3: 0,
+            x4: 0,
+            x5: 0,
+            x6: 0,
+            x7: 0,
+        };
+        let resp = dispatch_ffa(&req);
+        assert_eq!(resp.x0, ffa::FFA_MEM_RETRIEVE_RESP);
+        pass += 1;
+    }
+    // T1 RELINQUISH → SUCCESS
+    {
+        let req = SmcResult8 {
+            x0: ffa::FFA_MEM_RELINQUISH,
+            x1: multi_handle & 0xFFFF_FFFF,
+            x2: multi_handle >> 32,
+            x3: 0,
+            x4: 0,
+            x5: 0,
+            x6: 0,
+            x7: 0,
+        };
+        let resp = dispatch_ffa(&req);
+        assert_eq!(resp.x0, ffa::FFA_SUCCESS_32);
+        pass += 1;
+    }
+    // T1 RECLAIM → SUCCESS
+    {
+        let req = SmcResult8 {
+            x0: ffa::FFA_MEM_RECLAIM,
+            x1: multi_handle & 0xFFFF_FFFF,
+            x2: multi_handle >> 32,
+            x3: 0,
+            x4: 0,
+            x5: 0,
+            x6: 0,
+            x7: 0,
+        };
+        let resp = dispatch_ffa(&req);
+        assert_eq!(resp.x0, ffa::FFA_SUCCESS_32);
+        pass += 1;
+    }
+
+    // ── T2: MEM_LEND full lifecycle ──
+    {
+        // T2-1: FEATURES(FFA_MEM_LEND_32) → SUCCESS
+        let mut req = zero_req(ffa::FFA_FEATURES);
+        req.x1 = ffa::FFA_MEM_LEND_32;
+        let resp = dispatch_ffa(&req);
+        assert_eq!(resp.x0, ffa::FFA_SUCCESS_32);
+        pass += 1;
+    }
+    let lend_handle: u64;
+    {
+        // T2-2: MEM_LEND → SUCCESS + handle
+        let req = SmcResult8 {
+            x0: ffa::FFA_MEM_LEND_32,
+            x1: 0x0001 << 16, // sender=1
+            x2: 0,
+            x3: 0xC000_0000, // IPA
+            x4: 1,           // 1 page
+            x5: 0x8001,      // receiver=SP1
+            x6: 0,
+            x7: 0,
+        };
+        let resp = dispatch_ffa(&req);
+        assert_eq!(resp.x0, ffa::FFA_SUCCESS_32);
+        lend_handle = resp.x2 | (resp.x3 << 32);
+        assert!(lend_handle > 0);
+        pass += 2;
+    }
+    // T2-3: RETRIEVE → RETRIEVE_RESP
+    {
+        let req = SmcResult8 {
+            x0: ffa::FFA_MEM_RETRIEVE_REQ_32,
+            x1: lend_handle & 0xFFFF_FFFF,
+            x2: lend_handle >> 32,
+            x3: 0,
+            x4: 0,
+            x5: 0,
+            x6: 0,
+            x7: 0,
+        };
+        let resp = dispatch_ffa(&req);
+        assert_eq!(resp.x0, ffa::FFA_MEM_RETRIEVE_RESP);
+        pass += 1;
+    }
+    // T2-4: RELINQUISH → SUCCESS
+    {
+        let req = SmcResult8 {
+            x0: ffa::FFA_MEM_RELINQUISH,
+            x1: lend_handle & 0xFFFF_FFFF,
+            x2: lend_handle >> 32,
+            x3: 0,
+            x4: 0,
+            x5: 0,
+            x6: 0,
+            x7: 0,
+        };
+        let resp = dispatch_ffa(&req);
+        assert_eq!(resp.x0, ffa::FFA_SUCCESS_32);
+        pass += 1;
+    }
+    // T2-5: RECLAIM → SUCCESS
+    {
+        let req = SmcResult8 {
+            x0: ffa::FFA_MEM_RECLAIM,
+            x1: lend_handle & 0xFFFF_FFFF,
+            x2: lend_handle >> 32,
+            x3: 0,
+            x4: 0,
+            x5: 0,
+            x6: 0,
+            x7: 0,
+        };
+        let resp = dispatch_ffa(&req);
+        assert_eq!(resp.x0, ffa::FFA_SUCCESS_32);
+        pass += 1;
+    }
+
+    // ── T4: RELINQUISH before RETRIEVE → DENIED ──
+    let t4_handle: u64;
+    {
+        let req = SmcResult8 {
+            x0: ffa::FFA_MEM_SHARE_32,
+            x1: 0x0001 << 16,
+            x2: 0,
+            x3: 0xD000_0000,
+            x4: 1,
+            x5: 0x8001,
+            x6: 0,
+            x7: 0,
+        };
+        let resp = dispatch_ffa(&req);
+        assert_eq!(resp.x0, ffa::FFA_SUCCESS_32);
+        t4_handle = resp.x2 | (resp.x3 << 32);
+        pass += 1;
+    }
+    // T4: RELINQUISH without RETRIEVE → DENIED
+    {
+        let req = SmcResult8 {
+            x0: ffa::FFA_MEM_RELINQUISH,
+            x1: t4_handle & 0xFFFF_FFFF,
+            x2: t4_handle >> 32,
+            x3: 0,
+            x4: 0,
+            x5: 0,
+            x6: 0,
+            x7: 0,
+        };
+        let resp = dispatch_ffa(&req);
+        assert_eq!(resp.x0, ffa::FFA_ERROR);
+        assert_eq!(resp.x2, ffa::FFA_DENIED as u64);
+        pass += 1;
+    }
+    // T4: RECLAIM should succeed (never retrieved)
+    {
+        let req = SmcResult8 {
+            x0: ffa::FFA_MEM_RECLAIM,
+            x1: t4_handle & 0xFFFF_FFFF,
+            x2: t4_handle >> 32,
+            x3: 0,
+            x4: 0,
+            x5: 0,
+            x6: 0,
+            x7: 0,
+        };
+        let resp = dispatch_ffa(&req);
+        assert_eq!(resp.x0, ffa::FFA_SUCCESS_32);
+        pass += 1;
+    }
+
+    // ── T5: MEM_SHARE to SP2 (not just SP1) ──
+    let t5_handle: u64;
+    {
+        let req = SmcResult8 {
+            x0: ffa::FFA_MEM_SHARE_32,
+            x1: 0x0001 << 16,
+            x2: 0,
+            x3: 0xE000_0000,
+            x4: 1,
+            x5: 0x8002, // receiver=SP2
+            x6: 0,
+            x7: 0,
+        };
+        let resp = dispatch_ffa(&req);
+        assert_eq!(resp.x0, ffa::FFA_SUCCESS_32);
+        t5_handle = resp.x2 | (resp.x3 << 32);
+        pass += 1;
+    }
+    // T5: RECLAIM → SUCCESS
+    {
+        let req = SmcResult8 {
+            x0: ffa::FFA_MEM_RECLAIM,
+            x1: t5_handle & 0xFFFF_FFFF,
+            x2: t5_handle >> 32,
+            x3: 0,
+            x4: 0,
+            x5: 0,
+            x6: 0,
+            x7: 0,
+        };
+        let resp = dispatch_ffa(&req);
+        assert_eq!(resp.x0, ffa::FFA_SUCCESS_32);
+        pass += 1;
+    }
+
+    // ── T6: Zero page count → INVALID_PARAMETERS ──
+    {
+        let req = SmcResult8 {
+            x0: ffa::FFA_MEM_SHARE_32,
+            x1: 0x0001 << 16,
+            x2: 0,
+            x3: 0xF000_0000,
+            x4: 0, // zero pages
+            x5: 0x8001,
+            x6: 0,
+            x7: 0,
+        };
+        let resp = dispatch_ffa(&req);
+        assert_eq!(resp.x0, ffa::FFA_ERROR);
+        assert_eq!(resp.x2, ffa::FFA_INVALID_PARAMETERS as u64);
+        pass += 1;
+    }
+
     // ── G4: FFA_RUN accepts Preempted state (non-sel2 returns NOT_SUPPORTED) ──
 
     // Push SP1 through Reset → Idle → Running → Preempted via with_sp_locked

@@ -1326,7 +1326,8 @@ fn handle_direct_req_32(req: &SmcResult8) -> SmcResult8 {
 fn handle_spmc_mem_share(req: &SmcResult8, is_lend: bool) -> SmcResult8 {
     let sender_id: u16;
     let receiver_id: u16;
-    let ranges: [(u64, u32); 1];
+    let mut ranges = [(0u64, 0u32); MAX_SHARE_RANGES];
+    let range_count: usize;
 
     #[cfg(feature = "sel2")]
     {
@@ -1347,7 +1348,11 @@ fn handle_spmc_mem_share(req: &SmcResult8, is_lend: bool) -> SmcResult8 {
                     if desc.range_count == 0 {
                         return make_error(ffa::FFA_INVALID_PARAMETERS as u64);
                     }
-                    ranges = [(desc.ranges[0].0, desc.ranges[0].1)];
+                    let count = desc.range_count.min(MAX_SHARE_RANGES);
+                    for i in 0..count {
+                        ranges[i] = desc.ranges[i];
+                    }
+                    range_count = count;
                 }
                 Err(_) => {
                     return make_error(ffa::FFA_INVALID_PARAMETERS as u64);
@@ -1359,7 +1364,11 @@ fn handle_spmc_mem_share(req: &SmcResult8, is_lend: bool) -> SmcResult8 {
             receiver_id = (req.x5 & 0xFFFF) as u16;
             let ipa = req.x3;
             let count = req.x4 as u32;
-            ranges = [(ipa, count)];
+            if count == 0 {
+                return make_error(ffa::FFA_INVALID_PARAMETERS as u64);
+            }
+            ranges[0] = (ipa, count);
+            range_count = 1;
         }
     }
 
@@ -1370,7 +1379,11 @@ fn handle_spmc_mem_share(req: &SmcResult8, is_lend: bool) -> SmcResult8 {
         receiver_id = (req.x5 & 0xFFFF) as u16;
         let ipa = req.x3;
         let count = req.x4 as u32;
-        ranges = [(ipa, count)];
+        if count == 0 {
+            return make_error(ffa::FFA_INVALID_PARAMETERS as u64);
+        }
+        ranges[0] = (ipa, count);
+        range_count = 1;
     }
 
     // Validate receiver is a registered SP
@@ -1378,7 +1391,7 @@ fn handle_spmc_mem_share(req: &SmcResult8, is_lend: bool) -> SmcResult8 {
         return make_error(ffa::FFA_INVALID_PARAMETERS as u64);
     }
 
-    match record_spmc_share(sender_id, receiver_id, &ranges, is_lend) {
+    match record_spmc_share(sender_id, receiver_id, &ranges[..range_count], is_lend) {
         Some(handle) => SmcResult8 {
             x0: ffa::FFA_SUCCESS_32,
             x1: 0,
