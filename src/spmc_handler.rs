@@ -182,6 +182,27 @@ static SPMC_SHARES: SpinLock<[SpmcShareRecord; MAX_SPMC_SHARES]> = SpinLock::new
 
 static SPMC_NEXT_HANDLE: AtomicU64 = AtomicU64::new(1);
 
+// ── NWd fragment reassembly state ───────────────────────────────────
+
+/// State for reassembling fragmented NWd memory descriptors.
+struct NwdFragmentState {
+    active: bool,
+    accum_buf: [u8; 4096],
+    total_length: u32,
+    received: u32,
+    handle: u64,
+    is_lend: bool,
+}
+
+static NWD_FRAG: SpinLock<NwdFragmentState> = SpinLock::new(NwdFragmentState {
+    active: false,
+    accum_buf: [0u8; 4096],
+    total_length: 0,
+    received: 0,
+    handle: 0,
+    is_lend: false,
+});
+
 fn spmc_alloc_handle() -> u64 {
     SPMC_NEXT_HANDLE.fetch_add(1, core::sync::atomic::Ordering::Relaxed)
 }
@@ -1028,6 +1049,8 @@ pub fn dispatch_ffa(req: &SmcResult8) -> SmcResult8 {
                     | ffa::FFA_MEM_RETRIEVE_REQ_32
                     | ffa::FFA_MEM_RELINQUISH
                     | ffa::FFA_MEM_RECLAIM
+                    | ffa::FFA_MEM_FRAG_TX
+                    | ffa::FFA_MEM_FRAG_RX
                     | ffa::FFA_NOTIFICATION_BITMAP_CREATE
                     | ffa::FFA_NOTIFICATION_BITMAP_DESTROY
                     | ffa::FFA_NOTIFICATION_BIND
@@ -1102,6 +1125,7 @@ pub fn dispatch_ffa(req: &SmcResult8) -> SmcResult8 {
         }
         ffa::FFA_MEM_RELINQUISH => handle_spmc_mem_relinquish(req, None),
         ffa::FFA_MEM_RECLAIM => handle_spmc_mem_reclaim(req),
+        ffa::FFA_MEM_FRAG_TX => handle_spmc_mem_frag_tx(req),
         ffa::FFA_MEM_DONATE_32 | ffa::FFA_MEM_DONATE_64 => {
             make_error(ffa::FFA_NOT_SUPPORTED as u64)
         }
@@ -1383,6 +1407,114 @@ fn handle_direct_req_32(req: &SmcResult8) -> SmcResult8 {
     }
 }
 
+/// Handle FFA_MEM_FRAG_TX from NWd: continue a fragmented memory descriptor.
+fn handle_spmc_mem_frag_tx(req: &SmcResult8) -> SmcResult8 {
+    let handle = (req.x1 & 0xFFFF_FFFF) | ((req.x2 & 0xFFFF_FFFF) << 32);
+    let fragment_length = req.x3 as u32;
+
+    let mut frag = NWD_FRAG.lock();
+    if !frag.active || frag.handle != handle {
+        return make_error(ffa::FFA_INVALID_PARAMETERS as u64);
+    }
+
+    if fragment_length == 0 || frag.received + fragment_length > frag.total_length {
+        frag.active = false;
+        return make_error(ffa::FFA_INVALID_PARAMETERS as u64);
+    }
+
+    // Copy fragment from NWd TX buffer
+    #[cfg(feature = "sel2")]
+    {
+        let tx_pa = {
+            let nwd = NWD_RXTX.lock();
+            if !nwd.mapped {
+                frag.active = false;
+                return make_error(ffa::FFA_DENIED as u64);
+            }
+            nwd.tx_pa
+        };
+        unsafe {
+            core::ptr::copy_nonoverlapping(
+                tx_pa as *const u8,
+                frag.accum_buf.as_mut_ptr().add(frag.received as usize),
+                fragment_length as usize,
+            );
+        }
+    }
+    #[cfg(not(feature = "sel2"))]
+    {
+        // Unit test mode: no actual TX buffer to copy from
+        // Tests will pre-fill the accumulation buffer directly
+    }
+
+    frag.received += fragment_length;
+
+    if frag.received < frag.total_length {
+        return SmcResult8 {
+            x0: ffa::FFA_MEM_FRAG_RX,
+            x1: handle & 0xFFFF_FFFF,
+            x2: handle >> 32,
+            x3: frag.received as u64,
+            x4: 0, x5: 0, x6: 0, x7: 0,
+        };
+    }
+
+    // All fragments received — parse while holding lock (avoids 4KB stack copy),
+    // extract result, then release lock before acquiring SPMC_SHARES.
+    let total_length = frag.total_length;
+    let is_lend = frag.is_lend;
+    let frag_handle = frag.handle;
+
+    let parsed = unsafe {
+        crate::ffa::descriptors::parse_mem_region(frag.accum_buf.as_ptr(), total_length)
+    };
+    frag.active = false;
+    drop(frag); // Release NWD_FRAG lock before SPMC_SHARES lock
+
+    let desc = match parsed {
+        Ok(d) => d,
+        Err(_) => return make_error(ffa::FFA_INVALID_PARAMETERS as u64),
+    };
+
+    if desc.range_count == 0 {
+        return make_error(ffa::FFA_INVALID_PARAMETERS as u64);
+    }
+
+    // Validate receiver is a registered SP
+    if !crate::sp_context::is_registered_sp(desc.receiver_id) {
+        return make_error(ffa::FFA_INVALID_PARAMETERS as u64);
+    }
+
+    let count = desc.range_count.min(MAX_SHARE_RANGES);
+    let mut records = SPMC_SHARES.lock();
+    for record in records.iter_mut() {
+        if !record.active {
+            let mut stored = [(0u64, 0u32); MAX_SHARE_RANGES];
+            for i in 0..count {
+                stored[i] = desc.ranges[i];
+            }
+            *record = SpmcShareRecord {
+                handle: frag_handle,
+                sender_id: desc.sender_id,
+                receiver_id: desc.receiver_id,
+                ranges: stored,
+                range_count: count,
+                active: true,
+                is_lend,
+                retrieved: false,
+            };
+            return SmcResult8 {
+                x0: ffa::FFA_SUCCESS_32,
+                x1: 0,
+                x2: frag_handle & 0xFFFF_FFFF,
+                x3: frag_handle >> 32,
+                x4: 0, x5: 0, x6: 0, x7: 0,
+            };
+        }
+    }
+    make_error(ffa::FFA_NO_MEMORY as u64)
+}
+
 /// Handle FFA_MEM_SHARE / FFA_MEM_LEND from NWd.
 ///
 /// In sel2 mode: reads FF-A v1.1 composite memory region descriptor from NWd TX buffer.
@@ -1399,12 +1531,47 @@ fn handle_spmc_mem_share(req: &SmcResult8, is_lend: bool) -> SmcResult8 {
             let nwd = NWD_RXTX.lock();
             (nwd.mapped, nwd.tx_pa)
         };
-        if mapped {
-            let total_length = req.x1 as usize;
+        let total_length = req.x1 as u32;
+        // Descriptor path: RXTX mapped AND total_length > 0 (x1=0 means register-based)
+        if mapped && total_length > 0 {
+            let fragment_length = req.x2 as u32;
+
+            // Fragmented: first fragment only — initiate reassembly
+            if total_length != fragment_length && fragment_length > 0 && total_length > 0 {
+                if total_length > 4096 || fragment_length > total_length {
+                    return make_error(ffa::FFA_INVALID_PARAMETERS as u64);
+                }
+                let mut frag = NWD_FRAG.lock();
+                if frag.active {
+                    return make_error(ffa::FFA_BUSY as u64);
+                }
+                unsafe {
+                    core::ptr::copy_nonoverlapping(
+                        tx_pa as *const u8,
+                        frag.accum_buf.as_mut_ptr(),
+                        fragment_length as usize,
+                    );
+                }
+                frag.total_length = total_length;
+                frag.received = fragment_length;
+                frag.handle = spmc_alloc_handle();
+                frag.is_lend = is_lend;
+                frag.active = true;
+                let h = frag.handle;
+                return SmcResult8 {
+                    x0: ffa::FFA_MEM_FRAG_RX,
+                    x1: h & 0xFFFF_FFFF,
+                    x2: h >> 32,
+                    x3: fragment_length as u64,
+                    x4: 0, x5: 0, x6: 0, x7: 0,
+                };
+            }
+
+            // Non-fragmented: parse entire descriptor
             // SAFETY: `tx_pa` comes from validated RXTX_MAP registration and
             // `total_length` is bounded by the FF-A request payload length.
             let parsed = unsafe {
-                crate::ffa::descriptors::parse_mem_region(tx_pa as *const u8, total_length as u32)
+                crate::ffa::descriptors::parse_mem_region(tx_pa as *const u8, total_length)
             };
             match parsed {
                 Ok(desc) => {

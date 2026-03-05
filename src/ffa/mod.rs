@@ -31,9 +31,7 @@ pub const FFA_MEM_RETRIEVE_REQ_32: u64 = 0x84000074;
 pub const FFA_MEM_RETRIEVE_RESP: u64 = 0x84000075;
 pub const FFA_MEM_RELINQUISH: u64 = 0x84000076;
 pub const FFA_MEM_RECLAIM: u64 = 0x84000077;
-#[allow(dead_code)]
 pub const FFA_MEM_FRAG_RX: u64 = 0x8400007A;
-#[allow(dead_code)]
 pub const FFA_MEM_FRAG_TX: u64 = 0x8400007B;
 pub const FFA_INTERRUPT: u64 = 0x84000062;
 pub const FFA_NOTIFICATION_BITMAP_CREATE: u64 = 0x8400007D;

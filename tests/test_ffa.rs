@@ -184,51 +184,55 @@ pub fn run_ffa_test() {
         }
     }
 
-    // Test 11: FFA_MEM_SHARE → success with handle (register-based, no mailbox)
-    {
-        let mut ctx = VcpuContext::default();
-        ctx.gp_regs.x0 = ffa::FFA_MEM_SHARE_32;
-        ctx.gp_regs.x3 = 0x5000_0000; // IPA
-        ctx.gp_regs.x4 = 1; // 1 page
-        ctx.gp_regs.x5 = 0x8001; // SP1
-        let cont = ffa::proxy::handle_ffa_call(&mut ctx);
-        let handle = ctx.gp_regs.x2;
-        if cont && ctx.gp_regs.x0 == ffa::FFA_SUCCESS_32 && handle > 0 {
-            hypervisor::log_info!("  [PASS] FFA_MEM_SHARE returns handle\n");
-            pass += 1;
+    // Test 11-13: MEM_SHARE/RECLAIM with SP receiver (stub SPMC only).
+    // Under tfa_boot, these forward to real SPMC via SPMD — stub BL32 can't handle them.
+    if !cfg!(feature = "tfa_boot") {
+        // Test 11: FFA_MEM_SHARE → success with handle (register-based, no mailbox)
+        {
+            let mut ctx = VcpuContext::default();
+            ctx.gp_regs.x0 = ffa::FFA_MEM_SHARE_32;
+            ctx.gp_regs.x3 = 0x5000_0000; // IPA
+            ctx.gp_regs.x4 = 1; // 1 page
+            ctx.gp_regs.x5 = 0x8001; // SP1
+            let cont = ffa::proxy::handle_ffa_call(&mut ctx);
+            let handle = ctx.gp_regs.x2;
+            if cont && ctx.gp_regs.x0 == ffa::FFA_SUCCESS_32 && handle > 0 {
+                hypervisor::log_info!("  [PASS] FFA_MEM_SHARE returns handle\n");
+                pass += 1;
 
-            // Test 12: FFA_MEM_RECLAIM with valid handle
-            let mut ctx2 = VcpuContext::default();
-            ctx2.gp_regs.x0 = ffa::FFA_MEM_RECLAIM;
-            ctx2.gp_regs.x1 = handle; // handle low
-            ctx2.gp_regs.x2 = 0; // handle high
-            let cont2 = ffa::proxy::handle_ffa_call(&mut ctx2);
-            if cont2 && ctx2.gp_regs.x0 == ffa::FFA_SUCCESS_32 {
-                hypervisor::log_info!("  [PASS] FFA_MEM_RECLAIM success\n");
+                // Test 12: FFA_MEM_RECLAIM with valid handle
+                let mut ctx2 = VcpuContext::default();
+                ctx2.gp_regs.x0 = ffa::FFA_MEM_RECLAIM;
+                ctx2.gp_regs.x1 = handle; // handle low
+                ctx2.gp_regs.x2 = 0; // handle high
+                let cont2 = ffa::proxy::handle_ffa_call(&mut ctx2);
+                if cont2 && ctx2.gp_regs.x0 == ffa::FFA_SUCCESS_32 {
+                    hypervisor::log_info!("  [PASS] FFA_MEM_RECLAIM success\n");
+                    pass += 1;
+                } else {
+                    hypervisor::log_info!("  [FAIL] FFA_MEM_RECLAIM\n");
+                    fail += 1;
+                }
+            } else {
+                hypervisor::log_info!("  [FAIL] FFA_MEM_SHARE\n");
+                fail += 2; // Skip reclaim test too
+            }
+        }
+
+        // Test 13: FFA_MEM_RECLAIM with invalid handle
+        {
+            let mut ctx = VcpuContext::default();
+            ctx.gp_regs.x0 = ffa::FFA_MEM_RECLAIM;
+            ctx.gp_regs.x1 = 0xDEAD; // Invalid handle
+            ctx.gp_regs.x2 = 0;
+            let cont = ffa::proxy::handle_ffa_call(&mut ctx);
+            if cont && ctx.gp_regs.x0 == ffa::FFA_ERROR {
+                hypervisor::log_info!("  [PASS] FFA_MEM_RECLAIM invalid handle rejected\n");
                 pass += 1;
             } else {
-                hypervisor::log_info!("  [FAIL] FFA_MEM_RECLAIM\n");
+                hypervisor::log_info!("  [FAIL] FFA_MEM_RECLAIM invalid\n");
                 fail += 1;
             }
-        } else {
-            hypervisor::log_info!("  [FAIL] FFA_MEM_SHARE\n");
-            fail += 2; // Skip reclaim test too
-        }
-    }
-
-    // Test 13: FFA_MEM_RECLAIM with invalid handle
-    {
-        let mut ctx = VcpuContext::default();
-        ctx.gp_regs.x0 = ffa::FFA_MEM_RECLAIM;
-        ctx.gp_regs.x1 = 0xDEAD; // Invalid handle
-        ctx.gp_regs.x2 = 0;
-        let cont = ffa::proxy::handle_ffa_call(&mut ctx);
-        if cont && ctx.gp_regs.x0 == ffa::FFA_ERROR {
-            hypervisor::log_info!("  [PASS] FFA_MEM_RECLAIM invalid handle rejected\n");
-            pass += 1;
-        } else {
-            hypervisor::log_info!("  [FAIL] FFA_MEM_RECLAIM invalid\n");
-            fail += 1;
         }
     }
 
@@ -963,6 +967,112 @@ pub fn run_ffa_test() {
                 pass += 1;
             } else {
                 hypervisor::log_info!("  [FAIL] FEATURES(MSG_SEND2)\n");
+                fail += 1;
+            }
+        }
+
+        // Test 45-46: Fragmented MEM_SHARE + MEM_FRAG_TX
+        // Under linux_guest, is_guest_ram() rejects stack-allocated RXTX buffers
+        // (hypervisor memory, not guest RAM). Skip these tests.
+        if !cfg!(feature = "linux_guest") {
+            // Build a descriptor in a local buffer
+            let mut desc_buf = [0u8; 128];
+            let ranges = [(0x7000_0000u64, 1u32)];
+            let total_len = unsafe {
+                ffa::descriptors::build_test_descriptor(desc_buf.as_mut_ptr(), 1, 0x8001, &ranges)
+            };
+            let split = total_len / 2; // Split descriptor in half
+
+            // Write first half to TX buffer
+            unsafe {
+                core::ptr::copy_nonoverlapping(
+                    desc_buf.as_ptr(),
+                    tx_buf.0.as_mut_ptr(),
+                    split as usize,
+                );
+            }
+
+            // MEM_SHARE with total > fragment → should return MEM_FRAG_RX
+            let mut ctx = VcpuContext::default();
+            ctx.gp_regs.x0 = ffa::FFA_MEM_SHARE_32;
+            ctx.gp_regs.x1 = total_len as u64;  // total_length
+            ctx.gp_regs.x2 = split as u64;       // fragment_length (first half)
+            let cont = ffa::proxy::handle_ffa_call(&mut ctx);
+            if cont && ctx.gp_regs.x0 == ffa::FFA_MEM_FRAG_RX {
+                let frag_handle_lo = ctx.gp_regs.x1;
+                let frag_handle_hi = ctx.gp_regs.x2;
+                let offset = ctx.gp_regs.x3;
+                if offset == split as u64 {
+                    hypervisor::log_info!("  [PASS] Fragmented MEM_SHARE returns MEM_FRAG_RX\n");
+                    pass += 1;
+
+                    // Test 46: MEM_FRAG_TX with second half → FFA_SUCCESS
+                    let remaining = total_len - split;
+                    unsafe {
+                        core::ptr::copy_nonoverlapping(
+                            desc_buf.as_ptr().add(split as usize),
+                            tx_buf.0.as_mut_ptr(),
+                            remaining as usize,
+                        );
+                    }
+                    let mut ctx2 = VcpuContext::default();
+                    ctx2.gp_regs.x0 = ffa::FFA_MEM_FRAG_TX;
+                    ctx2.gp_regs.x1 = frag_handle_lo;
+                    ctx2.gp_regs.x2 = frag_handle_hi;
+                    ctx2.gp_regs.x3 = remaining as u64;
+                    let cont2 = ffa::proxy::handle_ffa_call(&mut ctx2);
+                    if cont2 && ctx2.gp_regs.x0 == ffa::FFA_SUCCESS_32 {
+                        hypervisor::log_info!("  [PASS] MEM_FRAG_TX completes share\n");
+                        pass += 1;
+
+                        // Reclaim the fragmented share
+                        let mut ctx3 = VcpuContext::default();
+                        ctx3.gp_regs.x0 = ffa::FFA_MEM_RECLAIM;
+                        ctx3.gp_regs.x1 = ctx2.gp_regs.x2; // handle lo from SUCCESS
+                        ctx3.gp_regs.x2 = ctx2.gp_regs.x3; // handle hi from SUCCESS
+                        ffa::proxy::handle_ffa_call(&mut ctx3);
+                    } else {
+                        hypervisor::log_info!("  [FAIL] MEM_FRAG_TX: x0={:#x}\n", ctx2.gp_regs.x0);
+                        fail += 1;
+                    }
+                } else {
+                    hypervisor::log_info!("  [FAIL] MEM_FRAG_RX offset: {} != {}\n", offset, split);
+                    fail += 2;
+                }
+            } else {
+                hypervisor::log_info!("  [FAIL] Fragmented MEM_SHARE: x0={:#x}\n", ctx.gp_regs.x0);
+                fail += 2;
+            }
+        }
+
+        // Test 47: MEM_FRAG_TX with wrong handle → INVALID_PARAMETERS
+        {
+            let mut ctx = VcpuContext::default();
+            ctx.gp_regs.x0 = ffa::FFA_MEM_FRAG_TX;
+            ctx.gp_regs.x1 = 0xDEAD; // invalid handle
+            ctx.gp_regs.x2 = 0;
+            ctx.gp_regs.x3 = 64; // fragment length
+            let cont = ffa::proxy::handle_ffa_call(&mut ctx);
+            if cont && ctx.gp_regs.x0 == ffa::FFA_ERROR && ctx.gp_regs.x2 == (ffa::FFA_INVALID_PARAMETERS as u32) as u64 {
+                hypervisor::log_info!("  [PASS] MEM_FRAG_TX wrong handle rejected\n");
+                pass += 1;
+            } else {
+                hypervisor::log_info!("  [FAIL] MEM_FRAG_TX wrong handle\n");
+                fail += 1;
+            }
+        }
+
+        // Test 48: FEATURES(MEM_FRAG_TX) = supported
+        {
+            let mut ctx = VcpuContext::default();
+            ctx.gp_regs.x0 = ffa::FFA_FEATURES;
+            ctx.gp_regs.x1 = ffa::FFA_MEM_FRAG_TX;
+            let cont = ffa::proxy::handle_ffa_call(&mut ctx);
+            if cont && ctx.gp_regs.x0 == ffa::FFA_SUCCESS_32 {
+                hypervisor::log_info!("  [PASS] FEATURES(MEM_FRAG_TX)\n");
+                pass += 1;
+            } else {
+                hypervisor::log_info!("  [FAIL] FEATURES(MEM_FRAG_TX)\n");
                 fail += 1;
             }
         }

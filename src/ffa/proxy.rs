@@ -38,6 +38,41 @@ static PROXY_RX_BUF: ProxyPageCell = ProxyPageCell(UnsafeCell::new(AlignedPage([
 #[cfg(feature = "tfa_boot")]
 static PROXY_RXTX_REGISTERED: AtomicBool = AtomicBool::new(false);
 
+// ── Fragment reassembly state (per-VM, for MEM_FRAG_TX/RX) ──────────
+
+/// Per-VM state for reassembling fragmented memory descriptors.
+struct FragmentState {
+    active: bool,
+    accum_buf: [u8; 4096],
+    total_length: u32,
+    received: u32,
+    handle: u64,
+    is_lend: bool,
+}
+
+impl FragmentState {
+    const fn new() -> Self {
+        Self {
+            active: false,
+            accum_buf: [0u8; 4096],
+            total_length: 0,
+            received: 0,
+            handle: 0,
+            is_lend: false,
+        }
+    }
+}
+
+struct FragmentArray(core::cell::UnsafeCell<[FragmentState; FFA_MAX_VMS]>);
+unsafe impl Sync for FragmentArray {}
+
+static FRAG_STATE: FragmentArray = FragmentArray(core::cell::UnsafeCell::new([
+    FragmentState::new(),
+    FragmentState::new(),
+    FragmentState::new(),
+    FragmentState::new(),
+]));
+
 /// Initialize FF-A proxy. Probes EL3 for a real SPMC.
 ///
 /// Called once at boot before guest entry.
@@ -114,6 +149,9 @@ pub fn handle_ffa_call(context: &mut VcpuContext) -> bool {
         FFA_MEM_RECLAIM => handle_mem_reclaim(context),
         FFA_MEM_RETRIEVE_REQ_32 | FFA_MEM_RETRIEVE_REQ_64 => handle_mem_retrieve_req(context),
         FFA_MEM_RELINQUISH => handle_mem_relinquish(context),
+
+        // Fragment reassembly
+        FFA_MEM_FRAG_TX => handle_mem_frag_tx(context),
 
         // Blocked: FFA_MEM_DONATE (pKVM policy)
         FFA_MEM_DONATE_32 | FFA_MEM_DONATE_64 => {
@@ -224,6 +262,8 @@ fn handle_features(context: &mut VcpuContext) -> bool {
             | FFA_MEM_RETRIEVE_REQ_32
             | FFA_MEM_RETRIEVE_REQ_64
             | FFA_MEM_RELINQUISH
+            | FFA_MEM_FRAG_TX
+            | FFA_MEM_FRAG_RX
             | FFA_SPM_ID_GET
             | FFA_RUN
             | FFA_NOTIFICATION_BITMAP_CREATE
@@ -309,6 +349,11 @@ fn handle_rxtx_unmap(context: &mut VcpuContext) -> bool {
     }
 
     *mbox = mailbox::FfaMailbox::new();
+
+    // Cancel any in-flight fragmentation for this VM
+    let frag = unsafe { &mut (*FRAG_STATE.0.get())[vm_id] };
+    frag.active = false;
+
     context.gp_regs.x0 = FFA_SUCCESS_32;
     true
 }
@@ -532,8 +577,18 @@ fn handle_mem_share_or_lend(context: &mut VcpuContext, is_lend: bool) -> bool {
     // Choose interface: descriptor-based (mailbox mapped) or register-based (fallback)
     let (sender_id_from_desc, receiver_id, ranges, range_count, total_page_count) = if mbox.mapped {
         // FF-A v1.1 descriptor path: parse TX buffer
-        match parse_share_descriptor(context, mbox) {
+        match parse_share_descriptor(context, mbox, is_lend) {
             Ok(info) => info,
+            Err(FRAG_NEEDS_MORE) => {
+                // Fragmented: return MEM_FRAG_RX to request next fragment
+                let vm_id = crate::global::current_vm_id();
+                let frag = unsafe { &(*FRAG_STATE.0.get())[vm_id] };
+                context.gp_regs.x0 = FFA_MEM_FRAG_RX;
+                context.gp_regs.x1 = frag.handle & 0xFFFF_FFFF;
+                context.gp_regs.x2 = frag.handle >> 32;
+                context.gp_regs.x3 = frag.received as u64;
+                return true;
+            }
             Err(code) => {
                 ffa_error(context, code);
                 return true;
@@ -553,6 +608,39 @@ fn handle_mem_share_or_lend(context: &mut VcpuContext, is_lend: bool) -> bool {
         (0u16, receiver_id, ranges, 1usize, page_count)
     };
 
+    finalize_mem_share(
+        context,
+        vm_id,
+        sender_id_from_desc,
+        receiver_id,
+        &ranges,
+        range_count,
+        total_page_count,
+        is_lend,
+        None, // allocate new handle
+        None, // not fragmented
+    )
+}
+
+/// Shared validation + recording logic for MEM_SHARE/LEND completions.
+///
+/// Called by both `handle_mem_share_or_lend` (non-fragmented) and
+/// `handle_mem_frag_tx` (after reassembly). `pre_handle` is `Some(h)` for
+/// fragmented shares (handle pre-assigned at first fragment).
+/// `frag_descriptor` carries the reassembled buffer for fragmented shares
+/// (used by tfa_boot to copy into PROXY_TX_BUF).
+fn finalize_mem_share(
+    context: &mut VcpuContext,
+    vm_id: usize,
+    sender_id_from_desc: u16,
+    receiver_id: u16,
+    ranges: &[(u64, u32); descriptors::MAX_ADDR_RANGES],
+    range_count: usize,
+    total_page_count: u32,
+    is_lend: bool,
+    pre_handle: Option<u64>,
+    _frag_descriptor: Option<&[u8]>,
+) -> bool {
     // Validate receiver is a known partition (VM or SP)
     if !is_valid_receiver(receiver_id) {
         ffa_error(context, FFA_INVALID_PARAMETERS);
@@ -616,20 +704,26 @@ fn handle_mem_share_or_lend(context: &mut VcpuContext, is_lend: bool) -> bool {
     // If SPMC present and receiver is an SP, forward to real SPMC
     #[cfg(feature = "tfa_boot")]
     if SPMC_PRESENT.load(Ordering::Relaxed) && receiver_id >= FFA_SPMC_ID {
-        // Copy descriptor to proxy TX buffer (SPMC reads from NWD_RXTX.tx_pa = proxy TX)
-        if mbox.mapped {
-            let total_length = context.gp_regs.x1 as usize;
+        // Copy full descriptor to proxy TX buffer for SPMC to read.
+        // For fragmented shares, use the local copy passed via frag_descriptor.
+        let mbox = mailbox::get_mailbox(vm_id);
+        if mbox.mapped || _frag_descriptor.is_some() {
+            let (src_ptr, total_length) = if let Some(desc) = _frag_descriptor {
+                (desc.as_ptr(), desc.len())
+            } else {
+                let tl = context.gp_regs.x1 as usize;
+                (mbox.tx_ipa as *const u8, tl)
+            };
             if total_length > 4096 {
                 ffa_error(context, FFA_INVALID_PARAMETERS);
                 return true;
             }
-            // SAFETY: tx_ipa is validated guest RAM, PROXY_TX_BUF is our 4KB page,
-            // total_length <= 4096, source and destination are distinct.
             unsafe {
-                let src = mbox.tx_ipa as *const u8;
                 let dst = &mut (*PROXY_TX_BUF.0.get()).0 as *mut [u8; 4096] as *mut u8;
-                core::ptr::copy_nonoverlapping(src, dst, total_length);
+                core::ptr::copy_nonoverlapping(src_ptr, dst, total_length);
             }
+            // Ensure x1 carries total_length for the forwarded SMC
+            context.gp_regs.x1 = total_length as u64;
         }
 
         // Forward SMC to real SPMC via SPMD
@@ -685,33 +779,148 @@ fn handle_mem_share_or_lend(context: &mut VcpuContext, is_lend: bool) -> bool {
     }
 
     // Stub SPMC path (no real SPMC or VM-to-VM sharing)
-    let handle = match stub_spmc::record_share(
-        sender_id,
-        receiver_id,
-        &ranges[..range_count],
-        total_page_count,
-        is_lend,
-    ) {
-        Some(h) => h,
-        None => {
+    let handle = if let Some(h) = pre_handle {
+        // Fragmented: use pre-assigned handle
+        if !stub_spmc::record_share_with_handle(
+            h,
+            sender_id,
+            receiver_id,
+            &ranges[..range_count],
+            total_page_count,
+            is_lend,
+        ) {
             ffa_error(context, FFA_NO_MEMORY);
             return true;
+        }
+        h
+    } else {
+        // Non-fragmented: allocate new handle
+        match stub_spmc::record_share(
+            sender_id,
+            receiver_id,
+            &ranges[..range_count],
+            total_page_count,
+            is_lend,
+        ) {
+            Some(h) => h,
+            None => {
+                ffa_error(context, FFA_NO_MEMORY);
+                return true;
+            }
         }
     };
 
     // Return success with handle
     context.gp_regs.x0 = FFA_SUCCESS_32;
+    context.gp_regs.x1 = 0; // MBZ per FF-A spec
     context.gp_regs.x2 = handle & 0xFFFF_FFFF;
     context.gp_regs.x3 = handle >> 32;
     true
 }
 
+/// FFA_MEM_FRAG_TX: Continue a fragmented memory share/lend descriptor.
+///
+/// Input:  x1 = handle (low 32), x2 = handle (high 32), x3 = fragment_length
+/// Output: FFA_MEM_FRAG_RX (more needed) or FFA_SUCCESS (complete)
+fn handle_mem_frag_tx(context: &mut VcpuContext) -> bool {
+    let handle = (context.gp_regs.x1 & 0xFFFF_FFFF) | ((context.gp_regs.x2 & 0xFFFF_FFFF) << 32);
+    let fragment_length = context.gp_regs.x3 as u32;
+    let vm_id = crate::global::current_vm_id();
+    if vm_id >= FFA_MAX_VMS {
+        ffa_error(context, FFA_INVALID_PARAMETERS);
+        return true;
+    }
+    let mbox = mailbox::get_mailbox(vm_id);
+
+    let frag = unsafe { &mut (*FRAG_STATE.0.get())[vm_id] };
+
+    // Validate: must have an active fragment for this VM with matching handle
+    if !frag.active || frag.handle != handle {
+        ffa_error(context, FFA_INVALID_PARAMETERS);
+        return true;
+    }
+
+    // Validate: fragment must fit within total
+    if fragment_length == 0 || frag.received + fragment_length > frag.total_length {
+        frag.active = false;
+        ffa_error(context, FFA_INVALID_PARAMETERS);
+        return true;
+    }
+
+    // Copy fragment from TX buffer into accumulation buffer at offset
+    if !mbox.mapped {
+        frag.active = false;
+        ffa_error(context, FFA_DENIED);
+        return true;
+    }
+    unsafe {
+        let src = mbox.tx_ipa as *const u8;
+        let dst = frag.accum_buf.as_mut_ptr().add(frag.received as usize);
+        core::ptr::copy_nonoverlapping(src, dst, fragment_length as usize);
+    }
+    frag.received += fragment_length;
+
+    // Check if all fragments received
+    if frag.received < frag.total_length {
+        // Need more fragments
+        context.gp_regs.x0 = FFA_MEM_FRAG_RX;
+        context.gp_regs.x1 = handle & 0xFFFF_FFFF;
+        context.gp_regs.x2 = handle >> 32;
+        context.gp_regs.x3 = frag.received as u64;
+        return true;
+    }
+
+    // All fragments received — copy to local buffer before clearing active
+    let total_length = frag.total_length;
+    let is_lend = frag.is_lend;
+    let frag_handle = frag.handle;
+    let mut local_buf = [0u8; 4096];
+    local_buf[..total_length as usize]
+        .copy_from_slice(&frag.accum_buf[..total_length as usize]);
+    frag.active = false;
+
+    let parsed = unsafe {
+        descriptors::parse_mem_region(local_buf.as_ptr(), total_length)
+    };
+    let parsed = match parsed {
+        Ok(p) => p,
+        Err(code) => {
+            ffa_error(context, code);
+            return true;
+        }
+    };
+
+    if parsed.range_count == 0 {
+        ffa_error(context, FFA_INVALID_PARAMETERS);
+        return true;
+    }
+
+    // Finalize: same validation + recording as handle_mem_share_or_lend
+    finalize_mem_share(
+        context,
+        vm_id,
+        parsed.sender_id,
+        parsed.receiver_id,
+        &parsed.ranges,
+        parsed.range_count,
+        parsed.total_page_count,
+        is_lend,
+        Some(frag_handle),
+        Some(&local_buf[..total_length as usize]),
+    )
+}
+
+/// Sentinel error code: descriptor is fragmented, first fragment copied to FRAG_STATE.
+const FRAG_NEEDS_MORE: i32 = FFA_MEM_FRAG_RX as i32;
+
 /// Parse a FF-A v1.1 composite memory region descriptor from the TX buffer.
 ///
 /// Returns (sender_id, receiver_id, ranges, range_count, total_page_count).
+/// Returns `Err(FRAG_NEEDS_MORE)` if fragmented — caller must initiate MEM_FRAG_RX.
 fn parse_share_descriptor(
     context: &VcpuContext,
     mbox: &mailbox::FfaMailbox,
+    is_lend: bool,
 ) -> Result<
     (
         u16,
@@ -725,12 +934,35 @@ fn parse_share_descriptor(
     let total_length = context.gp_regs.x1 as u32;
     let fragment_length = context.gp_regs.x2 as u32;
 
-    // No fragmentation support: entire descriptor must fit in one TX buffer
-    if total_length != fragment_length || total_length == 0 {
+    if total_length == 0 || fragment_length == 0 {
         return Err(FFA_INVALID_PARAMETERS);
     }
 
-    // Identity mapping: IPA == PA, safe to read TX buffer directly at EL2
+    // Fragmented: first fragment only — copy to accumulation buffer
+    if total_length != fragment_length {
+        if total_length > 4096 || fragment_length > total_length {
+            return Err(FFA_INVALID_PARAMETERS);
+        }
+        let vm_id = crate::global::current_vm_id();
+        let frag = unsafe { &mut (*FRAG_STATE.0.get())[vm_id] };
+        if frag.active {
+            // Already have an in-flight fragment for this VM
+            return Err(FFA_BUSY);
+        }
+        // Copy first fragment from TX buffer into accumulation buffer
+        unsafe {
+            let src = mbox.tx_ipa as *const u8;
+            core::ptr::copy_nonoverlapping(src, frag.accum_buf.as_mut_ptr(), fragment_length as usize);
+        }
+        frag.total_length = total_length;
+        frag.received = fragment_length;
+        frag.handle = stub_spmc::alloc_handle();
+        frag.is_lend = is_lend;
+        frag.active = true;
+        return Err(FRAG_NEEDS_MORE);
+    }
+
+    // Non-fragmented: entire descriptor in TX buffer
     let tx_ptr = mbox.tx_ipa as *const u8;
 
     // SAFETY: `tx_ptr` comes from validated RXTX mapping and `total_length`

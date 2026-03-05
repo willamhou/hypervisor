@@ -848,5 +848,31 @@ pub fn run_tests() {
         pass += 1;
     }
 
+    // ── Fragmentation tests ─────────────────────────────────────────
+
+    // F1: MEM_FRAG_TX with no active fragment → INVALID_PARAMETERS
+    {
+        let req = SmcResult8 {
+            x0: ffa::FFA_MEM_FRAG_TX,
+            x1: 0xDEAD, // bogus handle lo
+            x2: 0xBEEF, // bogus handle hi
+            x3: 64,     // fragment length
+            x4: 0, x5: 0, x6: 0, x7: 0,
+        };
+        let resp = dispatch_ffa(&req);
+        assert_eq!(resp.x0, ffa::FFA_ERROR);
+        assert_eq!(resp.x2, ffa::FFA_INVALID_PARAMETERS as u64);
+        pass += 2;
+    }
+
+    // F2: FEATURES(FFA_MEM_FRAG_TX) → SUCCESS
+    {
+        let mut req = zero_req(ffa::FFA_FEATURES);
+        req.x1 = ffa::FFA_MEM_FRAG_TX;
+        let resp = dispatch_ffa(&req);
+        assert_eq!(resp.x0, ffa::FFA_SUCCESS_32);
+        pass += 1;
+    }
+
     hypervisor::log_info!("    {} assertions passed\n", pass);
 }
