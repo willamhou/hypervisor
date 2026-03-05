@@ -207,6 +207,36 @@ fn spmc_alloc_handle() -> u64 {
     SPMC_NEXT_HANDLE.fetch_add(1, core::sync::atomic::Ordering::Relaxed)
 }
 
+// ── Per-SP indirect messaging mailboxes ──────────────────────────────
+
+const MAX_SP_MAILBOXES: usize = 4;
+
+/// Per-SP mailbox for indirect messaging (MSG_SEND2 / MSG_WAIT).
+/// Pre-allocated — SPs don't need to call RXTX_MAP.
+struct SpMailbox {
+    rx_buf: [u8; 4096],
+    msg_pending: bool,
+    msg_sender_id: u16,
+}
+
+static SP_MAILBOXES: SpinLock<[SpMailbox; MAX_SP_MAILBOXES]> = SpinLock::new({
+    const EMPTY: SpMailbox = SpMailbox {
+        rx_buf: [0u8; 4096],
+        msg_pending: false,
+        msg_sender_id: 0,
+    };
+    [EMPTY, EMPTY, EMPTY, EMPTY]
+});
+
+/// Map SP partition ID to mailbox index. Returns None for unknown SPs.
+fn sp_mailbox_index(sp_id: u16) -> Option<usize> {
+    if sp_id >= ffa::FFA_SPMC_ID + 1 && sp_id < ffa::FFA_SPMC_ID + 1 + MAX_SP_MAILBOXES as u16 {
+        Some((sp_id - ffa::FFA_SPMC_ID - 1) as usize)
+    } else {
+        None
+    }
+}
+
 /// Record a memory share. Returns the handle on success.
 fn record_spmc_share(
     sender_id: u16,
@@ -662,6 +692,7 @@ fn handle_sp_exit(sp: &mut crate::sp_context::SpContext, sp_id: u16) -> SmcResul
         if x0 != ffa::FFA_MSG_SEND_DIRECT_RESP_32
             && x0 != ffa::FFA_MSG_SEND_DIRECT_RESP_64
             && x0 != ffa::FFA_MSG_WAIT
+            && x0 != ffa::FFA_RX_RELEASE
             && x0 != ffa::FFA_MEM_RETRIEVE_REQ_32
             && x0 != ffa::FFA_MEM_RETRIEVE_REQ_64
             && x0 != ffa::FFA_MEM_RELINQUISH
@@ -726,8 +757,46 @@ fn handle_sp_exit(sp: &mut crate::sp_context::SpContext, sp_id: u16) -> SmcResul
                     result.x7,
                 );
             }
+            ffa::FFA_MSG_WAIT => {
+                // SP-initiated MSG_WAIT: check if indirect message is pending
+                if let Some(idx) = sp_mailbox_index(sp_id) {
+                    let mailboxes = SP_MAILBOXES.lock();
+                    if mailboxes[idx].msg_pending {
+                        // Message pending — return sender ID and re-enter SP
+                        let sender = mailboxes[idx].msg_sender_id;
+                        drop(mailboxes);
+                        sp.set_args(ffa::FFA_SUCCESS_32, sender as u64, 0, 0, 0, 0, 0, 0);
+                        continue; // re-enter SP via enter_guest()
+                    }
+                }
+                // No message pending — SP yields, transition to Idle
+                if sp.transition_to(crate::sp_context::SpState::Idle).is_err() {
+                    return make_error(ffa::FFA_DENIED as u64);
+                }
+                sp.clear_preempted_cpu();
+                sp.clear_owner_cpu();
+                return SmcResult8 {
+                    x0,
+                    x1,
+                    x2,
+                    x3,
+                    x4,
+                    x5,
+                    x6,
+                    x7,
+                };
+            }
+            ffa::FFA_RX_RELEASE => {
+                // SP-initiated RX_RELEASE: clear pending message
+                if let Some(idx) = sp_mailbox_index(sp_id) {
+                    let mut mailboxes = SP_MAILBOXES.lock();
+                    mailboxes[idx].msg_pending = false;
+                }
+                sp.set_args(ffa::FFA_SUCCESS_32, 0, 0, 0, 0, 0, 0, 0);
+                continue; // re-enter SP
+            }
             _ => {
-                // Normal exit (FFA_DIRECT_RESP, FFA_MSG_WAIT, etc.)
+                // Normal exit (FFA_DIRECT_RESP, etc.)
                 if sp.transition_to(crate::sp_context::SpState::Idle).is_err() {
                     return make_error(ffa::FFA_DENIED as u64);
                 }
@@ -1043,6 +1112,8 @@ pub fn dispatch_ffa(req: &SmcResult8) -> SmcResult8 {
                     | ffa::FFA_MSG_SEND_DIRECT_REQ_64
                     | ffa::FFA_RXTX_MAP
                     | ffa::FFA_RX_RELEASE
+                    | ffa::FFA_MSG_SEND2
+                    | ffa::FFA_MSG_WAIT
                     | ffa::FFA_RUN
                     | ffa::FFA_MEM_SHARE_32
                     | ffa::FFA_MEM_LEND_32
@@ -1099,6 +1170,9 @@ pub fn dispatch_ffa(req: &SmcResult8) -> SmcResult8 {
         ffa::FFA_RX_RELEASE => handle_rx_release(),
 
         ffa::FFA_PARTITION_INFO_GET => handle_partition_info_get(),
+
+        ffa::FFA_MSG_SEND2 => handle_spmc_msg_send2(req),
+        ffa::FFA_MSG_WAIT => handle_spmc_msg_wait_nwd(),
 
         ffa::FFA_MSG_SEND_DIRECT_REQ_32 => handle_direct_req_32(req),
 
@@ -1214,6 +1288,84 @@ pub fn dispatch_ffa(req: &SmcResult8) -> SmcResult8 {
         _ => make_error(ffa::FFA_NOT_SUPPORTED as u64),
     }
 }
+
+// ── Indirect messaging (MSG_SEND2 / MSG_WAIT) ───────────────────────
+
+/// Handle FFA_MSG_SEND2 from NWd — copy message from NWd TX to target SP's mailbox.
+///
+/// NWd TX layout: sender_id(u16) + receiver_id(u16) + size(u32) + payload.
+fn handle_spmc_msg_send2(_req: &SmcResult8) -> SmcResult8 {
+    let nwd = NWD_RXTX.lock();
+    if !nwd.mapped {
+        return make_error(ffa::FFA_DENIED as u64);
+    }
+    let tx_pa = nwd.tx_pa;
+    drop(nwd);
+
+    // Read message header from NWd TX buffer
+    let (msg_sender_id, msg_receiver_id, msg_size) = {
+        #[cfg(feature = "sel2")]
+        {
+            // SAFETY: tx_pa is NWd physical address, accessible at S-EL2 via
+            // Stage-1 MMU with NS=1. Header is 8 bytes, bounded read.
+            unsafe {
+                let tx_ptr = tx_pa as *const u8;
+                let s = core::ptr::read_unaligned(tx_ptr as *const u16);
+                let r = core::ptr::read_unaligned(tx_ptr.add(2) as *const u16);
+                let sz = core::ptr::read_unaligned(tx_ptr.add(4) as *const u32);
+                (s, r, sz)
+            }
+        }
+        #[cfg(not(feature = "sel2"))]
+        {
+            // Unit test mode: read from pre-filled TX buffer via NWD_RXTX.tx_pa
+            // Tests set tx_pa to a stack buffer address.
+            unsafe {
+                let tx_ptr = tx_pa as *const u8;
+                let s = core::ptr::read_unaligned(tx_ptr as *const u16);
+                let r = core::ptr::read_unaligned(tx_ptr.add(2) as *const u16);
+                let sz = core::ptr::read_unaligned(tx_ptr.add(4) as *const u32);
+                (s, r, sz)
+            }
+        }
+    };
+
+    // Validate receiver is a registered SP
+    let mbox_idx = match sp_mailbox_index(msg_receiver_id) {
+        Some(idx) if crate::sp_context::is_registered_sp(msg_receiver_id) => idx,
+        _ => return make_error(ffa::FFA_INVALID_PARAMETERS as u64),
+    };
+
+    let mut mailboxes = SP_MAILBOXES.lock();
+    let mbox = &mut mailboxes[mbox_idx];
+
+    if mbox.msg_pending {
+        return make_error(ffa::FFA_BUSY as u64);
+    }
+
+    // Copy header + payload to SP's RX buffer
+    let copy_len = core::cmp::min((8 + msg_size) as usize, 4096);
+    unsafe {
+        core::ptr::copy_nonoverlapping(
+            tx_pa as *const u8,
+            mbox.rx_buf.as_mut_ptr(),
+            copy_len,
+        );
+    }
+
+    mbox.msg_pending = true;
+    mbox.msg_sender_id = msg_sender_id;
+    make_success()
+}
+
+/// Handle FFA_MSG_WAIT from NWd — SPMC doesn't queue messages for NWd.
+fn handle_spmc_msg_wait_nwd() -> SmcResult8 {
+    make_error(ffa::FFA_NO_DATA as u64)
+}
+
+/// Handle FFA_RX_RELEASE from NWd — release NWd's RX buffer.
+/// (Separate from SP RX_RELEASE — NWd has its own RXTX state.)
+/// Already handled by existing handle_rx_release() for NWd RXTX.
 
 /// Handle FFA_RXTX_MAP — store NWd's TX/RX buffer PAs.
 ///

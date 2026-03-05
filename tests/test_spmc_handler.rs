@@ -874,5 +874,104 @@ pub fn run_tests() {
         pass += 1;
     }
 
+    // ── ME-3: MSG_SEND2 / MSG_WAIT tests ──────────────────────────────
+
+    // Setup: map NWd RXTX with a real stack buffer as TX
+    // (previous tests unmapped at test 31, so we re-map)
+    #[repr(align(4096))]
+    struct AlignedBuf([u8; 4096]);
+    let mut tx_buf = AlignedBuf([0u8; 4096]);
+
+    // Write message header: sender=0x0001 (NWd VM0), receiver=0x8001 (SP1), size=4, payload=0xCAFEBABE
+    unsafe {
+        let p = tx_buf.0.as_mut_ptr();
+        core::ptr::write_unaligned(p as *mut u16, 0x0001u16);        // sender_id
+        core::ptr::write_unaligned(p.add(2) as *mut u16, 0x8001u16); // receiver_id
+        core::ptr::write_unaligned(p.add(4) as *mut u32, 4u32);      // payload size
+        core::ptr::write_unaligned(p.add(8) as *mut u32, 0xCAFE_BABEu32); // payload
+    }
+
+    let rxtx_req = SmcResult8 {
+        x0: ffa::FFA_RXTX_MAP,
+        x1: tx_buf.0.as_ptr() as u64, // TX = stack buffer
+        x2: 0x6000_2000,               // RX (unused for MSG_SEND2)
+        x3: 1,
+        x4: 0, x5: 0, x6: 0, x7: 0,
+    };
+    let resp = dispatch_ffa(&rxtx_req);
+    assert_eq!(resp.x0, ffa::FFA_SUCCESS_32);
+    pass += 1;
+
+    // MS1: MSG_SEND2 to SP1 → SUCCESS
+    {
+        let req = zero_req(ffa::FFA_MSG_SEND2);
+        let resp = dispatch_ffa(&req);
+        assert_eq!(resp.x0, ffa::FFA_SUCCESS_32);
+        pass += 1;
+    }
+
+    // MS2: MSG_SEND2 again (pending) → BUSY
+    {
+        let req = zero_req(ffa::FFA_MSG_SEND2);
+        let resp = dispatch_ffa(&req);
+        assert_eq!(resp.x0, ffa::FFA_ERROR);
+        assert_eq!(resp.x2, ffa::FFA_BUSY as u64);
+        pass += 1;
+    }
+
+    // MS3: MSG_WAIT from NWd → NO_DATA (SPMC doesn't queue msgs for NWd)
+    {
+        let req = zero_req(ffa::FFA_MSG_WAIT);
+        let resp = dispatch_ffa(&req);
+        assert_eq!(resp.x0, ffa::FFA_ERROR);
+        assert_eq!(resp.x2, ffa::FFA_NO_DATA as u64);
+        pass += 1;
+    }
+
+    // MS4: MSG_SEND2 to invalid SP → INVALID_PARAMETERS
+    {
+        // Change receiver to 0x9999 (invalid)
+        unsafe {
+            let p = tx_buf.0.as_mut_ptr();
+            core::ptr::write_unaligned(p.add(2) as *mut u16, 0x9999u16);
+        }
+        // Need to re-map since tx_pa was captured at map time
+        // Actually tx_pa points to tx_buf which we just modified in-place — no re-map needed
+        // But we need to restore the RXTX (it was already mapped above)
+        let req = zero_req(ffa::FFA_MSG_SEND2);
+        let resp = dispatch_ffa(&req);
+        assert_eq!(resp.x0, ffa::FFA_ERROR);
+        assert_eq!(resp.x2, ffa::FFA_INVALID_PARAMETERS as u64);
+        pass += 1;
+        // Restore receiver to SP1
+        unsafe {
+            let p = tx_buf.0.as_mut_ptr();
+            core::ptr::write_unaligned(p.add(2) as *mut u16, 0x8001u16);
+        }
+    }
+
+    // MS5: FEATURES(MSG_SEND2) → supported
+    {
+        let mut req = zero_req(ffa::FFA_FEATURES);
+        req.x1 = ffa::FFA_MSG_SEND2;
+        let resp = dispatch_ffa(&req);
+        assert_eq!(resp.x0, ffa::FFA_SUCCESS_32);
+        pass += 1;
+    }
+
+    // MS6: FEATURES(MSG_WAIT) → supported
+    {
+        let mut req = zero_req(ffa::FFA_FEATURES);
+        req.x1 = ffa::FFA_MSG_WAIT;
+        let resp = dispatch_ffa(&req);
+        assert_eq!(resp.x0, ffa::FFA_SUCCESS_32);
+        pass += 1;
+    }
+
+    // Cleanup: unmap RXTX
+    let resp = dispatch_ffa(&zero_req(ffa::FFA_RXTX_UNMAP));
+    assert_eq!(resp.x0, ffa::FFA_SUCCESS_32);
+    pass += 1;
+
     hypervisor::log_info!("    {} assertions passed\n", pass);
 }
