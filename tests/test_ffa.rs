@@ -1077,6 +1077,85 @@ pub fn run_ffa_test() {
             }
         }
 
+        // Test 49: RETRIEVE_RESP writes descriptor to RX when mailbox mapped
+        // Skip in tfa_boot: Stage-2 ownership validation conflicts with prior test state
+        if !cfg!(feature = "tfa_boot") {
+            // Temporarily unmap VM0 mailbox so MEM_SHARE uses register-based protocol
+            {
+                let mut ctx = VcpuContext::default();
+                ctx.gp_regs.x0 = ffa::FFA_RXTX_UNMAP;
+                ffa::proxy::handle_ffa_call(&mut ctx);
+            }
+
+            // Share from VM0 to VM1 (register-based, VM0 mailbox unmapped)
+            let mut ctx = VcpuContext::default();
+            ctx.gp_regs.x0 = ffa::FFA_MEM_SHARE_32;
+            ctx.gp_regs.x3 = 0x5D00_0000;
+            ctx.gp_regs.x4 = 1;
+            ctx.gp_regs.x5 = 2; // receiver = VM1 (partition_id 2)
+            ffa::proxy::handle_ffa_call(&mut ctx);
+            let handle = ctx.gp_regs.x2 | (ctx.gp_regs.x3 << 32);
+
+            // Re-map VM0 mailbox
+            {
+                let mut ctx = VcpuContext::default();
+                ctx.gp_regs.x0 = ffa::FFA_RXTX_MAP;
+                ctx.gp_regs.x1 = tx_buf.0.as_ptr() as u64;
+                ctx.gp_regs.x2 = rx_buf_vm0.0.as_mut_ptr() as u64;
+                ctx.gp_regs.x3 = 1;
+                ffa::proxy::handle_ffa_call(&mut ctx);
+            }
+
+            // Retrieve as VM1 (VM1 mailbox is mapped → descriptor written to RX)
+            hypervisor::global::CURRENT_VM_ID.store(1, core::sync::atomic::Ordering::Relaxed);
+            let mut ctx2 = VcpuContext::default();
+            ctx2.gp_regs.x0 = ffa::FFA_MEM_RETRIEVE_REQ_32;
+            ctx2.gp_regs.x1 = handle & 0xFFFF_FFFF;
+            ctx2.gp_regs.x2 = handle >> 32;
+            ffa::proxy::handle_ffa_call(&mut ctx2);
+            hypervisor::global::CURRENT_VM_ID.store(0, core::sync::atomic::Ordering::Relaxed);
+
+            if ctx2.gp_regs.x0 == ffa::FFA_MEM_RETRIEVE_RESP && ctx2.gp_regs.x1 > 0 {
+                hypervisor::log_info!("  [PASS] RETRIEVE_RESP descriptor in RX (total_length={})\n", ctx2.gp_regs.x1);
+                pass += 1;
+            } else {
+                hypervisor::log_info!("  [FAIL] RETRIEVE_RESP descriptor: x0={:#x} x1={}\n", ctx2.gp_regs.x0, ctx2.gp_regs.x1);
+                fail += 1;
+            }
+        }
+
+        // Test 50: MEM_FRAG_RX with no active state → INVALID_PARAMETERS
+        {
+            let mut ctx = VcpuContext::default();
+            ctx.gp_regs.x0 = ffa::FFA_MEM_FRAG_RX;
+            ctx.gp_regs.x1 = 0xBEEF;
+            ctx.gp_regs.x2 = 0;
+            ctx.gp_regs.x3 = 0;
+            let cont = ffa::proxy::handle_ffa_call(&mut ctx);
+            if cont && ctx.gp_regs.x0 == ffa::FFA_ERROR && ctx.gp_regs.x2 == (ffa::FFA_INVALID_PARAMETERS as u32) as u64 {
+                hypervisor::log_info!("  [PASS] MEM_FRAG_RX no active state rejected\n");
+                pass += 1;
+            } else {
+                hypervisor::log_info!("  [FAIL] MEM_FRAG_RX no active state\n");
+                fail += 1;
+            }
+        }
+
+        // Test 51: FEATURES(MEM_FRAG_RX) = supported
+        {
+            let mut ctx = VcpuContext::default();
+            ctx.gp_regs.x0 = ffa::FFA_FEATURES;
+            ctx.gp_regs.x1 = ffa::FFA_MEM_FRAG_RX;
+            let cont = ffa::proxy::handle_ffa_call(&mut ctx);
+            if cont && ctx.gp_regs.x0 == ffa::FFA_SUCCESS_32 {
+                hypervisor::log_info!("  [PASS] FEATURES(MEM_FRAG_RX)\n");
+                pass += 1;
+            } else {
+                hypervisor::log_info!("  [FAIL] FEATURES(MEM_FRAG_RX)\n");
+                fail += 1;
+            }
+        }
+
         // Cleanup: unmap both mailboxes
         {
             let mut ctx = VcpuContext::default();
@@ -1090,6 +1169,52 @@ pub fn run_ffa_test() {
             ffa::proxy::handle_ffa_call(&mut ctx);
         }
         hypervisor::global::CURRENT_VM_ID.store(0, core::sync::atomic::Ordering::Relaxed);
+    }
+
+    // Test 52: CONSOLE_LOG_32 with "Hi" → SUCCESS
+    {
+        let mut ctx = VcpuContext::default();
+        ctx.gp_regs.x0 = ffa::FFA_CONSOLE_LOG_32;
+        ctx.gp_regs.x1 = 2; // 2 chars
+        ctx.gp_regs.x2 = 0x6948; // 'H' (0x48) + 'i' (0x69) in LE
+        let cont = ffa::proxy::handle_ffa_call(&mut ctx);
+        if cont && ctx.gp_regs.x0 == ffa::FFA_SUCCESS_32 {
+            hypervisor::log_info!("  [PASS] CONSOLE_LOG_32 success\n");
+            pass += 1;
+        } else {
+            hypervisor::log_info!("  [FAIL] CONSOLE_LOG_32\n");
+            fail += 1;
+        }
+    }
+
+    // Test 53: CONSOLE_LOG with char_count=0 → INVALID_PARAMETERS
+    {
+        let mut ctx = VcpuContext::default();
+        ctx.gp_regs.x0 = ffa::FFA_CONSOLE_LOG_32;
+        ctx.gp_regs.x1 = 0; // invalid
+        let cont = ffa::proxy::handle_ffa_call(&mut ctx);
+        if cont && ctx.gp_regs.x0 == ffa::FFA_ERROR && ctx.gp_regs.x2 == (ffa::FFA_INVALID_PARAMETERS as u32) as u64 {
+            hypervisor::log_info!("  [PASS] CONSOLE_LOG count=0 rejected\n");
+            pass += 1;
+        } else {
+            hypervisor::log_info!("  [FAIL] CONSOLE_LOG count=0\n");
+            fail += 1;
+        }
+    }
+
+    // Test 54: FEATURES(CONSOLE_LOG_32) = supported
+    {
+        let mut ctx = VcpuContext::default();
+        ctx.gp_regs.x0 = ffa::FFA_FEATURES;
+        ctx.gp_regs.x1 = ffa::FFA_CONSOLE_LOG_32;
+        let cont = ffa::proxy::handle_ffa_call(&mut ctx);
+        if cont && ctx.gp_regs.x0 == ffa::FFA_SUCCESS_32 {
+            hypervisor::log_info!("  [PASS] FEATURES(CONSOLE_LOG_32)\n");
+            pass += 1;
+        } else {
+            hypervisor::log_info!("  [FAIL] FEATURES(CONSOLE_LOG_32)\n");
+            fail += 1;
+        }
     }
 
     hypervisor::log_info!("  Results: {} passed, {} failed\n", pass, fail);

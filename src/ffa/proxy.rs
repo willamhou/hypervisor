@@ -73,6 +73,39 @@ static FRAG_STATE: FragmentArray = FragmentArray(core::cell::UnsafeCell::new([
     FragmentState::new(),
 ]));
 
+// ── Outbound fragment state (per-VM, for MEM_FRAG_RX responses) ──────
+
+/// Per-VM state for delivering fragmented MEM_RETRIEVE_RESP descriptors.
+struct FragRxState {
+    active: bool,
+    resp_buf: [u8; 4096],
+    total_length: u32,
+    delivered: u32,
+    handle: u64,
+}
+
+impl FragRxState {
+    const fn new() -> Self {
+        Self {
+            active: false,
+            resp_buf: [0u8; 4096],
+            total_length: 0,
+            delivered: 0,
+            handle: 0,
+        }
+    }
+}
+
+struct FragRxArray(core::cell::UnsafeCell<[FragRxState; FFA_MAX_VMS]>);
+unsafe impl Sync for FragRxArray {}
+
+static FRAG_RX_STATE: FragRxArray = FragRxArray(core::cell::UnsafeCell::new([
+    FragRxState::new(),
+    FragRxState::new(),
+    FragRxState::new(),
+    FragRxState::new(),
+]));
+
 /// Initialize FF-A proxy. Probes EL3 for a real SPMC.
 ///
 /// Called once at boot before guest entry.
@@ -152,6 +185,7 @@ pub fn handle_ffa_call(context: &mut VcpuContext) -> bool {
 
         // Fragment reassembly
         FFA_MEM_FRAG_TX => handle_mem_frag_tx(context),
+        FFA_MEM_FRAG_RX => handle_mem_frag_rx(context),
 
         // Blocked: FFA_MEM_DONATE (pKVM policy)
         FFA_MEM_DONATE_32 | FFA_MEM_DONATE_64 => {
@@ -177,6 +211,11 @@ pub fn handle_ffa_call(context: &mut VcpuContext) -> bool {
         // Indirect messaging
         FFA_MSG_SEND2 => handle_msg_send2(context),
         FFA_MSG_WAIT => handle_msg_wait(context),
+
+        // Console log
+        FFA_CONSOLE_LOG_32 | FFA_CONSOLE_LOG_64 => {
+            handle_proxy_console_log(context)
+        }
 
         // Unknown FF-A: forward to SPMC if present, else NOT_SUPPORTED
         _ => {
@@ -276,6 +315,8 @@ fn handle_features(context: &mut VcpuContext) -> bool {
             | FFA_NOTIFICATION_INFO_GET_64
             | FFA_MSG_SEND2
             | FFA_MSG_WAIT
+            | FFA_CONSOLE_LOG_32
+            | FFA_CONSOLE_LOG_64
     );
 
     if supported {
@@ -910,6 +951,99 @@ fn handle_mem_frag_tx(context: &mut VcpuContext) -> bool {
     )
 }
 
+/// FFA_MEM_FRAG_RX: Receiver requests next fragment of MEM_RETRIEVE_RESP descriptor.
+///
+/// Input:  x1 = handle (low 32), x2 = handle (high 32), x3 = frag_offset
+/// Output: FFA_MEM_FRAG_RX (more) or FFA_SUCCESS (complete)
+fn handle_mem_frag_rx(context: &mut VcpuContext) -> bool {
+    let handle = (context.gp_regs.x1 & 0xFFFF_FFFF) | ((context.gp_regs.x2 & 0xFFFF_FFFF) << 32);
+    let frag_offset = context.gp_regs.x3 as u32;
+    let vm_id = crate::global::current_vm_id();
+    if vm_id >= FFA_MAX_VMS {
+        ffa_error(context, FFA_INVALID_PARAMETERS);
+        return true;
+    }
+
+    let frag_rx = unsafe { &mut (*FRAG_RX_STATE.0.get())[vm_id] };
+    if !frag_rx.active || frag_rx.handle != handle {
+        ffa_error(context, FFA_INVALID_PARAMETERS);
+        return true;
+    }
+
+    if frag_offset != frag_rx.delivered {
+        frag_rx.active = false;
+        ffa_error(context, FFA_INVALID_PARAMETERS);
+        return true;
+    }
+
+    let remaining = frag_rx.total_length - frag_rx.delivered;
+    let chunk = (remaining as usize).min(4096);
+    let mbox = mailbox::get_mailbox(vm_id);
+    if !mbox.mapped {
+        frag_rx.active = false;
+        ffa_error(context, FFA_DENIED);
+        return true;
+    }
+
+    unsafe {
+        core::ptr::copy_nonoverlapping(
+            frag_rx.resp_buf.as_ptr().add(frag_rx.delivered as usize),
+            mbox.rx_ipa as *mut u8,
+            chunk,
+        );
+    }
+    frag_rx.delivered += chunk as u32;
+
+    if frag_rx.delivered < frag_rx.total_length {
+        context.gp_regs.x0 = FFA_MEM_FRAG_RX;
+        context.gp_regs.x1 = handle & 0xFFFF_FFFF;
+        context.gp_regs.x2 = handle >> 32;
+        context.gp_regs.x3 = frag_rx.delivered as u64;
+    } else {
+        frag_rx.active = false;
+        context.gp_regs.x0 = FFA_SUCCESS_32;
+        context.gp_regs.x1 = 0;
+        context.gp_regs.x2 = handle & 0xFFFF_FFFF;
+        context.gp_regs.x3 = handle >> 32;
+    }
+    true
+}
+
+/// FFA_CONSOLE_LOG: extract packed characters from x2-x7 and write to UART.
+fn handle_proxy_console_log(context: &mut VcpuContext) -> bool {
+    let char_count = context.gp_regs.x1 as usize;
+    if char_count == 0 || char_count > 48 {
+        ffa_error(context, FFA_INVALID_PARAMETERS);
+        return true;
+    }
+
+    let regs = [
+        context.gp_regs.x2, context.gp_regs.x3, context.gp_regs.x4,
+        context.gp_regs.x5, context.gp_regs.x6, context.gp_regs.x7,
+    ];
+    let mut buf = [0u8; 48];
+    let mut len = 0;
+    for i in 0..char_count {
+        let reg_idx = i / 8;
+        let byte_idx = i % 8;
+        if reg_idx >= 6 {
+            break;
+        }
+        let ch = ((regs[reg_idx] >> (byte_idx * 8)) & 0xFF) as u8;
+        if ch != 0 {
+            buf[len] = ch;
+            len += 1;
+        }
+    }
+    if len > 0 {
+        crate::uart_puts(&buf[..len]);
+    }
+
+    context.gp_regs.x0 = FFA_SUCCESS_32;
+    context.gp_regs.x2 = 0;
+    true
+}
+
 /// Sentinel error code: descriptor is fragmented, first fragment copied to FRAG_STATE.
 const FRAG_NEEDS_MORE: i32 = FFA_MEM_FRAG_RX as i32;
 
@@ -1148,10 +1282,52 @@ fn handle_mem_retrieve_req(context: &mut VcpuContext) -> bool {
     // Mark as retrieved
     stub_spmc::mark_retrieved(handle);
 
+    // Build response descriptor and write to receiver's RX buffer if mailbox mapped
+    let mbox = mailbox::get_mailbox(vm_id);
+    let total_length = if mbox.mapped {
+        let frag_rx = unsafe { &mut (*FRAG_RX_STATE.0.get())[vm_id] };
+        // Build descriptor into frag_rx buffer (reuse as temp even if no fragmentation)
+        let total_pages: u32 = info.ranges[..info.range_count].iter().map(|(_, c)| *c).sum();
+        match unsafe {
+            descriptors::build_retrieve_resp_descriptor(
+                frag_rx.resp_buf.as_mut_ptr(),
+                frag_rx.resp_buf.len(),
+                info.sender_id,
+                info.receiver_id,
+                handle,
+                &info.ranges,
+                info.range_count,
+                total_pages,
+            )
+        } {
+            Ok(desc_len) => {
+                // Write descriptor (or first chunk) to RX buffer
+                let chunk = (desc_len as usize).min(4096);
+                unsafe {
+                    core::ptr::copy_nonoverlapping(
+                        frag_rx.resp_buf.as_ptr(),
+                        mbox.rx_ipa as *mut u8,
+                        chunk,
+                    );
+                }
+                if desc_len > 4096 {
+                    // Fragmented: store state for FRAG_RX continuation
+                    frag_rx.active = true;
+                    frag_rx.total_length = desc_len;
+                    frag_rx.delivered = 4096;
+                    frag_rx.handle = handle;
+                }
+                desc_len as u64
+            }
+            Err(_) => 0, // Fall back to register-based
+        }
+    } else {
+        0 // Register-based (no mailbox)
+    };
+
     // Return FFA_MEM_RETRIEVE_RESP
     context.gp_regs.x0 = FFA_MEM_RETRIEVE_RESP;
-    // x1 = total_length (0 for register-based), x2/x3 = handle
-    context.gp_regs.x1 = 0;
+    context.gp_regs.x1 = total_length;
     context.gp_regs.x2 = handle & 0xFFFF_FFFF;
     context.gp_regs.x3 = handle >> 32;
     true

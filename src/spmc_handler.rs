@@ -203,6 +203,25 @@ static NWD_FRAG: SpinLock<NwdFragmentState> = SpinLock::new(NwdFragmentState {
     is_lend: false,
 });
 
+// ── NWd retrieve response fragmentation state ────────────────────────
+
+/// State for delivering fragmented MEM_RETRIEVE_RESP descriptors to NWd.
+struct NwdFragRxState {
+    active: bool,
+    resp_buf: [u8; 4096],
+    total_length: u32,
+    delivered: u32,
+    handle: u64,
+}
+
+static NWD_FRAG_RX: SpinLock<NwdFragRxState> = SpinLock::new(NwdFragRxState {
+    active: false,
+    resp_buf: [0u8; 4096],
+    total_length: 0,
+    delivered: 0,
+    handle: 0,
+});
+
 fn spmc_alloc_handle() -> u64 {
     SPMC_NEXT_HANDLE.fetch_add(1, core::sync::atomic::Ordering::Relaxed)
 }
@@ -696,6 +715,9 @@ fn handle_sp_exit(sp: &mut crate::sp_context::SpContext, sp_id: u16) -> SmcResul
             && x0 != ffa::FFA_MEM_RETRIEVE_REQ_32
             && x0 != ffa::FFA_MEM_RETRIEVE_REQ_64
             && x0 != ffa::FFA_MEM_RELINQUISH
+            && x0 != ffa::FFA_MEM_FRAG_RX
+            && x0 != ffa::FFA_CONSOLE_LOG_32
+            && x0 != ffa::FFA_CONSOLE_LOG_64
         {
             let ctx = sp.vcpu_ctx();
             let esr = ctx.sys_regs.esr_el2;
@@ -757,6 +779,24 @@ fn handle_sp_exit(sp: &mut crate::sp_context::SpContext, sp_id: u16) -> SmcResul
                     result.x7,
                 );
             }
+            ffa::FFA_MEM_FRAG_RX => {
+                // SP-initiated FRAG_RX: deliver next chunk of RETRIEVE_RESP
+                let sp_req = SmcResult8 {
+                    x0,
+                    x1,
+                    x2,
+                    x3,
+                    x4,
+                    x5,
+                    x6,
+                    x7,
+                };
+                let result = handle_spmc_mem_frag_rx(&sp_req);
+                sp.set_args(
+                    result.x0, result.x1, result.x2, result.x3, result.x4, result.x5, result.x6,
+                    result.x7,
+                );
+            }
             ffa::FFA_MSG_WAIT => {
                 // SP-initiated MSG_WAIT: check if indirect message is pending
                 if let Some(idx) = sp_mailbox_index(sp_id) {
@@ -793,6 +833,18 @@ fn handle_sp_exit(sp: &mut crate::sp_context::SpContext, sp_id: u16) -> SmcResul
                     mailboxes[idx].msg_pending = false;
                 }
                 sp.set_args(ffa::FFA_SUCCESS_32, 0, 0, 0, 0, 0, 0, 0);
+                continue; // re-enter SP
+            }
+            ffa::FFA_CONSOLE_LOG_32 | ffa::FFA_CONSOLE_LOG_64 => {
+                // SP-initiated CONSOLE_LOG: extract chars and write to UART
+                let sp_req = SmcResult8 {
+                    x0, x1, x2, x3, x4, x5, x6, x7,
+                };
+                let result = handle_console_log(&sp_req);
+                sp.set_args(
+                    result.x0, result.x1, result.x2, result.x3, result.x4, result.x5, result.x6,
+                    result.x7,
+                );
                 continue; // re-enter SP
             }
             _ => {
@@ -1098,9 +1150,29 @@ pub fn dispatch_ffa(req: &SmcResult8) -> SmcResult8 {
         }
 
         ffa::FFA_FEATURES => {
-            // Check if the queried function ID (in x1) is supported
             let queried_fid = req.x1;
-            // RXTX_MAP is listed because SPMD forwards it from NWd to SPMC.
+
+            // Feature IDs (non-function): SRI and NPI return donated SGI INTIDs
+            if queried_fid == ffa::FFA_FEATURE_NPI {
+                return SmcResult8 {
+                    x0: ffa::FFA_SUCCESS_32,
+                    x1: 0,
+                    x2: ffa::NPI_INTID as u64,
+                    x3: 0,
+                    x4: 0, x5: 0, x6: 0, x7: 0,
+                };
+            }
+            if queried_fid == ffa::FFA_FEATURE_SRI {
+                return SmcResult8 {
+                    x0: ffa::FFA_SUCCESS_32,
+                    x1: 0,
+                    x2: ffa::SRI_INTID as u64,
+                    x3: 0,
+                    x4: 0, x5: 0, x6: 0, x7: 0,
+                };
+            }
+
+            // Function IDs
             let supported = matches!(
                 queried_fid,
                 ffa::FFA_VERSION
@@ -1130,6 +1202,8 @@ pub fn dispatch_ffa(req: &SmcResult8) -> SmcResult8 {
                     | ffa::FFA_NOTIFICATION_GET
                     | ffa::FFA_NOTIFICATION_INFO_GET_32
                     | ffa::FFA_NOTIFICATION_INFO_GET_64
+                    | ffa::FFA_CONSOLE_LOG_32
+                    | ffa::FFA_CONSOLE_LOG_64
             );
             if supported {
                 SmcResult8 {
@@ -1200,6 +1274,7 @@ pub fn dispatch_ffa(req: &SmcResult8) -> SmcResult8 {
         ffa::FFA_MEM_RELINQUISH => handle_spmc_mem_relinquish(req, None),
         ffa::FFA_MEM_RECLAIM => handle_spmc_mem_reclaim(req),
         ffa::FFA_MEM_FRAG_TX => handle_spmc_mem_frag_tx(req),
+        ffa::FFA_MEM_FRAG_RX => handle_spmc_mem_frag_rx(req),
         ffa::FFA_MEM_DONATE_32 | ffa::FFA_MEM_DONATE_64 => {
             make_error(ffa::FFA_NOT_SUPPORTED as u64)
         }
@@ -1285,8 +1360,40 @@ pub fn dispatch_ffa(req: &SmcResult8) -> SmcResult8 {
             }
         }
 
+        // ── Console log ──────────────────────────────────────────────
+        ffa::FFA_CONSOLE_LOG_32 | ffa::FFA_CONSOLE_LOG_64 => handle_console_log(req),
+
         _ => make_error(ffa::FFA_NOT_SUPPORTED as u64),
     }
+}
+
+/// Handle FFA_CONSOLE_LOG: extract packed characters from x2-x7 and write to UART.
+fn handle_console_log(req: &SmcResult8) -> SmcResult8 {
+    let char_count = req.x1 as usize;
+    if char_count == 0 || char_count > 48 {
+        return make_error(ffa::FFA_INVALID_PARAMETERS as u64);
+    }
+
+    let regs = [req.x2, req.x3, req.x4, req.x5, req.x6, req.x7];
+    let mut buf = [0u8; 48];
+    let mut len = 0;
+    for i in 0..char_count {
+        let reg_idx = i / 8;
+        let byte_idx = i % 8;
+        if reg_idx >= 6 {
+            break;
+        }
+        let ch = ((regs[reg_idx] >> (byte_idx * 8)) & 0xFF) as u8;
+        if ch != 0 {
+            buf[len] = ch;
+            len += 1;
+        }
+    }
+    if len > 0 {
+        crate::uart_puts(&buf[..len]);
+    }
+
+    make_success()
 }
 
 // ── Indirect messaging (MSG_SEND2 / MSG_WAIT) ───────────────────────
@@ -1846,15 +1953,114 @@ fn handle_spmc_mem_retrieve(req: &SmcResult8, _current_sp: Option<(u16, u64)>) -
 
     mark_spmc_retrieved(handle);
 
+    // Build response descriptor and compute total_length
+    let total_pages: u32 = ranges[..range_count].iter().map(|(_, c)| *c).sum();
+    let mut frag_rx = NWD_FRAG_RX.lock();
+    let total_length = match unsafe {
+        crate::ffa::descriptors::build_retrieve_resp_descriptor(
+            frag_rx.resp_buf.as_mut_ptr(),
+            frag_rx.resp_buf.len(),
+            _sender,
+            receiver_id,
+            handle,
+            &ranges,
+            range_count,
+            total_pages,
+        )
+    } {
+        Ok(len) => {
+            // Write descriptor to NWd RX buffer if available
+            #[cfg(feature = "sel2")]
+            {
+                let nwd = NWD_RXTX.lock();
+                if nwd.mapped {
+                    let chunk = (len as usize).min(4096);
+                    unsafe {
+                        core::ptr::copy_nonoverlapping(
+                            frag_rx.resp_buf.as_ptr(),
+                            nwd.rx_pa as *mut u8,
+                            chunk,
+                        );
+                    }
+                    if len > 4096 {
+                        frag_rx.active = true;
+                        frag_rx.total_length = len;
+                        frag_rx.delivered = 4096;
+                        frag_rx.handle = handle;
+                    }
+                }
+            }
+            len as u64
+        }
+        Err(_) => 0,
+    };
+    drop(frag_rx);
+
     SmcResult8 {
         x0: ffa::FFA_MEM_RETRIEVE_RESP,
-        x1: 0,
+        x1: total_length,
         x2: handle & 0xFFFF_FFFF,
         x3: handle >> 32,
         x4: 0,
         x5: 0,
         x6: 0,
         x7: 0,
+    }
+}
+
+/// Handle FFA_MEM_FRAG_RX from NWd: deliver next fragment of MEM_RETRIEVE_RESP.
+fn handle_spmc_mem_frag_rx(req: &SmcResult8) -> SmcResult8 {
+    let handle = (req.x1 & 0xFFFF_FFFF) | ((req.x2 & 0xFFFF_FFFF) << 32);
+    let frag_offset = req.x3 as u32;
+
+    let mut frag_rx = NWD_FRAG_RX.lock();
+    if !frag_rx.active || frag_rx.handle != handle {
+        return make_error(ffa::FFA_INVALID_PARAMETERS as u64);
+    }
+
+    if frag_offset != frag_rx.delivered {
+        frag_rx.active = false;
+        return make_error(ffa::FFA_INVALID_PARAMETERS as u64);
+    }
+
+    let remaining = frag_rx.total_length - frag_rx.delivered;
+    let chunk = (remaining as usize).min(4096);
+
+    #[cfg(feature = "sel2")]
+    {
+        let nwd = NWD_RXTX.lock();
+        if !nwd.mapped {
+            frag_rx.active = false;
+            return make_error(ffa::FFA_DENIED as u64);
+        }
+        unsafe {
+            core::ptr::copy_nonoverlapping(
+                frag_rx.resp_buf.as_ptr().add(frag_rx.delivered as usize),
+                nwd.rx_pa as *mut u8,
+                chunk,
+            );
+        }
+    }
+
+    frag_rx.delivered += chunk as u32;
+
+    if frag_rx.delivered < frag_rx.total_length {
+        SmcResult8 {
+            x0: ffa::FFA_MEM_FRAG_RX,
+            x1: handle & 0xFFFF_FFFF,
+            x2: handle >> 32,
+            x3: frag_rx.delivered as u64,
+            x4: 0, x5: 0, x6: 0, x7: 0,
+        }
+    } else {
+        frag_rx.active = false;
+        SmcResult8 {
+            x0: ffa::FFA_SUCCESS_32,
+            x1: 0,
+            x2: handle & 0xFFFF_FFFF,
+            x3: handle >> 32,
+            x4: 0, x5: 0, x6: 0, x7: 0,
+        }
     }
 }
 

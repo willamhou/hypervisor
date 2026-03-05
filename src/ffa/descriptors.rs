@@ -198,6 +198,69 @@ pub unsafe fn parse_mem_region(
     Ok(result)
 }
 
+/// Build an FF-A v1.1 MEM_RETRIEVE_RESP descriptor into a buffer.
+///
+/// This is the reverse of `parse_mem_region()`: constructs the composite memory
+/// region descriptor that the SPMC/proxy writes into the receiver's RX buffer
+/// in response to MEM_RETRIEVE_REQ.
+///
+/// Returns the total descriptor length on success, or an error code if the
+/// buffer is too small.
+///
+/// # Safety
+///
+/// `buf` must point to at least `buf_len` bytes of writable memory.
+pub unsafe fn build_retrieve_resp_descriptor(
+    buf: *mut u8,
+    buf_len: usize,
+    sender_id: u16,
+    receiver_id: u16,
+    handle: u64,
+    ranges: &[(u64, u32)],
+    range_count: usize,
+    total_page_count: u32,
+) -> Result<u32, i32> {
+    let total_len = 80 + range_count * 16;
+    if buf_len < total_len {
+        return Err(crate::ffa::FFA_NO_MEMORY);
+    }
+
+    core::ptr::write_bytes(buf, 0, total_len);
+
+    // FfaMemRegion header (48 bytes)
+    core::ptr::write_unaligned(buf as *mut u16, sender_id);
+    // handle at offset 12
+    core::ptr::write_unaligned(buf.add(12) as *mut u64, handle);
+    // receiver_count at offset 32
+    core::ptr::write_unaligned(buf.add(32) as *mut u32, 1);
+    // receivers_offset at offset 36
+    let recv_off: u32 = 48;
+    core::ptr::write_unaligned(buf.add(36) as *mut u32, recv_off);
+
+    // FfaMemAccessDesc (16 bytes) at offset 48
+    let access_ptr = buf.add(recv_off as usize);
+    core::ptr::write_unaligned(access_ptr as *mut u16, receiver_id);
+    // permissions: RW (0x03)
+    core::ptr::write_unaligned(access_ptr.add(2) as *mut u8, 0x03);
+    // composite_offset at +4
+    let comp_off: u32 = 48 + 16;
+    core::ptr::write_unaligned(access_ptr.add(4) as *mut u32, comp_off);
+
+    // FfaCompositeMemRegion (16 bytes) at offset 64
+    let comp_ptr = buf.add(comp_off as usize);
+    core::ptr::write_unaligned(comp_ptr as *mut u32, total_page_count);
+    core::ptr::write_unaligned(comp_ptr.add(4) as *mut u32, range_count as u32);
+
+    // FfaMemRegionAddrRange (16 bytes each) starting at offset 80
+    for i in 0..range_count {
+        let range_ptr = buf.add(80 + i * 16);
+        core::ptr::write_unaligned(range_ptr as *mut u64, ranges[i].0);
+        core::ptr::write_unaligned(range_ptr.add(8) as *mut u32, ranges[i].1);
+    }
+
+    Ok(total_len as u32)
+}
+
 /// Build a minimal FfaMemRegion descriptor in a buffer for testing.
 ///
 /// Returns the total descriptor length.
@@ -211,37 +274,8 @@ pub unsafe fn build_test_descriptor(
     receiver_id: u16,
     ranges: &[(u64, u32)],
 ) -> u32 {
-    core::ptr::write_bytes(buf, 0, 128);
-
-    // FfaMemRegion header (48 bytes)
-    // sender_id at offset 0
-    core::ptr::write_unaligned(buf as *mut u16, sender_id);
-    // receiver_count at offset 32
-    core::ptr::write_unaligned(buf.add(32) as *mut u32, 1);
-    // receivers_offset at offset 36 (right after the 48-byte header)
-    let recv_off: u32 = 48;
-    core::ptr::write_unaligned(buf.add(36) as *mut u32, recv_off);
-
-    // FfaMemAccessDesc (16 bytes) at offset 48
-    let access_ptr = buf.add(recv_off as usize);
-    core::ptr::write_unaligned(access_ptr as *mut u16, receiver_id);
-    // composite_offset at +4 (from start of FfaMemRegion)
-    let comp_off: u32 = 48 + 16; // after access desc
-    core::ptr::write_unaligned(access_ptr.add(4) as *mut u32, comp_off);
-
-    // FfaCompositeMemRegion (16 bytes) at offset 64
-    let comp_ptr = buf.add(comp_off as usize);
+    let range_count = ranges.len();
     let total_pages: u32 = ranges.iter().map(|(_, c)| *c).sum();
-    core::ptr::write_unaligned(comp_ptr as *mut u32, total_pages);
-    core::ptr::write_unaligned(comp_ptr.add(4) as *mut u32, ranges.len() as u32);
-
-    // FfaMemRegionAddrRange (16 bytes each) starting at offset 80
-    let ranges_start = comp_off as usize + 16;
-    for (i, &(addr, count)) in ranges.iter().enumerate() {
-        let range_ptr = buf.add(ranges_start + i * 16);
-        core::ptr::write_unaligned(range_ptr as *mut u64, addr);
-        core::ptr::write_unaligned(range_ptr.add(8) as *mut u32, count);
-    }
-
-    (ranges_start + ranges.len() * 16) as u32
+    build_retrieve_resp_descriptor(buf, 4096, sender_id, receiver_id, 0, ranges, range_count, total_pages)
+        .unwrap_or(0)
 }

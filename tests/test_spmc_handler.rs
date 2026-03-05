@@ -305,7 +305,7 @@ pub fn run_tests() {
         pass += 1;
     }
 
-    // Test: MEM_RETRIEVE -> RETRIEVE_RESP
+    // Test: MEM_RETRIEVE -> RETRIEVE_RESP with descriptor (x1 = total_length > 0)
     {
         let req = SmcResult8 {
             x0: ffa::FFA_MEM_RETRIEVE_REQ_32,
@@ -319,7 +319,9 @@ pub fn run_tests() {
         };
         let resp = dispatch_ffa(&req);
         assert_eq!(resp.x0, ffa::FFA_MEM_RETRIEVE_RESP);
-        pass += 1;
+        // total_length > 0: descriptor built (80 + 1*16 = 96 bytes for 1 range)
+        assert!(resp.x1 > 0, "RETRIEVE_RESP should have total_length > 0");
+        pass += 2;
     }
 
     // Test: MEM_RETRIEVE again (already retrieved) -> DENIED
@@ -968,10 +970,89 @@ pub fn run_tests() {
         pass += 1;
     }
 
+    // FR1: MEM_FRAG_RX with no active state → INVALID_PARAMETERS
+    {
+        let mut req = zero_req(ffa::FFA_MEM_FRAG_RX);
+        req.x1 = 0xDEAD;
+        req.x2 = 0;
+        req.x3 = 0;
+        let resp = dispatch_ffa(&req);
+        assert_eq!(resp.x0, ffa::FFA_ERROR);
+        pass += 1;
+    }
+
+    // FR2: MEM_FRAG_RX wrong handle → INVALID_PARAMETERS
+    {
+        let mut req = zero_req(ffa::FFA_MEM_FRAG_RX);
+        req.x1 = 0xBAD;
+        req.x2 = 0xBAD;
+        req.x3 = 0;
+        let resp = dispatch_ffa(&req);
+        assert_eq!(resp.x0, ffa::FFA_ERROR);
+        pass += 1;
+    }
+
+    // FR3: FEATURES(MEM_FRAG_RX) → supported
+    {
+        let mut req = zero_req(ffa::FFA_FEATURES);
+        req.x1 = ffa::FFA_MEM_FRAG_RX;
+        let resp = dispatch_ffa(&req);
+        assert_eq!(resp.x0, ffa::FFA_SUCCESS_32);
+        pass += 1;
+    }
+
     // Cleanup: unmap RXTX
     let resp = dispatch_ffa(&zero_req(ffa::FFA_RXTX_UNMAP));
     assert_eq!(resp.x0, ffa::FFA_SUCCESS_32);
     pass += 1;
+
+    // CL1: CONSOLE_LOG_32 with "Ok" → SUCCESS
+    {
+        let mut req = zero_req(ffa::FFA_CONSOLE_LOG_32);
+        req.x1 = 2; // 2 chars
+        req.x2 = 0x6B4F; // 'O' (0x4F) + 'k' (0x6B) in LE
+        let resp = dispatch_ffa(&req);
+        assert_eq!(resp.x0, ffa::FFA_SUCCESS_32);
+        pass += 1;
+    }
+
+    // CL2: CONSOLE_LOG with count=0 → INVALID_PARAMETERS
+    {
+        let mut req = zero_req(ffa::FFA_CONSOLE_LOG_32);
+        req.x1 = 0;
+        let resp = dispatch_ffa(&req);
+        assert_eq!(resp.x0, ffa::FFA_ERROR);
+        pass += 1;
+    }
+
+    // CL3: FEATURES(CONSOLE_LOG_32) → supported
+    {
+        let mut req = zero_req(ffa::FFA_FEATURES);
+        req.x1 = ffa::FFA_CONSOLE_LOG_32;
+        let resp = dispatch_ffa(&req);
+        assert_eq!(resp.x0, ffa::FFA_SUCCESS_32);
+        pass += 1;
+    }
+
+    // SRI1: FEATURES(NPI, feature_id=1) → SUCCESS with INTID in x2
+    {
+        let mut req = zero_req(ffa::FFA_FEATURES);
+        req.x1 = ffa::FFA_FEATURE_NPI;
+        let resp = dispatch_ffa(&req);
+        assert_eq!(resp.x0, ffa::FFA_SUCCESS_32);
+        assert_eq!(resp.x2, ffa::NPI_INTID as u64);
+        pass += 2;
+    }
+
+    // SRI2: FEATURES(SRI, feature_id=2) → SUCCESS with INTID in x2
+    {
+        let mut req = zero_req(ffa::FFA_FEATURES);
+        req.x1 = ffa::FFA_FEATURE_SRI;
+        let resp = dispatch_ffa(&req);
+        assert_eq!(resp.x0, ffa::FFA_SUCCESS_32);
+        assert_eq!(resp.x2, ffa::SRI_INTID as u64);
+        pass += 2;
+    }
 
     hypervisor::log_info!("    {} assertions passed\n", pass);
 }

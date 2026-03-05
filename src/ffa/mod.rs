@@ -45,6 +45,19 @@ pub const FFA_SPM_ID_GET: u64 = 0x84000085;
 pub const FFA_MSG_SEND2: u64 = 0x84000086;
 pub const FFA_MSG_WAIT: u64 = 0x8400006B;
 pub const FFA_RUN: u64 = 0x8400006D;
+pub const FFA_CONSOLE_LOG_32: u64 = 0x8400008A;
+pub const FFA_CONSOLE_LOG_64: u64 = 0xC400008A;
+
+// ── FF-A Feature IDs (queried via FFA_FEATURES, not function IDs) ──
+/// Schedule Receiver Interrupt — donated SGI INTID returned in x2
+pub const FFA_FEATURE_SRI: u64 = 0x2;
+/// Notification Pending Interrupt — donated SGI INTID returned in x2
+pub const FFA_FEATURE_NPI: u64 = 0x1;
+
+/// Donated SGI INTID for Schedule Receiver Interrupt
+pub const SRI_INTID: u32 = 9;
+/// Donated SGI INTID for Notification Pending Interrupt
+pub const NPI_INTID: u32 = 8;
 
 // ── FF-A Function IDs (SMC64) ─────────────────────────────────────
 #[allow(dead_code)]
