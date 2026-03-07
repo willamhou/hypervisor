@@ -409,7 +409,7 @@ Hafnium-compatible HCR_EL2.VI mechanism for injecting virtual interrupts to SPs 
 5. **HF_INTERRUPT_GET**: SP calls HVC with x0=0xFF04 → SPMC returns pending INTID in x0, clears VI
 6. **Cross-SP preemption**: `dispatch_interrupt_to_sp()` — preempt SP1 → enter SP2 IRQ handler → SP2 returns → resume SP1
 
-**SP2 (sp_irq)** at `tfa/sp_irq/`: S-EL1 partition with VBAR_EL1 IRQ handler, slow-path busy-loop until vIRQ, responds with captured INTID in x5. Loaded at 0x0e400000 by BL2.
+**SP2 (sp_irq)** at `tfa/sp_irq/`: S-EL1 partition with VBAR_EL1 IRQ handler, handles both DIRECT_REQ_32 and DIRECT_REQ_64 (matching RESP variant via x15 flag), slow-path busy-loop until vIRQ, responds with captured INTID in x5. Loaded at 0x0e400000 by BL2.
 
 ### SP Package Format (SPKG)
 BL2 loads raw SP packages to `load-address` from `tb_fw_config.dts`. SPKG header (24 bytes LE): magic("SPKG"), version, pm_offset(0x1000), pm_size, img_offset(0x4000), img_size. SPMC must parse header and enter SP at `load_addr + img_offset`. The sp_manifest.dts UUID gets byte-swapped by `sp_mk_generator.py` (LE conversion); `tb_fw_config.dts` UUID must match the swapped form. Use `fiptool info fip.bin` to verify.
@@ -441,6 +441,7 @@ NS-EL1: Linux/Android guest
 **M4.6 Sprint S1** (done): SPMC-side memory sharing — MEM_SHARE/LEND/RETRIEVE/RELINQUISH/RECLAIM handlers in spmc_handler.rs with SpmcShareRecord storage, dynamic Secure Stage-2 mapping via Stage2Walker, register-based + descriptor-based protocols, 12 new unit test assertions (54 total), BL33 Test 13 (MEM_SHARE + RECLAIM)
 **M4.6 Sprint S2** (done): True E2E memory sharing — SP-initiated MEM_RETRIEVE/RELINQUISH via `handle_sp_exit()` loop in dispatch_to_sp()/resume_preempted_sp(), SP Hello memory test command (x3=0xABCD0001), BL33 Test 14 full lifecycle (NWd SHARE → SP RETRIEVE → SP write → SP RELINQUISH → NWd verify → NWd RECLAIM), 14/14 BL33 tests (incl. alternating SP1/SP2 DIRECT_REQ)
 **M4.6 Backlog** (done): QW-1~4 (PSCI v1.0, is_valid_receiver), ME-4 SpinLock for SPMC globals, ME-2 MEM_SHARE forwarding to real SPMC, ME-1 BITMAP_CREATE FFA_HOST_ID fix, ME-5 MEM_FRAG_TX/RX fragmentation, ME-3 SPMC-side MSG_SEND2/MSG_WAIT indirect messaging (per-SP SpMailbox), CONSOLE_LOG (proxy + SPMC + handle_sp_exit), ME-7 SRI/NPI feature IDs (eliminates pKVM `-95 EOPNOTSUPP`). ~370 assertions / 33 test suites
+**Phase 4.6** (done): pKVM E2E validation — FfaMemRegion struct fix (wrong offsets: extra reserved_0, missing ep_mem_size), RETRIEVE_RESP x2=fragment_length (was handle), NWd vs SP RETRIEVE_REQ distinction (pKVM reclaim sends RETRIEVE_REQ to get descriptor — must NOT map pages or mark retrieved), SP2 DIRECT_REQ_64 support (Linux FF-A driver sends 64-bit variant when AARCH64_EXEC set in properties). ffa_test.ko: 14/14 PASS (SP1 DIRECT_REQ 4/4, MEM_SHARE E2E 6/6, SP2 DIRECT_REQ 4/4). `make run-pkvm-ffa-test`
 **Phase 5**: RME & CCA (Realm Manager)
 
 See `DEVELOPMENT_PLAN.md` for full details.

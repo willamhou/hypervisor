@@ -30,6 +30,8 @@
 .equ FFA_MSG_WAIT,       0x8400006B
 .equ FFA_DIRECT_REQ_32,  0x8400006F
 .equ FFA_DIRECT_RESP_32, 0x84000070
+.equ FFA_DIRECT_REQ_64,  0xC400006F
+.equ FFA_DIRECT_RESP_64, 0xC4000070
 
 .equ SP2_STACK_TOP,      0x0e500000
 
@@ -73,10 +75,20 @@ _start:
      * Fall through to message loop. */
 
 .Lmsg_loop:
-    /* Check if this is a DIRECT_REQ_32 */
+    /* Check if this is a DIRECT_REQ_32 or DIRECT_REQ_64 */
     ldr     x8, =FFA_DIRECT_REQ_32
     cmp     x0, x8
+    b.eq    .Ldirect_req
+    ldr     x8, =FFA_DIRECT_REQ_64
+    cmp     x0, x8
     b.ne    .Lunknown_msg
+
+.Ldirect_req:
+    /* Save incoming function ID to determine response type.
+     * x15 = 0 for 32-bit REQ, 1 for 64-bit REQ */
+    ldr     x8, =FFA_DIRECT_REQ_64
+    cmp     x0, x8
+    cset    x15, eq
 
     /* Swap source/dest in x1 for the response */
     lsr     x8, x1, #16
@@ -133,7 +145,7 @@ _start:
     isb
 
     /* Build response: x4 += 0x2000, x5 = captured INTID */
-    ldr     x0, =FFA_DIRECT_RESP_32
+    bl      .Lload_resp_id
     mov     x2, xzr
     add     x4, x4, #0x2000
     adr     x8, captured_intid
@@ -143,11 +155,20 @@ _start:
 
 .Lfast_path:
     /* Build DIRECT_RESP: x4 += 0x1000, echo rest */
-    ldr     x0, =FFA_DIRECT_RESP_32
+    bl      .Lload_resp_id
     mov     x2, xzr
     add     x4, x4, #0x1000
     smc     #0
     b       .Lmsg_loop
+
+/* Helper: load matching DIRECT_RESP function ID based on x15 (0=32bit, 1=64bit) */
+.Lload_resp_id:
+    cbz     x15, 1f
+    ldr     x0, =FFA_DIRECT_RESP_64
+    ret
+1:
+    ldr     x0, =FFA_DIRECT_RESP_32
+    ret
 
 .Lunknown_msg:
     /* Unknown message — respond with FFA_MSG_WAIT */
