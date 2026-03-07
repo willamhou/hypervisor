@@ -18,6 +18,8 @@
 #include <linux/kernel.h>
 #include <linux/arm_ffa.h>
 #include <linux/arm-smccc.h>
+#include <linux/scatterlist.h>
+#include <linux/mm.h>
 
 static int tests_run;
 static int tests_pass;
@@ -31,6 +33,226 @@ static void ffa_test_check(const char *name, bool cond)
 	} else {
 		pr_err("ffa_test: [FAIL] %s\n", name);
 	}
+}
+
+/*
+ * MEM_SHARE E2E test using raw SMC — bypasses the FF-A driver API because
+ * pKVM doesn't have the host's RXTX buffers (the driver registered them
+ * before pKVM took EL2, so pKVM never intercepted the RXTX_MAP).
+ *
+ * We allocate our own TX/RX pages, register them via RXTX_MAP (pKVM
+ * intercepts and records), construct the FF-A v1.1 MEM_SHARE descriptor
+ * manually, and use raw SMC for SHARE/RECLAIM.  DIRECT_REQ still uses
+ * the driver API since it doesn't need the TX buffer.
+ *
+ * FF-A v1.1 descriptor layout (1 page, 1 receiver):
+ *   [0..47]  ffa_mem_region header (48 bytes)
+ *   [48..63] EMAD — endpoint memory access descriptor (16 bytes for v1.1)
+ *   [64..79] composite memory region (16 bytes)
+ *   [80..95] constituent address range (16 bytes)
+ *   Total = 96 bytes
+ */
+static void *test_tx_buf;
+static void *test_rx_buf;
+
+static int ffa_test_rxtx_setup(void)
+{
+	struct arm_smccc_res res;
+
+	test_tx_buf = alloc_pages_exact(PAGE_SIZE, GFP_KERNEL);
+	test_rx_buf = alloc_pages_exact(PAGE_SIZE, GFP_KERNEL);
+	if (!test_tx_buf || !test_rx_buf)
+		return -ENOMEM;
+
+	memset(test_tx_buf, 0, PAGE_SIZE);
+	memset(test_rx_buf, 0, PAGE_SIZE);
+
+	pr_info("ffa_test: About to call RXTX_MAP tx=0x%llx rx=0x%llx...\n",
+		(u64)virt_to_phys(test_tx_buf),
+		(u64)virt_to_phys(test_rx_buf));
+
+	arm_smccc_1_1_smc(0xC4000066, /* FFA_FN64_RXTX_MAP — must use 64-bit
+			   * variant because pKVM only dispatches FFA_FN64_RXTX_MAP;
+			   * the 32-bit 0x84000066 passes through to EL3 unhandled,
+			   * leaving pKVM's ffa_buf->tx NULL */
+		virt_to_phys(test_tx_buf),
+		virt_to_phys(test_rx_buf),
+		1, /* 1 page */
+		0, 0, 0, 0, &res);
+
+	pr_info("ffa_test: RXTX_MAP returned: a0=0x%llx a2=0x%llx tx_pa=0x%llx rx_pa=0x%llx\n",
+		(u64)res.a0, (u64)res.a2,
+		(u64)virt_to_phys(test_tx_buf),
+		(u64)virt_to_phys(test_rx_buf));
+
+	if (res.a0 != 0x84000061) { /* FFA_SUCCESS_32 */
+		pr_err("ffa_test: RXTX_MAP failed\n");
+		return -EIO;
+	}
+	return 0;
+}
+
+static void ffa_test_rxtx_teardown(void)
+{
+	struct arm_smccc_res res;
+
+	arm_smccc_1_1_smc(0x84000067, /* FFA_RXTX_UNMAP */
+		0, 0, 0, 0, 0, 0, 0, &res);
+
+	if (test_tx_buf)
+		free_pages_exact(test_tx_buf, PAGE_SIZE);
+	if (test_rx_buf)
+		free_pages_exact(test_rx_buf, PAGE_SIZE);
+	test_tx_buf = NULL;
+	test_rx_buf = NULL;
+}
+
+/*
+ * Build FF-A v1.1 MEM_SHARE descriptor in the TX buffer.
+ * Returns total descriptor length (96 for 1 page, 1 receiver).
+ */
+static u32 build_share_desc(void *tx, u16 sender_id, u16 receiver_id,
+			    phys_addr_t page_pa)
+{
+	u8 *buf = tx;
+
+	memset(buf, 0, 96);
+
+	/* ffa_mem_region header (48 bytes) */
+	*(u16 *)(buf + 0) = sender_id;		/* sender_id */
+	*(u8 *)(buf + 2) = 0;			/* attributes */
+	*(u8 *)(buf + 3) = 0;			/* reserved */
+	*(u32 *)(buf + 4) = 0;			/* flags: SHARE */
+	*(u64 *)(buf + 8) = 0;			/* handle: 0 (assigned by SPMC) */
+	*(u64 *)(buf + 16) = 0;		/* tag */
+	/* ep_mem_size at offset 24 (u32) — size of each EMAD entry */
+	*(u32 *)(buf + 24) = 16;		/* v1.1 EMAD size = 16 */
+	/* ep_count at offset 28 (u32) */
+	*(u32 *)(buf + 28) = 1;		/* 1 receiver */
+	/* ep_mem_offset at offset 32 (u16) — offset to first EMAD */
+	*(u16 *)(buf + 32) = 48;		/* EMADs start right after header */
+	/* reserved/pad at 34..47 */
+
+	/* EMAD (16 bytes) at offset 48 */
+	*(u16 *)(buf + 48) = receiver_id;	/* receiver */
+	*(u8 *)(buf + 50) = FFA_MEM_RW;		/* attrs: RW */
+	*(u8 *)(buf + 51) = 0;			/* flag */
+	*(u32 *)(buf + 52) = 64;		/* composite_off: composite at 64 */
+
+	/* Composite memory region (16 bytes) at offset 64 */
+	*(u32 *)(buf + 64) = 1;		/* total_pg_cnt */
+	*(u32 *)(buf + 68) = 1;		/* addr_range_cnt */
+	*(u64 *)(buf + 72) = 0;		/* reserved */
+
+	/* Constituent (16 bytes) at offset 80 */
+	*(u64 *)(buf + 80) = page_pa;		/* address */
+	*(u32 *)(buf + 88) = 1;		/* pg_cnt: 1 page */
+	*(u32 *)(buf + 92) = 0;		/* reserved */
+
+	return 96;
+}
+
+static void ffa_test_mem_share(struct ffa_device *ffa_dev)
+{
+	const struct ffa_msg_ops *msg_ops;
+	struct ffa_send_direct_data data;
+	struct arm_smccc_res res;
+	void *page_buf;
+	phys_addr_t page_pa;
+	u64 handle;
+	u32 desc_len;
+	int ret;
+
+	pr_info("ffa_test: ---- MEM_SHARE E2E Test (SP 0x%04x) ----\n",
+		ffa_dev->vm_id);
+
+	msg_ops = ffa_dev->ops->msg_ops;
+
+	/* 1. Allocate a page and zero it */
+	page_buf = alloc_pages_exact(PAGE_SIZE, GFP_KERNEL);
+	if (!page_buf) {
+		pr_err("ffa_test: Failed to allocate page\n");
+		return;
+	}
+	memset(page_buf, 0, PAGE_SIZE);
+	page_pa = virt_to_phys(page_buf);
+	pr_info("ffa_test: Allocated page: pa=0x%llx\n", (u64)page_pa);
+
+	/* 2. Build MEM_SHARE descriptor in our TX buffer */
+	if (!test_tx_buf) {
+		pr_err("ffa_test: No TX buffer — RXTX_MAP failed?\n");
+		goto cleanup_page;
+	}
+
+	desc_len = build_share_desc(test_tx_buf, 0 /* HOST_FFA_ID */,
+				    ffa_dev->vm_id, page_pa);
+	pr_info("ffa_test: Built descriptor: %u bytes, receiver=0x%04x\n",
+		desc_len, ffa_dev->vm_id);
+
+	/* 3. Raw MEM_SHARE_32 SMC */
+	arm_smccc_1_1_smc(0x84000073, /* FFA_MEM_SHARE_32 */
+		desc_len, /* total_length */
+		desc_len, /* fragment_length (no fragmentation) */
+		0, 0, 0, 0, 0, &res);
+
+	pr_info("ffa_test: MEM_SHARE: a0=0x%llx a1=0x%llx a2=0x%llx a3=0x%llx\n",
+		(u64)res.a0, (u64)res.a1, (u64)res.a2, (u64)res.a3);
+
+	if (res.a0 == 0x84000060) { /* FFA_ERROR */
+		pr_err("ffa_test: MEM_SHARE failed: error=%lld\n", (s64)res.a2);
+		ffa_test_check("MEM_SHARE returns success", false);
+		goto cleanup_page;
+	}
+	ffa_test_check("MEM_SHARE returns success",
+		       res.a0 == 0x84000061 /* FFA_SUCCESS_32 */);
+
+	/* Handle in x2 (lo) and x3 (hi) */
+	handle = (res.a2 & 0xFFFFFFFF) | ((res.a3 & 0xFFFFFFFF) << 32);
+	ffa_test_check("MEM_SHARE handle != 0", handle != 0);
+	pr_info("ffa_test: MEM_SHARE handle=0x%llx\n", handle);
+
+	/* 4. DIRECT_REQ via driver API to trigger SP memory test */
+	memset(&data, 0, sizeof(data));
+	data.data0 = 0xABCD0001; /* MEM_TEST_MAGIC */
+	data.data1 = handle & 0xFFFFFFFF;
+	data.data2 = handle >> 32;
+	data.data3 = page_pa;
+
+	pr_info("ffa_test: Sending MEM_TEST DIRECT_REQ...\n");
+	ret = msg_ops->sync_send_receive(ffa_dev, &data);
+	ffa_test_check("MEM_TEST DIRECT_REQ returns success", ret == 0);
+	if (ret == 0) {
+		u32 expected_x4 = (u32)(handle & 0xFFFFFFFF) + 0x4000;
+
+		ffa_test_check("SP x4 = handle_lo + 0x4000 (mem test proof)",
+			       (u32)data.data1 == expected_x4);
+		pr_info("ffa_test: SP resp: x4=0x%lx (expect 0x%x)\n",
+			data.data1, expected_x4);
+	}
+
+	/* 5. Verify page content — SP wrote 0xCAFEFACE */
+	{
+		u32 val = *(volatile u32 *)page_buf;
+
+		ffa_test_check("Shared page == 0xCAFEFACE (SP wrote it)",
+			       val == 0xCAFEFACE);
+		pr_info("ffa_test: Page[0] = 0x%08x (expect 0xCAFEFACE)\n",
+			val);
+	}
+
+	/* 6. Raw MEM_RECLAIM */
+	arm_smccc_1_1_smc(0x84000077, /* FFA_MEM_RECLAIM */
+		handle & 0xFFFFFFFF,
+		handle >> 32,
+		0, /* flags */
+		0, 0, 0, 0, &res);
+	ffa_test_check("MEM_RECLAIM returns success",
+		       res.a0 == 0x84000061);
+	pr_info("ffa_test: MEM_RECLAIM: a0=0x%llx\n", (u64)res.a0);
+
+cleanup_page:
+	free_pages_exact(page_buf, PAGE_SIZE);
+	pr_info("ffa_test: ---- MEM_SHARE E2E Test done ----\n");
 }
 
 static int ffa_test_probe(struct ffa_device *ffa_dev)
@@ -99,6 +321,10 @@ static int ffa_test_probe(struct ffa_device *ffa_dev)
 		ffa_test_check(desc, data.data2 == 0xCCCC);
 	}
 
+	/* Run MEM_SHARE E2E test only for SP1 (0x8001) */
+	if (sp_id == 0x8001)
+		ffa_test_mem_share(ffa_dev);
+
 	pr_info("ffa_test: ---- SP 0x%04x done (%d/%d) ----\n",
 		sp_id, tests_pass, tests_run);
 
@@ -134,7 +360,7 @@ static struct ffa_driver ffa_test_driver = {
 	.id_table = ffa_test_ids,
 };
 
-static void raw_hvc_diag(void)
+static void __maybe_unused raw_hvc_diag(void)
 {
 	struct arm_smccc_res res;
 
@@ -180,49 +406,31 @@ static int __init ffa_test_init(void)
 	pr_info("ffa_test:   FF-A DIRECT_REQ End-to-End Test\n");
 	pr_info("ffa_test: ============================================\n");
 
-	/* Run raw diagnostics first */
-	pr_info("ffa_test: --- Raw diagnostics ---\n");
-	raw_hvc_diag();
-
-	/* Bypass test: send DIRECT_REQ with x3=0xDEAD0001.
-	 * SPMC returns fake DIRECT_RESP without entering the SP.
-	 * If this works but real DIRECT_REQ hangs, the issue is in SP entry/exit.
-	 * If this also hangs, the issue is in the DIRECT_RESP world switch itself.
+	/*
+	 * pKVM workaround: FF-A driver init runs BEFORE pKVM takes EL2,
+	 * so the driver's FFA_VERSION bypasses pKVM and goes directly to
+	 * EL3. pKVM's has_version_negotiated flag remains false, causing
+	 * all subsequent FF-A calls from our module to fail with -2.
+	 * Fix: call FFA_VERSION via SMC to set the flag in pKVM.
 	 */
 	{
-		struct arm_smccc_res smc_res;
-		u32 ep = (0u << 16) | 0x8001;
+		struct arm_smccc_res ver_res;
 
-		/* Must negotiate FFA version via SMC first — pKVM's host FFA handler
-		 * blocks all non-VERSION SMC calls until has_version_negotiated is set.
-		 * This is per-CPU, so must run on the same CPU as DIRECT_REQ.
-		 */
-		arm_smccc_1_1_smc(0x84000063, 0x00010001, 0, 0, 0, 0, 0, 0, &smc_res);
-		pr_info("ffa_test: [SMC] FFA_VERSION: x0=0x%lx\n", smc_res.a0);
-
-		pr_warn("ffa_test: [BYPASS] Sending DIRECT_REQ with x3=0xDEAD0001 (no SP entry)...\n");
-		arm_smccc_1_1_smc(0x8400006f, ep, 0, 0xDEAD0001, 0, 0, 0, 0, &smc_res);
-		pr_info("ffa_test: [BYPASS] Result: x0=0x%lx x1=0x%lx x2=0x%lx x3=0x%lx\n",
-			smc_res.a0, smc_res.a1, smc_res.a2, smc_res.a3);
-
-		if (smc_res.a0 == 0x84000070) {
-			pr_info("ffa_test: [BYPASS] SUCCESS — world switch works without SP entry\n");
-
-			/* Skip MINI test (DEAD0002) — it corrupts NWd EL1 state because
-			 * it enters SP without saving/restoring EL1 registers.
-			 * Go straight to REAL DIRECT_REQ which uses full dispatch_to_sp().
-			 */
-			pr_warn("ffa_test: [REAL] Now testing FULL DIRECT_REQ to SP 0x8001...\n");
-			arm_smccc_1_1_smc(0x8400006f, ep, 0, 0xaaaa, 0xbbbb,
-					  0xcccc, 0xdddd, 0xeeee, &smc_res);
-			pr_info("ffa_test: [REAL] Result: x0=0x%lx x1=0x%lx x3=0x%lx\n",
-				smc_res.a0, smc_res.a1, smc_res.a3);
-		} else {
-			pr_err("ffa_test: [BYPASS] FAILED — x0=0x%lx (even bypass hangs/fails)\n",
-			       smc_res.a0);
-		}
+		arm_smccc_1_1_smc(0x84000063, 0x00010001, 0, 0, 0, 0, 0, 0,
+				  &ver_res);
+		pr_info("ffa_test: pKVM VERSION prime: 0x%llx\n",
+			(u64)ver_res.a0);
 	}
-	pr_info("ffa_test: --- End raw diagnostics ---\n");
+
+	/*
+	 * pKVM workaround #2: register our OWN TX/RX buffers with pKVM.
+	 * The host kernel's FF-A driver called RXTX_MAP before pKVM init,
+	 * so pKVM never intercepted it and doesn't know about those buffers.
+	 * We register our own so raw MEM_SHARE can work.
+	 */
+	ret = ffa_test_rxtx_setup();
+	if (ret)
+		pr_warn("ffa_test: RXTX setup failed: %d (MEM_SHARE will skip)\n", ret);
 
 	tests_run = 0;
 	tests_pass = 0;
@@ -244,6 +452,7 @@ static int __init ffa_test_init(void)
 
 static void __exit ffa_test_exit(void)
 {
+	ffa_test_rxtx_teardown();
 	ffa_unregister((&ffa_test_driver));
 	pr_info("ffa_test: Driver unregistered\n");
 }
@@ -252,5 +461,5 @@ module_init(ffa_test_init);
 module_exit(ffa_test_exit);
 
 MODULE_LICENSE("GPL");
-MODULE_DESCRIPTION("FF-A DIRECT_REQ End-to-End Test (FF-A driver API)");
+MODULE_DESCRIPTION("FF-A End-to-End Test: DIRECT_REQ + MEM_SHARE (FF-A driver API)");
 MODULE_AUTHOR("Hypervisor Project");

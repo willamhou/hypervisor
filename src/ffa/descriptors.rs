@@ -17,22 +17,20 @@ pub struct FfaMemRegion {
     pub sender_id: u16,
     /// Memory region attributes (Table 5.22)
     pub attributes: u16,
-    /// Reserved (MBZ)
-    pub reserved_0: u32,
     /// Flags (Table 5.20)
     pub flags: u32,
     /// Handle (0 on initial share, assigned by SPMC on return)
     pub handle: u64,
     /// Tag (application-defined)
     pub tag: u64,
-    /// Reserved (MBZ)
-    pub reserved_1: u32,
+    /// Size of each EMAD entry (v1.1+, MBZ pre-v1.1)
+    pub ep_mem_size: u32,
     /// Number of memory access permission descriptors
     pub receiver_count: u32,
-    /// Offset from start of this struct to first FfaMemAccessDesc
-    pub receivers_offset: u32,
+    /// Offset from start of this struct to first FfaMemAccessDesc (v1.1+)
+    pub ep_mem_offset: u32,
     /// Reserved (MBZ)
-    pub reserved_2: u32,
+    pub reserved: [u32; 3],
 }
 
 /// FF-A v1.1 Memory Access Permission Descriptor (DEN0077A Table 5.21).
@@ -129,9 +127,9 @@ pub unsafe fn parse_mem_region(
     let sender_id = core::ptr::read_unaligned(tx_ptr as *const u16);
     let attributes = core::ptr::read_unaligned(tx_ptr.add(2) as *const u16);
     let _ = attributes; // reserved for future use
-    let flags = core::ptr::read_unaligned(tx_ptr.add(8) as *const u32);
-    let receiver_count = core::ptr::read_unaligned(tx_ptr.add(32) as *const u32);
-    let receivers_offset = core::ptr::read_unaligned(tx_ptr.add(36) as *const u32);
+    let flags = core::ptr::read_unaligned(tx_ptr.add(4) as *const u32);
+    let receiver_count = core::ptr::read_unaligned(tx_ptr.add(28) as *const u32);
+    let receivers_offset = core::ptr::read_unaligned(tx_ptr.add(32) as *const u32);
 
     // Only support single-receiver share for now
     if receiver_count == 0 || receiver_count > 1 {
@@ -229,13 +227,15 @@ pub unsafe fn build_retrieve_resp_descriptor(
 
     // FfaMemRegion header (48 bytes)
     core::ptr::write_unaligned(buf as *mut u16, sender_id);
-    // handle at offset 12
-    core::ptr::write_unaligned(buf.add(12) as *mut u64, handle);
-    // receiver_count at offset 32
-    core::ptr::write_unaligned(buf.add(32) as *mut u32, 1);
-    // receivers_offset at offset 36
+    // handle at offset 8
+    core::ptr::write_unaligned(buf.add(8) as *mut u64, handle);
+    // ep_mem_size at offset 24
+    core::ptr::write_unaligned(buf.add(24) as *mut u32, 16);
+    // receiver_count at offset 28
+    core::ptr::write_unaligned(buf.add(28) as *mut u32, 1);
+    // ep_mem_offset at offset 32
     let recv_off: u32 = 48;
-    core::ptr::write_unaligned(buf.add(36) as *mut u32, recv_off);
+    core::ptr::write_unaligned(buf.add(32) as *mut u32, recv_off);
 
     // FfaMemAccessDesc (16 bytes) at offset 48
     let access_ptr = buf.add(recv_off as usize);

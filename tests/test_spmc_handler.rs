@@ -147,10 +147,9 @@ pub fn run_tests() {
     assert_eq!(resp.x0, ffa::FFA_SUCCESS_32);
     pass += 1;
 
-    // Test 29: FFA_RXTX_MAP again -> DENIED (already mapped)
+    // Test 29: FFA_RXTX_MAP again -> SUCCESS (re-mapping allowed for pKVM)
     let resp = dispatch_ffa(&req);
-    assert_eq!(resp.x0, ffa::FFA_ERROR);
-    assert_eq!(resp.x2, ffa::FFA_DENIED as u64);
+    assert_eq!(resp.x0, ffa::FFA_SUCCESS_32);
     pass += 1;
 
     // Test 30: FFA_RX_RELEASE -> SUCCESS (mapped)

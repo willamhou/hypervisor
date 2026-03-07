@@ -1483,15 +1483,22 @@ fn handle_rxtx_map(req: &SmcResult8) -> SmcResult8 {
     let rx_pa = req.x2;
     let page_count = req.x3 as u32;
 
+    crate::log_debug!(
+        "[SPMC] RXTX_MAP: tx={:#x} rx={:#x} pages={}\n",
+        tx_pa,
+        rx_pa,
+        page_count
+    );
+
     // Validate alignment
     if tx_pa & 0xFFF != 0 || rx_pa & 0xFFF != 0 || page_count == 0 {
         return make_error(ffa::FFA_INVALID_PARAMETERS as u64);
     }
 
     let mut nwd = NWD_RXTX.lock();
-    if nwd.mapped {
-        return make_error(ffa::FFA_DENIED as u64);
-    }
+    // Allow re-mapping: pKVM's ffa_map_hyp_buffers() issues a second
+    // RXTX_MAP after the host kernel's FF-A driver already registered
+    // buffers before pKVM took EL2.  Accept the update silently.
     nwd.tx_pa = tx_pa;
     nwd.rx_pa = rx_pa;
     nwd.page_count = page_count;
@@ -1584,10 +1591,10 @@ fn handle_partition_info_get() -> SmcResult8 {
                     core::ptr::write_unaligned(ptr as *mut u16, sp.sp_id());
                     // exec_ctx_count (u16 LE)
                     core::ptr::write_unaligned(ptr.add(2) as *mut u16, 1);
-                    // properties (u32 LE) — bit 0: DIRECT_REQ recv
-                    // Note: Do NOT set AARCH64_EXEC (bit 8) — kernel driver would
-                    // use 64-bit DIRECT_REQ but SPMD may not forward it correctly.
-                    core::ptr::write_unaligned(ptr.add(4) as *mut u32, 0x1);
+                    // properties (u32 LE) — bit 0: DIRECT_REQ recv, bit 8: AARCH64_EXEC
+                    // AARCH64_EXEC tells the Linux FF-A driver to use 64-bit
+                    // DIRECT_REQ/RESP variants, matching our SP implementations.
+                    core::ptr::write_unaligned(ptr.add(4) as *mut u32, 0x101);
                     // UUID (16 bytes) — read from SpContext
                     core::ptr::copy_nonoverlapping(sp.uuid().as_ptr() as *const u8, ptr.add(8), 16);
                 }
@@ -1899,7 +1906,33 @@ fn handle_spmc_mem_share(req: &SmcResult8, is_lend: bool) -> SmcResult8 {
 
 /// Handle FFA_MEM_RETRIEVE_REQ — maps pages into receiver SP's Secure Stage-2.
 fn handle_spmc_mem_retrieve(req: &SmcResult8, _current_sp: Option<(u16, u64)>) -> SmcResult8 {
-    let handle = (req.x1 & 0xFFFF_FFFF) | (req.x2 << 32);
+    // Determine handle: descriptor-based (NWd TX buffer) or register-based.
+    // SP-initiated RETRIEVE uses register-based (x1=handle_lo, x2=handle_hi).
+    // NWd RETRIEVE (pKVM reclaim path) uses descriptor-based (handle in TX buffer).
+    let handle;
+    #[cfg(feature = "sel2")]
+    {
+        if _current_sp.is_some() {
+            // SP-initiated: register-based
+            handle = (req.x1 & 0xFFFF_FFFF) | (req.x2 << 32);
+        } else {
+            // NWd-initiated: try descriptor-based (TX buffer has FfaMemRegion with handle at offset 8)
+            let total_length = req.x1 as u32;
+            let (mapped, tx_pa) = {
+                let nwd = NWD_RXTX.lock();
+                (nwd.mapped, nwd.tx_pa)
+            };
+            if mapped && total_length > 0 {
+                handle = unsafe { core::ptr::read_volatile((tx_pa + 8) as *const u64) };
+            } else {
+                handle = (req.x1 & 0xFFFF_FFFF) | (req.x2 << 32);
+            }
+        }
+    }
+    #[cfg(not(feature = "sel2"))]
+    {
+        handle = (req.x1 & 0xFFFF_FFFF) | (req.x2 << 32);
+    }
 
     let (_sender, receiver_id, ranges, range_count, _, retrieved) = match lookup_spmc_share(handle)
     {
@@ -1907,51 +1940,61 @@ fn handle_spmc_mem_retrieve(req: &SmcResult8, _current_sp: Option<(u16, u64)>) -
         None => return make_error(ffa::FFA_INVALID_PARAMETERS as u64),
     };
 
-    if retrieved {
-        return make_error(ffa::FFA_DENIED as u64);
-    }
-
-    // In sel2 mode, map pages into the receiver SP's Secure Stage-2
+    // NWd RETRIEVE_REQ (pKVM reclaim path, sel2 only): _current_sp is None.
+    // Only return descriptor — don't map pages or mark retrieved.
+    // SP-initiated RETRIEVE or non-sel2: map pages and mark retrieved.
     #[cfg(feature = "sel2")]
-    {
-        let mut mapped = false;
-        if let Some((current_sp_id, current_vsttbr)) = _current_sp {
-            if current_sp_id == receiver_id {
-                let vsttbr = current_vsttbr;
-                let l0_addr = vsttbr & 0x0000_FFFF_FFFF_F000;
-                let walker = crate::ffa::stage2_walker::Stage2Walker::new(l0_addr);
-                for i in 0..range_count {
-                    let (base_ipa, page_count) = ranges[i];
-                    for p in 0..page_count as u64 {
-                        let ipa = base_ipa + p * PAGE_SIZE_4KB;
-                        walker.map_page(ipa, 0b11, 0b10); // S2AP_RW, SW=SHARED_BORROWED
-                    }
-                }
-                mapped = true;
-            }
+    let is_nwd_retrieve = _current_sp.is_none();
+    #[cfg(not(feature = "sel2"))]
+    let is_nwd_retrieve = false;
+
+    if !is_nwd_retrieve {
+        if retrieved {
+            return make_error(ffa::FFA_DENIED as u64);
         }
 
-        if !mapped {
-            let ok = crate::sp_context::with_sp_locked(receiver_id, |sp| {
-                let vsttbr = sp.vsttbr();
-                let l0_addr = vsttbr & 0x0000_FFFF_FFFF_F000;
-                let walker = crate::ffa::stage2_walker::Stage2Walker::new(l0_addr);
-                for i in 0..range_count {
-                    let (base_ipa, page_count) = ranges[i];
-                    for p in 0..page_count as u64 {
-                        let ipa = base_ipa + p * PAGE_SIZE_4KB;
-                        walker.map_page(ipa, 0b11, 0b10); // S2AP_RW, SW=SHARED_BORROWED
+        // In sel2 mode, map pages into the receiver SP's Secure Stage-2
+        #[cfg(feature = "sel2")]
+        {
+            let mut mapped = false;
+            if let Some((current_sp_id, current_vsttbr)) = _current_sp {
+                if current_sp_id == receiver_id {
+                    let vsttbr = current_vsttbr;
+                    let l0_addr = vsttbr & 0x0000_FFFF_FFFF_F000;
+                    let walker = crate::ffa::stage2_walker::Stage2Walker::new(l0_addr);
+                    for i in 0..range_count {
+                        let (base_ipa, page_count) = ranges[i];
+                        for p in 0..page_count as u64 {
+                            let ipa = base_ipa + p * PAGE_SIZE_4KB;
+                            walker.map_page(ipa, 0b11, 0b10); // S2AP_RW, SW=SHARED_BORROWED
+                        }
                     }
+                    mapped = true;
                 }
-            });
-            if ok.is_none() {
-                return make_error(ffa::FFA_BUSY as u64);
+            }
+
+            if !mapped {
+                let ok = crate::sp_context::with_sp_locked(receiver_id, |sp| {
+                    let vsttbr = sp.vsttbr();
+                    let l0_addr = vsttbr & 0x0000_FFFF_FFFF_F000;
+                    let walker = crate::ffa::stage2_walker::Stage2Walker::new(l0_addr);
+                    for i in 0..range_count {
+                        let (base_ipa, page_count) = ranges[i];
+                        for p in 0..page_count as u64 {
+                            let ipa = base_ipa + p * PAGE_SIZE_4KB;
+                            walker.map_page(ipa, 0b11, 0b10); // S2AP_RW, SW=SHARED_BORROWED
+                        }
+                    }
+                });
+                if ok.is_none() {
+                    return make_error(ffa::FFA_BUSY as u64);
+                }
             }
         }
+        let _ = (receiver_id, &ranges, range_count);
+
+        mark_spmc_retrieved(handle);
     }
-    let _ = (receiver_id, &ranges, range_count);
-
-    mark_spmc_retrieved(handle);
 
     // Build response descriptor and compute total_length
     let total_pages: u32 = ranges[..range_count].iter().map(|(_, c)| *c).sum();
@@ -1996,11 +2039,13 @@ fn handle_spmc_mem_retrieve(req: &SmcResult8, _current_sp: Option<(u16, u64)>) -
     };
     drop(frag_rx);
 
+    // FF-A spec: x1=total_length, x2=fragment_length (not handle)
+    let fragment_length = total_length.min(4096);
     SmcResult8 {
         x0: ffa::FFA_MEM_RETRIEVE_RESP,
         x1: total_length,
-        x2: handle & 0xFFFF_FFFF,
-        x3: handle >> 32,
+        x2: fragment_length,
+        x3: 0,
         x4: 0,
         x5: 0,
         x6: 0,
