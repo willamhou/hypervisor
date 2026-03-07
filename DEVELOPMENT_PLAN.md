@@ -1,15 +1,15 @@
 # ARM64 Hypervisor 开发计划
 
-**项目版本**: v0.28.0 (Phase 4.5 Partial — pKVM Boot + SPMC FF-A + nVHE FF-A Discovery)
+**项目版本**: v0.29.0 (M4.6 Sprint S1/S2 + Backlog Complete — SPMC Memory/Messaging/Console/SRI)
 **计划制定日期**: 2026-01-26
-**最后更新**: 2026-02-23
+**最后更新**: 2026-03-06
 **计划类型**: 敏捷迭代，灵活调整
 
 ---
 
 ## 📊 当前进度概览
 
-**整体完成度**: 🟢 **97%** (Milestone 0-2 + Options A-G + M3 Sprint 3.1/3.1b/3.1c/3.2 + M4 Sprint 4.1/4.2/4.3/4.4A/4.4B + Sprint 5.1/5.2 + Phase C/D + M4.5 + M4.6 S1/S2 ✅)
+**整体完成度**: 🟢 **98%** (Milestone 0-2 + Options A-G + M3 Sprint 3.1/3.1b/3.1c/3.2 + M4 Sprint 4.1/4.2/4.3/4.4A/4.4B + Sprint 5.1/5.2 + Phase C/D + M4.5 + M4.6 S1/S2/S3/Backlog ✅)
 
 ```
 M0: 项目启动          ████████████████████ 100% ✅
@@ -19,12 +19,12 @@ M3: FF-A              ██████████████████░�
 M4: S-EL2 SPMC        ████████████████████ 100% ✅ (Sprint 4.1/4.2/4.3/4.4A/4.4B ✅)
 M4→5 Bridge           ████████████████████ 100% ✅ (Sprint 5.1/5.2 ✅, Phase C/D ✅)
 M4.5: pKVM 集成       ████████████████████ 100% ✅ (pKVM boot ✅, FF-A nVHE ✅, FF-A protected ✅)
-M4.6: SPMC 功能补全   ████████████░░░░░░░░  60% 🔧 (S1 内存管理 ✅, S2 E2E共享 ✅, 通知 ✅, S3 间接消息 ⏸️)
+M4.6: SPMC 功能补全   ██████████████████░░  90% ✅ (S1 内存管理 ✅, S2 E2E共享 ✅, 通知 ✅, S3 间接消息 ✅, 碎片化 ✅, CONSOLE_LOG ✅, SRI/NPI ✅)
 M5: RME & CCA         ░░░░░░░░░░░░░░░░░░░░   0% ⏸️
 Android Boot          ██████████░░░░░░░░░░  50% ✅ (Phase 2 完成)
 ```
 
-**测试覆盖**: ~347 assertions / 33 test suites (100% pass)
+**测试覆盖**: ~370 assertions / 33 test suites (100% pass)
 **代码量**: ~19000 行
 **Linux启动**: 4 vCPU, BusyBox shell, virtio-blk, virtio-net, multi-VM, FF-A proxy
 **Android启动**: 4 vCPU, PL031 RTC, Binder IPC, minimal init, 1GB RAM
@@ -909,7 +909,7 @@ NS-EL1: Linux/Android guest
 
 ---
 
-### Milestone 4.6: SPMC 功能补全（Week 43-48）⏸️ **未开始**
+### Milestone 4.6: SPMC 功能补全（Week 43-48）✅ **核心完成**
 **目标**: 将 NS-proxy 侧的 FF-A 内存管理、通知、间接消息功能移植到 SPMC 侧，使真实 SP（如 OP-TEE TA）能端到端工作
 
 **背景**: 当前 SPMC (`spmc_handler.rs`) 已完成发现 (VERSION/ID_GET/FEATURES)、消息传递 (DIRECT_REQ/RESP)、中断 (preemption/vIRQ)、NWd RXTX 管理。但内存共享、通知、间接消息仅在 NS-proxy 侧 (`src/ffa/proxy.rs`) 实现，SPMC 侧缺失。
@@ -919,7 +919,7 @@ NS-EL1: Linux/Android guest
 - **Secure Stage-2 动态修改**: 当前 `secure_stage2.rs` 仅在 boot 时构建静态映射，需支持运行时 map/unmap
 - **NS PA 访问**: NWd share 的页面是 NS DRAM PA，SPMC 通过 S-EL2 Stage-1（NS=1 bit）访问
 
-#### Sprint S1: SPMC 侧内存管理（最关键）⏸️ **未开始**
+#### Sprint S1: SPMC 侧内存管理（最关键）✅ **已完成 (M4.6 S1)**
 
 **优先级**: P0 — pKVM FF-A proxy 会代理 host kernel 的 MEM_SHARE 到 SPMC，无此功能则真实 TEE 用例不可能
 
@@ -988,7 +988,7 @@ FFA_MEM_RECLAIM → handle_mem_reclaim()
 
 ---
 
-#### Sprint S2: SPMC 侧通知 ⏸️ **未开始**
+#### Sprint S2: SPMC 侧通知 ✅ **已完成 (Backlog batch)**
 
 **优先级**: P1 — pKVM FF-A proxy 会转发 NOTIFICATION_SET/GET
 
@@ -1023,49 +1023,35 @@ FFA_MEM_RECLAIM → handle_mem_reclaim()
 
 ---
 
-#### Sprint S3: SPMC 侧间接消息 ⏸️ **未开始**
+#### Sprint S3: SPMC 侧间接消息 ✅ **已完成 (ME-3)**
 
 **优先级**: P2 — 大多数 SP 使用 DIRECT_REQ/RESP，间接消息是补充
 
-**实现任务**:
-1. **Per-SP RXTX buffer 管理**:
-   - SP 通过 HVC 调用 FFA_RXTX_MAP 注册自己的 TX/RX buffer
-   - SPMC 记录每个 SP 的 RXTX PA（存储在 `SpContext` 或独立结构）
+**实现** (commit `d34c18e`):
+1. **Per-SP SpMailbox**: `SP_MAILBOXES` global with per-SP TX/RX buffer PAs + msg_pending flag
+2. **MSG_SEND2 路由**: NWd→SP (read NWd TX → write SP RX → set msg_pending), SP→NWd, SP→SP
+3. **MSG_WAIT 增强**: SP calls MSG_WAIT → check msg_pending → if pending, immediate return with message
+4. **handle_sp_exit()**: MSG_SEND2/MSG_WAIT whitelisted for SP-initiated calls
 
-2. **MSG_SEND2 路由**:
-   - NWd→SP: SPMC 读 NWd TX buffer → 写目标 SP 的 RX buffer → 设 msg_pending
-   - SP→NWd: SPMC 读 SP TX buffer → 写 NWd RX buffer
-   - SP→SP: SPMC 读源 SP TX → 写目标 SP RX
+**测试**: ✅ 117 SPMC assertions (incl. MSG_SEND2 + MSG_WAIT tests)
 
-3. **MSG_WAIT 增强**:
-   - 当前 MSG_WAIT 仅用于 boot/preemption 握手
-   - 需增加: SP 调用 MSG_WAIT 时检查 msg_pending → 如果有 pending 消息，立即返回
-
-**测试**:
-- [ ] SP RXTX_MAP 注册
-- [ ] NWd→SP MSG_SEND2 端到端
-- [ ] MSG_WAIT 返回 pending 消息
-- [ ] SP→SP MSG_SEND2（跨 SP 路由）
-
-**验收**:
-- [ ] Per-SP RXTX 管理
-- [ ] MSG_SEND2 路由 (NWd↔SP, SP↔SP)
-- [ ] 单元测试通过
-
-**预估**: 1-2 周
+**完成日期**: 2026-03-05
 
 ---
 
 #### Milestone 4.6 总验收:
-- [ ] SPMC 侧 FF-A 内存管理完整（MEM_SHARE/LEND/RETRIEVE/RELINQUISH/RECLAIM）
-- [ ] SPMC 侧通知完整（NOTIFICATION_BIND/SET/GET/INFO_GET）
-- [ ] SPMC 侧间接消息完整（MSG_SEND2 + per-SP RXTX）
-- [ ] 并发安全（SpinLock 保护共享状态，多 CPU event loop 安全）
-- [ ] Secure Stage-2 动态 map/unmap 工作
-- [ ] 所有新增单元测试通过
+- [x] SPMC 侧 FF-A 内存管理完整（MEM_SHARE/LEND/RETRIEVE/RELINQUISH/RECLAIM） ✅ Sprint S1/S2
+- [x] SPMC 侧通知完整（NOTIFICATION_BIND/SET/GET/INFO_GET） ✅ Backlog batch
+- [x] SPMC 侧间接消息完整（MSG_SEND2 + per-SP RXTX） ✅ ME-3
+- [x] 并发安全（SpinLock 保护共享状态，多 CPU event loop 安全） ✅ ME-4
+- [x] Secure Stage-2 动态 map/unmap 工作 ✅ Sprint S1
+- [x] MEM_FRAG_TX/RX 碎片化支持 ✅ ME-5
+- [x] FFA_CONSOLE_LOG SP 调试日志 ✅
+- [x] SRI/NPI feature IDs (消除 pKVM `-95`) ✅ ME-7
+- [x] 所有新增单元测试通过 ✅ (~370 assertions / 33 suites)
 - [ ] pKVM + 真实 SP 端到端内存共享验证（stretch goal）
 
-**状态**: ⏸️ 未开始
+**状态**: ✅ 核心完成 (stretch goal 待验证)
 
 ---
 
@@ -1410,7 +1396,7 @@ GitHub Actions配置：
 | Android | Android Boot (4 phases) | 4-8周 | — | ✅ Phase 2 完成 (PL031 RTC + Init) |
 | M4 | S-EL2 SPMC (QEMU secure=on + TF-A) | 6-8周 | 36周 | 🔧 Sprint 4.1/4.2/4.3 ✅ (75%) |
 | M4.5 | pKVM 集成 (NS-EL2=pKVM, S-EL2=us) | 4-6周 | 42周 | ✅ 已完成 (boot ✅, FF-A protected ✅) |
-| M4.6 | SPMC 功能补全 (内存管理+通知+间接消息) | 4-7周 | 49周 | ⏸️ 未开始 |
+| M4.6 | SPMC 功能补全 (内存管理+通知+间接消息+碎片化+CONSOLE_LOG+SRI/NPI) | 4-7周 | 49周 | ✅ 核心完成 |
 | M5 | RME & CCA | 16-20周 | 65-69周 | ⏸️ 未开始 |
 
 **总计**: 约14-16个月（灵活调整）
@@ -1430,7 +1416,7 @@ GitHub Actions配置：
 - [x] **Android Phase 2**: PL031 RTC + Android init + 1GB RAM + binderfs ✅ **已完成 2026-02-19**
 - [x] **M4 S-EL2**: 我们的 hypervisor 作为 SPMC 在 S-EL2 运行 (TF-A boot chain) ✅ **Sprint 4.1/4.2/4.3/4.4 + 5.1 完成** (SPMC + SP + DIRECT_REQ E2E, 7/7 BL33 tests)
 - [x] **M4.5 pKVM**: pKVM boot ✅ (`Protected hVHE mode initialized`), SPMC FF-A responses ✅, FF-A nVHE ✅, FF-A protected ✅ (`Driver version 1.2`, `Firmware version 1.1`) ✅ **已完成 2026-02-24**
-- [ ] **M4.6 SPMC 补全**: SPMC 侧内存管理 + 通知 + 间接消息 ⏸️ **未开始**
+- [x] **M4.6 SPMC 补全**: SPMC 侧内存管理 + 通知 + 间接消息 + 碎片化 + CONSOLE_LOG + SRI/NPI ✅ **核心完成 2026-03-06**
 - [ ] **M5 CCA**: Realm VM 启动 Guest OS ⏸️ **未开始**
 
 ### 8.2 工程成功标准
@@ -1451,7 +1437,7 @@ GitHub Actions配置：
 
 ## 9. 下一步行动
 
-### 🎯 当前位置：Phase 4.5 🔧 → M4.6 (SPMC 补全) → Phase 5 (RME & CCA)
+### 🎯 当前位置：M4.6 ✅ → Phase 5 (RME & CCA)
 **可行性研究**: `docs/research/2026-02-20-phase4-feasibility.md` — FEASIBLE with moderate effort
 **Sprint 4.1/4.2/4.3/4.4A/4.4B 完成**: TF-A boot chain + hypervisor as BL33 (NS-EL2) + hypervisor as SPMC (S-EL2) + SPMC event loop + FF-A dispatch + SP boot at S-EL1
 **Sprint 5.1 完成**: DIRECT_REQ end-to-end (NS proxy → SPMD → SPMC → SP1), `tfa_boot` feature flag, 8-register SMC forwarding, SP1 x4+=0x1000 proof, 7/7 BL33 tests PASS
@@ -1459,7 +1445,7 @@ GitHub Actions配置：
 **Phase C 完成**: NS interrupt preemption — FFA_INTERRUPT + FFA_RUN resume, CNTHP timer, SP_IRQ_PREEMPTED flag, Preempted state, 9/9 BL33 tests PASS
 **Phase D 完成**: Multi-SP + secure vIRQ injection — SP2 (sp_irq), per-SP INTID ownership, HCR_EL2.VI + HF_INTERRUPT_GET paravirt (Hafnium-compatible), CNTHP poll timer, cross-SP preemption, 11/11 BL33 tests PASS, 42 SPMC handler + 28 SP context assertions
 **Phase 4.5 完成**: pKVM boot ✅ (`Protected hVHE mode initialized successfully`), SPMC FF-A responses ✅, FF-A nVHE mode ✅ (driver v1.1), FF-A protected mode ✅ (driver v1.2, firmware v1.1, AOSP android16-6.12 已修复之前的 kernel bug), secondary CPU warm-boot ✅ (FFA_SECONDARY_EP_REGISTER + per-CPU stacks + MMU install)
-**M4.6 SPMC 补全**: ⏸️ 未开始 — 将 NS-proxy 侧 FF-A 内存管理/通知/间接消息移植到 SPMC 侧 (Sprint S1: 内存管理 P0, Sprint S2: 通知 P1, Sprint S3: 间接消息 P2)
+**M4.6 SPMC 补全**: ✅ 核心完成 — Sprint S1 内存管理 ✅, Sprint S2 E2E共享 ✅, 通知 ✅, Sprint S3 间接消息 (ME-3) ✅, MEM_FRAG_TX/RX (ME-5) ✅, CONSOLE_LOG ✅, SRI/NPI (ME-7) ✅. ~370 assertions / 33 suites. Remaining: pKVM + real SP E2E memory sharing (stretch goal)
 
 **Phase 8+ 候选方向** (选择一个):
 
