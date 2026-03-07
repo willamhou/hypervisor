@@ -19,9 +19,11 @@ Thumbs.db
 *.elf
 *.bin
 
-# Guest kernel images (built via Docker)
+# Guest kernel images and test artifacts (built via Docker)
 guest/android/Image
 guest/linux/Image-pkvm
+guest/linux/ffa_test.ko
+guest/linux/initramfs-ffa-test.cpio.gz
 
 # Worktrees
 .worktrees/
