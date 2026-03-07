@@ -29,6 +29,10 @@ guest/linux/Image-pkvm
 # Local QEMU build
 tools/
 
+# Log files
+*.log
+ffa-output.txt
+
 # TF-A build artifacts (source + intermediates)
 tfa/tfa-src/
 tfa/flash.bin
