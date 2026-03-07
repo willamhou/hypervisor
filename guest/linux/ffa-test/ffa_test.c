@@ -321,9 +321,8 @@ static int ffa_test_probe(struct ffa_device *ffa_dev)
 		ffa_test_check(desc, data.data2 == 0xCCCC);
 	}
 
-	/* Run MEM_SHARE E2E test only for SP1 (0x8001) */
-	if (sp_id == 0x8001)
-		ffa_test_mem_share(ffa_dev);
+	/* Run MEM_SHARE E2E test for both SP1 and SP2 */
+	ffa_test_mem_share(ffa_dev);
 
 	pr_info("ffa_test: ---- SP 0x%04x done (%d/%d) ----\n",
 		sp_id, tests_pass, tests_run);

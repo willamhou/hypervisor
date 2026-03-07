@@ -9,6 +9,8 @@
  *      - Fast path: x4 += 0x1000, respond
  *      - IRQ slow path (x3 == 0xDEADBEEF): busy-loop until virtual IRQ,
  *        respond with x4 += 0x2000, x5 = INTID (29)
+ *      - Memory test (x3 == 0xABCD0001): RETRIEVE → write 0xCAFEFACE →
+ *        RELINQUISH → respond with x4 = handle_lo + 0x4000
  *
  * Virtual interrupt injection flow:
  *   SPMC sets HCR_EL2.VI → VBAR_EL1+0x280 → HVC(0xFF04) → clears VI
@@ -32,6 +34,11 @@
 .equ FFA_DIRECT_RESP_32, 0x84000070
 .equ FFA_DIRECT_REQ_64,  0xC400006F
 .equ FFA_DIRECT_RESP_64, 0xC4000070
+.equ FFA_MEM_RETRIEVE_REQ_32, 0x84000074
+.equ FFA_MEM_RETRIEVE_RESP,   0x84000075
+.equ FFA_MEM_RELINQUISH,      0x84000076
+.equ MEM_TEST_MAGIC,          0xABCD0001
+.equ SHARED_PAGE_MAGIC,       0xCAFEFACE
 
 .equ SP2_STACK_TOP,      0x0e500000
 
@@ -94,6 +101,11 @@ _start:
     lsr     x8, x1, #16
     and     x9, x1, #0xFFFF
     orr     x1, x8, x9, lsl #16
+
+    /* Check for memory test trigger: x3 == MEM_TEST_MAGIC */
+    ldr     x8, =MEM_TEST_MAGIC
+    cmp     x3, x8
+    b.eq    .Lmem_test
 
     /* Check for IRQ slow-path trigger: x3 == 0xDEADBEEF */
     ldr     x8, =0xDEADBEEF
@@ -169,6 +181,78 @@ _start:
 1:
     ldr     x0, =FFA_DIRECT_RESP_32
     ret
+
+.Lmem_test:
+    /* Memory test: DIRECT_REQ with x3=MEM_TEST_MAGIC, x4=handle_lo, x5=handle_hi, x6=shared_page_ipa.
+     *
+     * 1. Call FFA_MEM_RETRIEVE_REQ_32 with handle from x4/x5
+     * 2. Write SHARED_PAGE_MAGIC to shared page at IPA from x6
+     * 3. Call FFA_MEM_RELINQUISH with handle
+     * 4. Respond with DIRECT_RESP: x4 = handle_lo + 0x4000
+     */
+    mov     x19, x1                 /* response x1 (already swapped above) */
+    mov     x20, x4                 /* handle_lo */
+    mov     x21, x5                 /* handle_hi */
+    mov     x22, x6                 /* shared page IPA */
+    mov     x23, x15                /* req type (0=32bit, 1=64bit) */
+
+    /* Step 1: FFA_MEM_RETRIEVE_REQ_32(handle_lo, handle_hi) */
+    ldr     x0, =FFA_MEM_RETRIEVE_REQ_32
+    mov     x1, x20
+    mov     x2, x21
+    mov     x3, xzr
+    mov     x4, xzr
+    mov     x5, xzr
+    mov     x6, xzr
+    mov     x7, xzr
+    smc     #0
+
+    /* Check x0 == FFA_MEM_RETRIEVE_RESP */
+    ldr     x8, =FFA_MEM_RETRIEVE_RESP
+    cmp     x0, x8
+    b.ne    .Lmem_test_error
+
+    /* Step 2: Write magic to shared page */
+    ldr     w8, =SHARED_PAGE_MAGIC
+    str     w8, [x22]
+
+    /* Step 3: FFA_MEM_RELINQUISH(handle_lo, handle_hi) */
+    ldr     x0, =FFA_MEM_RELINQUISH
+    mov     x1, x20
+    mov     x2, x21
+    mov     x3, xzr
+    mov     x4, xzr
+    mov     x5, xzr
+    mov     x6, xzr
+    mov     x7, xzr
+    smc     #0
+
+    /* Step 4: Respond with DIRECT_RESP, x4 = handle_lo + 0x4000 */
+    mov     x15, x23
+    bl      .Lload_resp_id
+    mov     x1, x19
+    mov     x2, xzr
+    ldr     x3, =MEM_TEST_MAGIC
+    add     x4, x20, #0x4000
+    ldr     x5, =SHARED_PAGE_MAGIC
+    mov     x6, xzr
+    mov     x7, xzr
+    smc     #0
+    b       .Lmsg_loop
+
+.Lmem_test_error:
+    /* RETRIEVE failed — respond with error in x4 */
+    mov     x15, x23
+    bl      .Lload_resp_id
+    mov     x1, x19
+    mov     x2, xzr
+    mov     x3, xzr
+    mov     x4, xzr
+    mov     x5, xzr
+    mov     x6, xzr
+    mov     x7, xzr
+    smc     #0
+    b       .Lmsg_loop
 
 .Lunknown_msg:
     /* Unknown message — respond with FFA_MSG_WAIT */
