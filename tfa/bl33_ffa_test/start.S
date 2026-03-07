@@ -746,8 +746,96 @@ _start:
 
     adr     x0, str_pass
     bl      uart_print
-    b       .Ldone
+    b       .Ltest_15
 .Lfail_14:
+    adr     x0, str_fail
+    bl      uart_print
+
+    /* ============ Test 15: MEM_SHARE lifecycle E2E (SP2) ============ */
+.Ltest_15:
+    adr     x0, str_t15
+    bl      uart_print
+
+    /* Clear _tx_page before test (SP2 will write SHARED_PAGE_MAGIC) */
+    adr     x8, _tx_page
+    str     wzr, [x8]
+
+    /* Step 1: MEM_SHARE _tx_page with SP2 — get handle */
+    ldr     x0, =FFA_MEM_SHARE_32
+    movz    x1, #0x0000
+    movk    x1, #0x0001, lsl #16   /* sender = 0x0001 */
+    mov     x2, xzr
+    adr     x3, _tx_page           /* IPA of shared page */
+    mov     x4, #1                 /* 1 page */
+    movz    x5, #0x8002            /* receiver = SP2 */
+    mov     x6, xzr
+    mov     x7, xzr
+    smc     #0
+
+    /* Verify: x0 == FFA_SUCCESS_32 (MEM_SHARE) */
+    ldr     x9, =FFA_SUCCESS_32
+    cmp     x0, x9
+    b.ne    .Lfail_15
+
+    /* Save handle in callee-saved registers */
+    mov     x24, x2                /* handle_lo */
+    mov     x25, x3                /* handle_hi */
+
+    /* Step 2: DIRECT_REQ to SP2 with memory test command.
+     * x3 = MEM_TEST_MAGIC, x4 = handle_lo, x5 = handle_hi, x6 = shared_page_ipa */
+    ldr     x0, =FFA_DIRECT_REQ_32
+    movz    x1, #0x8002
+    movk    x1, #0x0001, lsl #16  /* source = 0x0001, dest = SP2 */
+    mov     x2, xzr
+    ldr     x3, =MEM_TEST_MAGIC
+    mov     x4, x24               /* handle_lo */
+    mov     x5, x25               /* handle_hi */
+    adr     x6, _tx_page          /* shared page IPA */
+    mov     x7, xzr
+    smc     #0
+
+    /* Verify: x0 == FFA_DIRECT_RESP_32 */
+    ldr     x9, =FFA_DIRECT_RESP_32
+    cmp     x0, x9
+    b.ne    .Lfail_15
+
+    /* Verify: x4 == handle_lo + 0x4000 (memory test signature from SP) */
+    add     x9, x24, #0x4000
+    cmp     x4, x9
+    b.ne    .Lfail_15
+
+    /* Verify: x5 == SHARED_PAGE_MAGIC (SP echoes what it wrote) */
+    ldr     x9, =SHARED_PAGE_MAGIC
+    cmp     x5, x9
+    b.ne    .Lfail_15
+
+    /* Step 3: Verify shared page — SP2 wrote SHARED_PAGE_MAGIC to _tx_page */
+    adr     x8, _tx_page
+    ldr     w9, [x8]
+    ldr     w10, =SHARED_PAGE_MAGIC
+    cmp     w9, w10
+    b.ne    .Lfail_15
+
+    /* Step 4: MEM_RECLAIM to clean up */
+    ldr     x0, =FFA_MEM_RECLAIM
+    mov     x1, x24               /* handle_lo */
+    mov     x2, x25               /* handle_hi */
+    mov     x3, xzr
+    mov     x4, xzr
+    mov     x5, xzr
+    mov     x6, xzr
+    mov     x7, xzr
+    smc     #0
+
+    /* Verify: x0 == FFA_SUCCESS_32 (MEM_RECLAIM) */
+    ldr     x9, =FFA_SUCCESS_32
+    cmp     x0, x9
+    b.ne    .Lfail_15
+
+    adr     x0, str_pass
+    bl      uart_print
+    b       .Ldone
+.Lfail_15:
     adr     x0, str_fail
     bl      uart_print
 
@@ -807,6 +895,8 @@ str_t13:
     .asciz "  Test 13: MEM_SHARE lifecycle E2E . "
 str_t14:
     .asciz "  Test 14: Alternating SP1/SP2 ..... "
+str_t15:
+    .asciz "  Test 15: MEM_SHARE E2E (SP2) ..... "
 str_pass:
     .asciz "PASS\r\n"
 str_fail:
