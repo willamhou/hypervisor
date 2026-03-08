@@ -39,22 +39,29 @@ echo ">>> Kernel commit: $(git rev-parse HEAD)"
 echo ">>> Generating gki_defconfig..."
 make ARCH=arm64 LLVM=1 CROSS_COMPILE=aarch64-linux-gnu- gki_defconfig
 
-# Override configs: force built-in (gki has some as =m)
-echo ">>> Enabling required configs..."
-scripts/config --enable CONFIG_VIRTIO_BLK
-scripts/config --enable CONFIG_ARM_FFA_TRANSPORT
-scripts/config --enable CONFIG_VIRTIO_MMIO
-scripts/config --enable CONFIG_VIRTIO_NET
-scripts/config --enable CONFIG_EXT4_FS
-scripts/config --enable CONFIG_BLK_DEV_INITRD
-scripts/config --enable CONFIG_RD_GZIP
-
-# Resolve dependency issues
+# Resolve dependency issues first
 make ARCH=arm64 LLVM=1 CROSS_COMPILE=aarch64-linux-gnu- olddefconfig
 
-# Verify critical configs
+# Override configs AFTER olddefconfig (GKI resets =y to =m for modules)
+echo ">>> Forcing built-in configs (overriding GKI module policy)..."
+scripts/config --set-val CONFIG_VIRTIO_BLK y
+scripts/config --set-val CONFIG_ARM_FFA_TRANSPORT y
+scripts/config --set-val CONFIG_VIRTIO_MMIO y
+scripts/config --set-val CONFIG_VIRTIO_NET y
+scripts/config --set-val CONFIG_EXT4_FS y
+scripts/config --set-val CONFIG_BLK_DEV_INITRD y
+scripts/config --set-val CONFIG_RD_GZIP y
+
+# Second olddefconfig to resolve any new dependencies from forced =y
+make ARCH=arm64 LLVM=1 CROSS_COMPILE=aarch64-linux-gnu- olddefconfig
+
+# Verify critical configs are built-in (=y, not =m)
 echo ">>> Verifying configs..."
 grep -E "CONFIG_KVM=|CONFIG_VIRTIO_BLK=|CONFIG_ARM_FFA_TRANSPORT=" .config
+if grep -q "CONFIG_VIRTIO_BLK=m" .config; then
+    echo "ERROR: CONFIG_VIRTIO_BLK still =m after override!"
+    exit 1
+fi
 
 # Build the kernel Image
 echo ">>> Building kernel with LLVM=1 (this may take a while)..."
