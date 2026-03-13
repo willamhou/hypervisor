@@ -45,11 +45,15 @@ make build-spmc       # Build hypervisor as S-EL2 SPMC binary
 make build-tfa-spmc   # Build TF-A with real SPMC + SPs
 make build-pkvm-kernel # Build AOSP kernel for pKVM (Docker)
 make build-tfa-pkvm   # Build TF-A flash-pkvm.bin
+make build-ffa-test   # Build FF-A test kernel module
+make build-crosvm     # Build crosvm for aarch64 (Docker)
+make run-pkvm-ffa-test # Boot pKVM with FF-A test (20/20 PASS)
+make run-crosvm       # Boot pKVM (nVHE) + crosvm pVM (AVF validation)
 ```
 
 ### Testing
 
-33 test suites (~347 assertions) run automatically during `make run`. The output shows pass/fail status for each test suite. Test registry uses macro-based registration in `tests/mod.rs`.
+33 test suites (~370 assertions) run automatically during `make run`. The output shows pass/fail status for each test suite. Test registry uses macro-based registration in `tests/mod.rs`.
 
 To add a new test:
 
@@ -113,7 +117,7 @@ hypervisor/
 │   │   └── smc_forward.rs   # SMC forwarding to EL3
 │   └── mm/                  # Heap allocator
 │       └── region_registry.rs # Stage-2 region registration
-└── tests/                   # 33 test suites (~347 assertions)
+└── tests/                   # 33 test suites (~370 assertions)
 ```
 
 The `Device` enum uses enum-dispatch (no dynamic dispatch):

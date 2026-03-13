@@ -25,6 +25,14 @@ guest/linux/Image-pkvm
 guest/linux/ffa_test.ko
 guest/linux/initramfs-ffa-test.cpio.gz
 
+# crosvm AVF validation artifacts (built binaries + images)
+guest/linux/crosvm
+guest/linux/crosvm-libs/
+guest/linux/crosvm-nested-disk.img
+guest/linux/initramfs-crosvm.cpio.gz
+guest/linux/kvm_test
+guest/linux/guest-pkvm-nvhe.dtb
+
 # Worktrees
 .worktrees/
 

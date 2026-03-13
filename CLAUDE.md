@@ -31,6 +31,10 @@ make build-tfa-spmc # Build TF-A with real SPMC as BL32 + SP Hello + SP IRQ
 make build-pkvm-kernel # Build AOSP android16-6.12 kernel for pKVM (Docker, ~15-30min first time)
 make build-tfa-pkvm # Build TF-A flash-pkvm.bin (ARM_LINUX_KERNEL_AS_BL33, Linux as BL33)
 make run-pkvm     # Boot pKVM (NS-EL2) + our SPMC (S-EL2) — AOSP kernel as BL33 (requires build-pkvm-kernel + build-tfa-pkvm)
+make run-pkvm-ffa-test # Boot pKVM with FF-A test module (20/20 PASS)
+make build-crosvm # Build crosvm VMM for aarch64 (Docker, ~5-10min first time)
+make build-crosvm-initramfs # Build pKVM initramfs with crosvm + pVM kernel
+make run-crosvm   # Boot pKVM (nVHE) + crosvm pVM (AVF validation, requires ARM64 host for KVM accel)
 make debug        # Build + run with GDB server on port 1234
 make clean        # Clean build artifacts
 make check        # Check code without building
@@ -442,6 +446,7 @@ NS-EL1: Linux/Android guest
 **M4.6 Sprint S2** (done): True E2E memory sharing — SP-initiated MEM_RETRIEVE/RELINQUISH via `handle_sp_exit()` loop in dispatch_to_sp()/resume_preempted_sp(), SP Hello memory test command (x3=0xABCD0001), BL33 Test 14 full lifecycle (NWd SHARE → SP RETRIEVE → SP write → SP RELINQUISH → NWd verify → NWd RECLAIM), 14/14 BL33 tests (incl. alternating SP1/SP2 DIRECT_REQ)
 **M4.6 Backlog** (done): QW-1~4 (PSCI v1.0, is_valid_receiver), ME-4 SpinLock for SPMC globals, ME-2 MEM_SHARE forwarding to real SPMC, ME-1 BITMAP_CREATE FFA_HOST_ID fix, ME-5 MEM_FRAG_TX/RX fragmentation, ME-3 SPMC-side MSG_SEND2/MSG_WAIT indirect messaging (per-SP SpMailbox), CONSOLE_LOG (proxy + SPMC + handle_sp_exit), ME-7 SRI/NPI feature IDs (eliminates pKVM `-95 EOPNOTSUPP`). ~370 assertions / 33 test suites
 **Phase 4.6** (done): pKVM E2E validation — FfaMemRegion struct fix (wrong offsets: extra reserved_0, missing ep_mem_size), RETRIEVE_RESP x2=fragment_length (was handle), NWd vs SP RETRIEVE_REQ distinction (pKVM reclaim sends RETRIEVE_REQ to get descriptor — must NOT map pages or mark retrieved), SP2 DIRECT_REQ_64 support (Linux FF-A driver sends 64-bit variant when AARCH64_EXEC set in properties), SP2 MEM_SHARE E2E (BL33 Test 15). ffa_test.ko: 20/20 PASS (SP1 DIRECT_REQ 4 + MEM_SHARE 6, SP2 DIRECT_REQ 4 + MEM_SHARE 6). BL33: 15/15 PASS. `make run-pkvm-ffa-test`
+**Phase 4.5 AVF** (partial): AVF validation — crosvm VMM in pKVM host (EL0) creates pVM via /dev/kvm. This is standard single-level virtualization (NOT nested). KVM API validated: /dev/kvm, KVM_CREATE_VM, KVM_CREATE_VCPU all PASS (5/5). crosvm launches but pVM kernel has no output — root cause: x86_64 host runs QEMU TCG (no KVM acceleration for ARM64), "KVM in TCG" too slow to boot full Linux guest (~12x slower than native, no cross-arch KVM acceleration exists). QEMU MTTCG enabled by default but adding vCPUs actually degrades ARM64 TCG performance. No "software KVM" or cross-arch acceleration patches exist. Fixed initrd-end DTB (16MB→24MB for 19MB initramfs). Requires ARM64 hardware for real AVF validation: AWS Graviton, Oracle Ampere A1, Hetzner CAX, or Apple Silicon with KVM. `make run-crosvm` (nVHE mode).
 **Phase 5**: RME & CCA (Realm Manager)
 
 See `DEVELOPMENT_PLAN.md` for full details.

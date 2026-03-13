@@ -1,4 +1,4 @@
-.PHONY: all build run debug clean check clippy fmt test test-suite-check build-qemu build-bl32-bl33 build-tfa build-tfa-bl33 build-spmc build-sp-hello build-sp-irq build-tfa-spmc build-tfa-full build-tfa-pkvm build-pkvm-kernel run-sel2 run-tfa-linux run-tfa-linux-ffa run-spmc build-pkvm-dtb run-pkvm
+.PHONY: all build run debug clean check clippy fmt test test-suite-check build-qemu build-bl32-bl33 build-tfa build-tfa-bl33 build-spmc build-sp-hello build-sp-irq build-tfa-spmc build-tfa-full build-tfa-pkvm build-pkvm-kernel run-sel2 run-tfa-linux run-tfa-linux-ffa run-spmc build-pkvm-dtb run-pkvm build-crosvm build-crosvm-initramfs build-pkvm-nvhe-dtb run-crosvm
 
 # Auto-load Cargo environment
 SHELL := /bin/bash
@@ -466,6 +466,52 @@ run-spmc:
 	    -cpu max -smp 4 -m 2G -nographic \
 	    -bios $(TFA_FLASH_SPMC) -nic none
 
+# === Phase 4.5: AVF validation (crosvm + pKVM) ===
+# crosvm runs in pKVM host userspace (EL0), uses /dev/kvm ioctl to ask pKVM (EL2)
+# to create VMs. This is standard single-level virtualization (NOT nested).
+# Validates the full AVF stack: TF-A → SPMC (S-EL2) → pKVM (NS-EL2) → crosvm → pVM.
+
+# crosvm binary + shared libs
+CROSVM_BIN := guest/linux/crosvm
+CROSVM_INITRAMFS := guest/linux/initramfs-crosvm.cpio.gz
+# Build crosvm for aarch64 (Docker, ~5-10 min first time)
+build-crosvm:
+	@echo "Building crosvm for aarch64 (Docker)..."
+	docker run --rm \
+	    -v $(PWD)/guest/linux:/output \
+	    -v $(PWD)/guest/linux/build-crosvm.sh:/scripts/build-crosvm.sh:ro \
+	    -v crosvm-build-cache:/build \
+	    debian:bookworm bash /scripts/build-crosvm.sh
+
+# Build crosvm initramfs (BusyBox + crosvm + pVM kernel/rootfs)
+build-crosvm-initramfs:
+	@test -f $(CROSVM_BIN) || (echo "ERROR: $(CROSVM_BIN) not found. Run 'make build-crosvm' first." && exit 1)
+	@test -f $(PKVM_IMAGE) || (echo "ERROR: $(PKVM_IMAGE) not found. Run 'make build-pkvm-kernel' first." && exit 1)
+	@echo "Building crosvm initramfs + nested guest disk..."
+	bash guest/linux/build-crosvm-initramfs.sh
+
+# pKVM nVHE DTB (overrides protected mode with nvhe)
+PKVM_NVHE_DTB := guest/linux/guest-pkvm-nvhe.dtb
+
+# Build pKVM nVHE DTB
+build-pkvm-nvhe-dtb:
+	dtc -I dts -O dtb guest/linux/guest-pkvm-nvhe.dts -o $(PKVM_NVHE_DTB)
+
+# Boot pKVM (nVHE) with crosvm → launch pVM via /dev/kvm (AVF validation)
+run-crosvm: build-pkvm-nvhe-dtb
+	@test -f $(TFA_FLASH_PKVM) || (echo "ERROR: $(TFA_FLASH_PKVM) not found. Run 'make build-tfa-pkvm' first." && exit 1)
+	@test -f $(PKVM_IMAGE) || (echo "ERROR: $(PKVM_IMAGE) not found. Run 'make build-pkvm-kernel' first." && exit 1)
+	@test -f $(CROSVM_INITRAMFS) || (echo "ERROR: $(CROSVM_INITRAMFS) not found. Run 'make build-crosvm-initramfs' first." && exit 1)
+	@echo "Starting pKVM (nVHE) + crosvm AVF validation..."
+	@echo "Press Ctrl+A then X to exit QEMU"
+	$(QEMU_SEL2) -machine virt,secure=on,virtualization=on,gic-version=3 \
+	    -cpu max,pauth-impdef=on,sve=off -smp 4 -m 2G -nographic \
+	    -bios $(TFA_FLASH_PKVM) \
+	    -device loader,file=$(PKVM_IMAGE),addr=0x40200000,force-raw=on \
+	    -device loader,file=$(PKVM_NVHE_DTB),addr=0x47000000,force-raw=on \
+	    -device loader,file=$(CROSVM_INITRAMFS),addr=0x54000000,force-raw=on \
+	    -nic none
+
 # Help
 help:
 	@echo "Available targets:"
@@ -490,9 +536,17 @@ help:
 	@echo "  build-pkvm-kernel - Build AOSP android16-6.12 kernel for pKVM"
 	@echo "  build-tfa-pkvm - Build TF-A with SPMC + Linux as BL33 (Phase 4.5)"
 	@echo "  run-pkvm      - Boot TF-A -> SPMC -> pKVM kernel -> Linux (Phase 4.5)"
+	@echo "  build-ffa-test - Build FF-A test kernel module (ffa_test.ko)"
+	@echo "  build-pkvm-ffa-initramfs - Build pKVM initramfs with FF-A test module"
+	@echo "  run-pkvm-ffa-test - Boot pKVM with FF-A test (20/20 PASS)"
+	@echo "  build-pkvm-dtb - Build pKVM device tree (protected mode)"
+	@echo "  build-pkvm-nvhe-dtb - Build pKVM nVHE device tree"
 	@echo "  build-tfa     - Build TF-A + flash.bin with SPD=spmd"
 	@echo "  build-tfa-bl33 - Build TF-A flash.bin with preloaded BL33"
 	@echo "  build-bl32-bl33 - Build trivial BL32/BL33 hello binaries"
+	@echo "  build-crosvm  - Build crosvm for aarch64 (Docker, ~5-10 min)"
+	@echo "  build-crosvm-initramfs - Build crosvm initramfs (pVM kernel/rootfs)"
+	@echo "  run-crosvm    - Boot pKVM (nVHE) + crosvm pVM (AVF validation)"
 	@echo "  debug     - Build and run in QEMU with GDB server"
 	@echo "  clean     - Clean build artifacts"
 	@echo "  check     - Check code without building"

@@ -29,8 +29,8 @@ A bare-metal Type-1 hypervisor for ARM64 (AArch64) written in Rust. Runs at EL2 
 
 ## Current Status
 
-**Progress**: Milestones 0-4 complete, including FF-A v1.1, TF-A boot chain, S-EL2 SPMC, and pKVM integration
-**Tests**: 33 test suites (~347 assertions), all passing
+**Progress**: Milestones 0-4.6 complete, including FF-A v1.1, TF-A boot chain, S-EL2 SPMC, pKVM integration, and E2E validation (20/20 ffa_test.ko, 15/15 BL33)
+**Tests**: 33 test suites (~370 assertions), all passing
 **Code**: ~23,000 lines (src + tests + asm)
 
 ### Milestone Overview
@@ -50,15 +50,17 @@ M4: Secure EL2 / SPMC     ██████████████████
     4.3 S-EL2 SPMC (BL32)  ████████████████████ 100%
     4.4 SP Boot + Dispatch ████████████████████ 100%
     4.5 pKVM Integration   ████████████████████ 100%
+    4.6 pKVM E2E Valid.    ████████████████████ 100%
 M5: RME & CCA             ░░░░░░░░░░░░░░░░░░░░   0%
 ```
 
 ### Latest Updates
 
-- **pKVM + SPMC**: pKVM at NS-EL2 + our SPMC at S-EL2 -- boots to BusyBox shell with 4 CPUs
-- **E2E Memory Sharing**: NWd SHARE -> SP RETRIEVE -> SP write -> SP RELINQUISH -> NWd verify -> NWd RECLAIM
+- **pKVM E2E Validation**: 20/20 ffa_test.ko PASS (SP1+SP2 DIRECT_REQ + MEM_SHARE), 15/15 BL33 tests
+- **E2E Memory Sharing**: NWd SHARE -> SP RETRIEVE -> SP write 0xCAFEFACE -> SP RELINQUISH -> NWd verify -> NWd RECLAIM
+- **AVF Validation**: crosvm VMM in pKVM host, KVM API 5/5 PASS (CREATE_VM/VCPU), pVM boot blocked by x86 TCG (needs ARM64 hardware)
 - **Multi-SP Dispatch**: SP1 (Hello) + SP2 (IRQ) with per-SP INTID ownership and cross-SP preemption
-- **NS Interrupt Preemption**: IRQ during SP -> FFA_INTERRUPT -> FFA_RUN resume
+- **FF-A Supplemental**: MEM_FRAG_TX/RX, MSG_SEND2/MSG_WAIT, CONSOLE_LOG, SRI/NPI feature IDs
 - **S-EL2 Stage-1 MMU**: Identity map with NS=1 for NWd DRAM, secondary CPU warm-boot
 
 ## Quick Start
@@ -88,6 +90,8 @@ make run-tfa-linux      # Boot TF-A -> hypervisor (BL33) -> Linux
 make run-spmc           # Boot TF-A -> our SPMC (BL32) at S-EL2
 make run-tfa-linux-ffa  # Boot TF-A -> SPMC -> hypervisor (BL33) -> Linux (FF-A)
 make run-pkvm           # Boot pKVM (NS-EL2) + our SPMC (S-EL2)
+make run-pkvm-ffa-test  # Boot pKVM with FF-A test module (20/20 tests)
+make run-crosvm         # Boot pKVM (nVHE) + crosvm pVM (AVF validation)
 make debug              # Run with GDB server on port 1234
 make clippy             # Run linter
 make fmt                # Format code
@@ -207,7 +211,7 @@ Restore context → ERET back to guest
 
 ## Testing
 
-33 test suites (~347 assertions) run automatically on `make run`:
+33 test suites (~370 assertions) run automatically on `make run`:
 
 | Test | Description |
 |------|-------------|
@@ -239,8 +243,8 @@ Restore context → ERET back to guest
 | `test_vswitch` | VSwitch: flood/MAC learning/broadcast/no-self/capacity |
 | `test_virtio_net` | VirtioNet: device_id/features/queues/config/mac |
 | `test_page_ownership` | Stage-2 PTE SW bits: ownership transitions |
-| `test_ffa` | FF-A proxy: VERSION/ID_GET/FEATURES/RXTX/messaging/memory/VM-to-VM |
-| `test_spmc_handler` | SPMC dispatch: VERSION/FEATURES/DIRECT_REQ/memory/multi-SP/FFA_RUN/helpers/notifications (95 assertions) |
+| `test_ffa` | FF-A proxy: VERSION/ID_GET/FEATURES/RXTX/messaging/memory/VM-to-VM (54 assertions) |
+| `test_spmc_handler` | SPMC dispatch: VERSION/FEATURES/DIRECT_REQ/memory/multi-SP/FFA_RUN/notifications/MSG_SEND2/CONSOLE_LOG/SRI/NPI (117 assertions) |
 | `test_sp_context` | SpContext: state machine, CAS, illegal transitions, INTID ownership, IRQ overflow (58 assertions) |
 | `test_secure_stage2` | SecureStage2Config: VSTTBR/VSTCR validation (4 assertions) |
 | `test_log` | Structured logging macros |
@@ -269,6 +273,8 @@ Restore context → ERET back to guest
 - Multi-SP + secure vIRQ injection: per-SP INTID ownership, HCR_EL2.VI, cross-SP preemption
 - pKVM integration: pKVM at NS-EL2 + our SPMC at S-EL2, 4-CPU SMP, FF-A v1.1 discovery
 - E2E memory sharing: NWd SHARE -> SP RETRIEVE -> SP write -> SP RELINQUISH -> NWd verify -> NWd RECLAIM
+- pKVM E2E validation: 20/20 ffa_test.ko (DIRECT_REQ + MEM_SHARE for SP1+SP2), 15/15 BL33 tests
+- FF-A supplemental: MEM_FRAG_TX/RX, MSG_SEND2/MSG_WAIT, CONSOLE_LOG, SRI/NPI, SpinLock for SPMC globals
 
 ### In Progress
 
