@@ -310,7 +310,7 @@ Array-based routing: `devices: [Option<Device>; 8]`, scan for `dev.contains(addr
 
 ## Tests
 
-~370 assertions across 33 test suites run automatically on `make run` (no feature flags). Orchestrated sequentially in `src/main.rs`. Located in `tests/`:
+~400 assertions across 34 test suites run automatically on `make run` (no feature flags). Orchestrated sequentially in `src/main.rs`. Located in `tests/`:
 
 | Test | Coverage | Assertions |
 |------|----------|------------|
@@ -343,9 +343,10 @@ Array-based routing: `devices: [Option<Device>; 8]`, scan for `dev.contains(addr
 | `test_page_ownership` | Stage-2 PTE SW bits: read/write OWNED/SHARED_OWNED, unmapped IPA, 2MB block→4KB split | 9 |
 | `test_pl031` | PL031 RTC: RTCDR readable, RTCLR write+readback, PeriphID/PrimeCellID, unknown offset | 4 |
 | `test_ffa` | FF-A proxy: VERSION/ID_GET/FEATURES/RXTX/messaging/MEM_SHARE/RECLAIM/descriptors/SMC forward/VM-to-VM RETRIEVE/RELINQUISH/SPM_ID_GET/RUN/notifications/MSG_SEND2/MSG_WAIT/FRAG_RX/CONSOLE_LOG | 54 |
-| `test_spmc_handler` | SPMC dispatch: VERSION/ID_GET/SPM_ID_GET/FEATURES/PARTITION_INFO/DIRECT_REQ echo/framework msg/RXTX/FFA_RUN Preempted path/multi-SP/find_sp_for_intid/global SP helpers/MEM_SHARE/LEND/RETRIEVE/RELINQUISH/RECLAIM/DONATE/multi-page/SP2-receiver/zero-page/notifications/MSG_SEND2/MSG_WAIT/FRAG_RX/CONSOLE_LOG/SRI/NPI | 117 |
+| `test_spmc_handler` | SPMC dispatch: VERSION/ID_GET/SPM_ID_GET/FEATURES/PARTITION_INFO/DIRECT_REQ echo/framework msg/RXTX/FFA_RUN Preempted path/multi-SP/find_sp_for_intid/global SP helpers/MEM_SHARE/LEND/RETRIEVE/RELINQUISH/RECLAIM/DONATE/multi-page/SP2-receiver/zero-page/notifications/MSG_SEND2/MSG_WAIT/FRAG_RX/CONSOLE_LOG/SRI/NPI/cross-SP isolation/IPA validation/stress | 138 |
 | `test_sp_context` | SpContext: state machine (incl. all illegal transitions), CAS try_transition failure, VcpuContext fields, set/get args (x0-x7), owned_intids, pending_irq lifecycle + overflow | 58 |
 | `test_secure_stage2` | SecureStage2Config: VSTTBR address, VSTCR T0SZ, new_from_vsttbr | 4 |
+| `test_log` | LogBuffer: empty state, write/read, overflow, log_info!, LogWriter, per-CPU isolation, accumulation | 8 |
 | `test_guest_interrupt` | Guest interrupt injection + exception vector (blocks) | 1 |
 
 Not wired into `main.rs` (exported but not called):
@@ -446,7 +447,8 @@ NS-EL1: Linux/Android guest
 **M4.6 Sprint S2** (done): True E2E memory sharing — SP-initiated MEM_RETRIEVE/RELINQUISH via `handle_sp_exit()` loop in dispatch_to_sp()/resume_preempted_sp(), SP Hello memory test command (x3=0xABCD0001), BL33 Test 14 full lifecycle (NWd SHARE → SP RETRIEVE → SP write → SP RELINQUISH → NWd verify → NWd RECLAIM), 14/14 BL33 tests (incl. alternating SP1/SP2 DIRECT_REQ)
 **M4.6 Backlog** (done): QW-1~4 (PSCI v1.0, is_valid_receiver), ME-4 SpinLock for SPMC globals, ME-2 MEM_SHARE forwarding to real SPMC, ME-1 BITMAP_CREATE FFA_HOST_ID fix, ME-5 MEM_FRAG_TX/RX fragmentation, ME-3 SPMC-side MSG_SEND2/MSG_WAIT indirect messaging (per-SP SpMailbox), CONSOLE_LOG (proxy + SPMC + handle_sp_exit), ME-7 SRI/NPI feature IDs (eliminates pKVM `-95 EOPNOTSUPP`). ~370 assertions / 33 test suites
 **Phase 4.6** (done): pKVM E2E validation — FfaMemRegion struct fix (wrong offsets: extra reserved_0, missing ep_mem_size), RETRIEVE_RESP x2=fragment_length (was handle), NWd vs SP RETRIEVE_REQ distinction (pKVM reclaim sends RETRIEVE_REQ to get descriptor — must NOT map pages or mark retrieved), SP2 DIRECT_REQ_64 support (Linux FF-A driver sends 64-bit variant when AARCH64_EXEC set in properties), SP2 MEM_SHARE E2E (BL33 Test 15). ffa_test.ko: 20/20 PASS (SP1 DIRECT_REQ 4 + MEM_SHARE 6, SP2 DIRECT_REQ 4 + MEM_SHARE 6). BL33: 15/15 PASS. `make run-pkvm-ffa-test`
-**Phase 4.5 AVF** (partial): AVF validation — crosvm VMM in pKVM host (EL0) creates pVM via /dev/kvm. This is standard single-level virtualization (NOT nested). KVM API validated: /dev/kvm, KVM_CREATE_VM, KVM_CREATE_VCPU all PASS (5/5). crosvm launches but pVM kernel has no output — root cause: x86_64 host runs QEMU TCG (no KVM acceleration for ARM64), "KVM in TCG" too slow to boot full Linux guest (~12x slower than native, no cross-arch KVM acceleration exists). QEMU MTTCG enabled by default but adding vCPUs actually degrades ARM64 TCG performance. No "software KVM" or cross-arch acceleration patches exist. Fixed initrd-end DTB (16MB→24MB for 19MB initramfs). Requires ARM64 hardware for real AVF validation: AWS Graviton, Oracle Ampere A1, Hetzner CAX, or Apple Silicon with KVM. `make run-crosvm` (nVHE mode).
+**Phase 4.5 AVF** (partial): AVF validation — crosvm VMM in pKVM host (EL0) creates pVM via /dev/kvm. Protected hVHE mode works without SMMU (`pKVM enabled without an IOMMU driver`). KVM API validated: /dev/kvm, KVM_CREATE_VM, KVM_CREATE_VCPU all PASS (5/5). crosvm fails with `failed to create IRQ chip` — QEMU TCG cannot create `KVM_DEV_TYPE_ARM_VGIC_V3` device. SMMUv3 tested (`iommu=smmuv3`) but hangs at CPU3 GIC redistributor init (custom DTB lacks SMMU nodes). Embedded initramfs approach (nested kernel + crosvm at `/nested/`), virtio-console (`console=hvc0`) fixes ttyS0 probe failure. `make build-crosvm` (Docker cross-compile), `make build-crosvm-initramfs`, `make run-crosvm` (protected mode). Requires ARM64 hardware for full AVF validation.
+**Phase 4.7** (done): Security hardening — SPMC cross-SP isolation fix (RETRIEVE/RELINQUISH validate caller==receiver_id via `dispatch_ffa_as_sp()`, prevents SP1 mapping pages into SP2's Stage-2), IPA alignment + page count validation (4KB-aligned, max 65536 pages/range, overflow checks), fragment sender tracking (`NwdFragmentState.sender_id`), `reset_nwd_frag_state()` cleanup helper, stress tests (16-slot exhaustion, interleaved lifecycle, double RETRIEVE, RELINQUISH-without-RETRIEVE). ~400 assertions / 34 test suites
 **Phase 5**: RME & CCA (Realm Manager)
 
 See `DEVELOPMENT_PLAN.md` for full details.

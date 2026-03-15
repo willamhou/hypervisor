@@ -497,12 +497,14 @@ PKVM_NVHE_DTB := guest/linux/guest-pkvm-nvhe.dtb
 build-pkvm-nvhe-dtb:
 	dtc -I dts -O dtb guest/linux/guest-pkvm-nvhe.dts -o $(PKVM_NVHE_DTB)
 
-# Boot pKVM (nVHE) with crosvm → launch pVM via /dev/kvm (AVF validation)
+# Boot pKVM (protected) with crosvm → launch pVM via /dev/kvm (AVF validation)
+# Note: QEMU TCG cannot create vGIC device — crosvm fails with "failed to create IRQ chip"
+# Full AVF validation requires ARM64 hardware (Graviton, Ampere, Apple Silicon)
 run-crosvm: build-pkvm-nvhe-dtb
 	@test -f $(TFA_FLASH_PKVM) || (echo "ERROR: $(TFA_FLASH_PKVM) not found. Run 'make build-tfa-pkvm' first." && exit 1)
 	@test -f $(PKVM_IMAGE) || (echo "ERROR: $(PKVM_IMAGE) not found. Run 'make build-pkvm-kernel' first." && exit 1)
 	@test -f $(CROSVM_INITRAMFS) || (echo "ERROR: $(CROSVM_INITRAMFS) not found. Run 'make build-crosvm-initramfs' first." && exit 1)
-	@echo "Starting pKVM (nVHE) + crosvm AVF validation..."
+	@echo "Starting pKVM (protected) + crosvm AVF validation..."
 	@echo "Press Ctrl+A then X to exit QEMU"
 	$(QEMU_SEL2) -machine virt,secure=on,virtualization=on,gic-version=3 \
 	    -cpu max,pauth-impdef=on,sve=off -smp 4 -m 2G -nographic \

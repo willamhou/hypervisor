@@ -10,7 +10,6 @@
 //! PARTITION_INFO_GET from NWd directly to the SPMC. The SPMC manages NWd
 //! RXTX state and writes PARTITION_INFO descriptors to the NWd RX buffer.
 
-#[cfg(feature = "sel2")]
 use crate::arch::aarch64::defs::PAGE_SIZE_4KB;
 use crate::ffa;
 use crate::ffa::smc_forward::SmcResult8;
@@ -192,6 +191,7 @@ struct NwdFragmentState {
     received: u32,
     handle: u64,
     is_lend: bool,
+    sender_id: u16, // Track sender to prevent mid-fragment sender switching
 }
 
 static NWD_FRAG: SpinLock<NwdFragmentState> = SpinLock::new(NwdFragmentState {
@@ -201,7 +201,18 @@ static NWD_FRAG: SpinLock<NwdFragmentState> = SpinLock::new(NwdFragmentState {
     received: 0,
     handle: 0,
     is_lend: false,
+    sender_id: 0,
 });
+
+/// Reset stale fragmentation state. Called when fragment assembly needs cleanup.
+pub fn reset_nwd_frag_state() {
+    let mut frag = NWD_FRAG.lock();
+    frag.active = false;
+    frag.total_length = 0;
+    frag.received = 0;
+    frag.handle = 0;
+    frag.sender_id = 0;
+}
 
 // ── NWd retrieve response fragmentation state ────────────────────────
 
@@ -1105,6 +1116,19 @@ fn dispatch_interrupt_to_sp(sp_id: u16) -> bool {
 /// Pure function: matches on the FF-A function ID in req.x0 and builds
 /// a response SmcResult8. Not gated by feature flags so it can be unit
 /// tested on the host.
+/// Dispatch an FF-A call as if from a specific SP (for cross-SP isolation tests).
+/// `sp_id` is the calling SP's partition ID, `vsttbr` is its Stage-2 base (0 for unit tests).
+pub fn dispatch_ffa_as_sp(req: &SmcResult8, sp_id: u16, vsttbr: u64) -> SmcResult8 {
+    let current_sp = Some((sp_id, vsttbr));
+    match req.x0 {
+        ffa::FFA_MEM_RETRIEVE_REQ_32 | ffa::FFA_MEM_RETRIEVE_REQ_64 => {
+            handle_spmc_mem_retrieve(req, current_sp)
+        }
+        ffa::FFA_MEM_RELINQUISH => handle_spmc_mem_relinquish(req, current_sp),
+        _ => dispatch_ffa(req),
+    }
+}
+
 pub fn dispatch_ffa(req: &SmcResult8) -> SmcResult8 {
     match req.x0 {
         ffa::FFA_VERSION => {
@@ -1822,6 +1846,12 @@ fn handle_spmc_mem_share(req: &SmcResult8, is_lend: bool) -> SmcResult8 {
                 frag.received = fragment_length;
                 frag.handle = spmc_alloc_handle();
                 frag.is_lend = is_lend;
+                // Extract sender_id from FfaMemRegion header (offset 2, u16)
+                frag.sender_id = if fragment_length >= 4 {
+                    unsafe { core::ptr::read_unaligned(frag.accum_buf.as_ptr().add(2) as *const u16) }
+                } else {
+                    0
+                };
                 frag.active = true;
                 let h = frag.handle;
                 return SmcResult8 {
@@ -1889,6 +1919,26 @@ fn handle_spmc_mem_share(req: &SmcResult8, is_lend: bool) -> SmcResult8 {
         return make_error(ffa::FFA_INVALID_PARAMETERS as u64);
     }
 
+    // Validate page counts and IPA alignment per range
+    for i in 0..range_count {
+        let (ipa, page_count) = ranges[i];
+        // IPA must be 4KB-aligned
+        if ipa & 0xFFF != 0 {
+            return make_error(ffa::FFA_INVALID_PARAMETERS as u64);
+        }
+        // Reasonable page count limit (256MB / 4KB = 65536 pages max per range)
+        if page_count > 65536 {
+            return make_error(ffa::FFA_INVALID_PARAMETERS as u64);
+        }
+        // Check for overflow: ipa + page_count * 4096 must not wrap
+        if (page_count as u64).checked_mul(PAGE_SIZE_4KB).is_none() {
+            return make_error(ffa::FFA_INVALID_PARAMETERS as u64);
+        }
+        if ipa.checked_add(page_count as u64 * PAGE_SIZE_4KB).is_none() {
+            return make_error(ffa::FFA_INVALID_PARAMETERS as u64);
+        }
+    }
+
     match record_spmc_share(sender_id, receiver_id, &ranges[..range_count], is_lend) {
         Some(handle) => SmcResult8 {
             x0: ffa::FFA_SUCCESS_32,
@@ -1949,6 +1999,13 @@ fn handle_spmc_mem_retrieve(req: &SmcResult8, _current_sp: Option<(u16, u64)>) -
     let is_nwd_retrieve = false;
 
     if !is_nwd_retrieve {
+        // Validate caller is the authorized receiver (isolation: SP1 cannot retrieve SP2's share)
+        if let Some((current_sp_id, _)) = _current_sp {
+            if current_sp_id != receiver_id {
+                return make_error(ffa::FFA_DENIED as u64);
+            }
+        }
+
         if retrieved {
             return make_error(ffa::FFA_DENIED as u64);
         }
@@ -2118,6 +2175,13 @@ fn handle_spmc_mem_relinquish(req: &SmcResult8, _current_sp: Option<(u16, u64)>)
         Some(info) => info,
         None => return make_error(ffa::FFA_INVALID_PARAMETERS as u64),
     };
+
+    // Validate caller is the authorized receiver (isolation: SP1 cannot relinquish SP2's share)
+    if let Some((current_sp_id, _)) = _current_sp {
+        if current_sp_id != receiver_id {
+            return make_error(ffa::FFA_DENIED as u64);
+        }
+    }
 
     if !retrieved {
         return make_error(ffa::FFA_DENIED as u64);

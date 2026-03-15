@@ -7,7 +7,7 @@
 	compatible = "linux,dummy-virt";
 
 	chosen {
-		bootargs = "earlycon=pl011,0x09000000 console=ttyAMA0 earlyprintk loglevel=8 nokaslr rdinit=/init kvm-arm.mode=protected kvm-arm.mode=nvhe";
+		bootargs = "earlycon=pl011,0x09000000 console=ttyAMA0 earlyprintk loglevel=8 nokaslr rdinit=/init kvm-arm.mode=protected";
 		stdout-path = "/pl011@9000000";
 		linux,initrd-start = <0x00 0x54000000>;
 		linux,initrd-end = <0x00 0x55800000>;

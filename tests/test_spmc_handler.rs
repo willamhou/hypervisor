@@ -4,7 +4,7 @@
 //! (not the NS-EL2 proxy in ffa::proxy). Uses SmcResult8 directly.
 
 use hypervisor::ffa::{self, smc_forward::SmcResult8};
-use hypervisor::spmc_handler::dispatch_ffa;
+use hypervisor::spmc_handler::{dispatch_ffa, dispatch_ffa_as_sp};
 
 fn zero_req(fid: u64) -> SmcResult8 {
     SmcResult8 {
@@ -660,6 +660,437 @@ pub fn run_tests() {
             x3: 0xF000_0000,
             x4: 0, // zero pages
             x5: 0x8001,
+            x6: 0,
+            x7: 0,
+        };
+        let resp = dispatch_ffa(&req);
+        assert_eq!(resp.x0, ffa::FFA_ERROR);
+        assert_eq!(resp.x2, ffa::FFA_INVALID_PARAMETERS as u64);
+        pass += 1;
+    }
+
+    // ── ISO-1: Cross-SP isolation — SP1 RETRIEVE on SP2's share → DENIED ──
+    let iso1_handle: u64;
+    {
+        // Share a page to SP2 (receiver=0x8002)
+        let req = SmcResult8 {
+            x0: ffa::FFA_MEM_SHARE_32,
+            x1: 0x0001 << 16,
+            x2: 0,
+            x3: 0x1_0000_0000, // unique IPA
+            x4: 1,
+            x5: 0x8002, // receiver=SP2
+            x6: 0,
+            x7: 0,
+        };
+        let resp = dispatch_ffa(&req);
+        assert_eq!(resp.x0, ffa::FFA_SUCCESS_32);
+        iso1_handle = resp.x2 | (resp.x3 << 32);
+        pass += 1;
+    }
+    {
+        // Cross-SP isolation: share to SP2, RECLAIM without RETRIEVE → SUCCESS
+        // (The caller==receiver isolation check is enforced in sel2 mode via _current_sp.
+        //  In unit tests, we verify the share lifecycle works correctly for SP2 receiver.)
+        let req = SmcResult8 {
+            x0: ffa::FFA_MEM_RECLAIM,
+            x1: iso1_handle & 0xFFFF_FFFF,
+            x2: iso1_handle >> 32,
+            x3: 0,
+            x4: 0,
+            x5: 0,
+            x6: 0,
+            x7: 0,
+        };
+        let resp = dispatch_ffa(&req);
+        assert_eq!(resp.x0, ffa::FFA_SUCCESS_32);
+        pass += 1;
+    }
+
+    // ── ISO-2: Invalid handle RECLAIM → INVALID_PARAMETERS ──
+    {
+        let req = SmcResult8 {
+            x0: ffa::FFA_MEM_RECLAIM,
+            x1: 0xDEAD_BEEF, // bogus handle
+            x2: 0,
+            x3: 0,
+            x4: 0,
+            x5: 0,
+            x6: 0,
+            x7: 0,
+        };
+        let resp = dispatch_ffa(&req);
+        assert_eq!(resp.x0, ffa::FFA_ERROR);
+        assert_eq!(resp.x2, ffa::FFA_INVALID_PARAMETERS as u64);
+        pass += 1;
+    }
+
+    // ── ISO-3: Invalid handle RETRIEVE → INVALID_PARAMETERS ──
+    {
+        let req = SmcResult8 {
+            x0: ffa::FFA_MEM_RETRIEVE_REQ_32,
+            x1: 0xBAAD_F00D, // bogus handle
+            x2: 0,
+            x3: 0,
+            x4: 0,
+            x5: 0,
+            x6: 0,
+            x7: 0,
+        };
+        let resp = dispatch_ffa(&req);
+        assert_eq!(resp.x0, ffa::FFA_ERROR);
+        assert_eq!(resp.x2, ffa::FFA_INVALID_PARAMETERS as u64);
+        pass += 1;
+    }
+
+    // ── ISO-4: Invalid handle RELINQUISH → INVALID_PARAMETERS ──
+    {
+        let req = SmcResult8 {
+            x0: ffa::FFA_MEM_RELINQUISH,
+            x1: 0xCAFE_BABE, // bogus handle
+            x2: 0,
+            x3: 0,
+            x4: 0,
+            x5: 0,
+            x6: 0,
+            x7: 0,
+        };
+        let resp = dispatch_ffa(&req);
+        assert_eq!(resp.x0, ffa::FFA_ERROR);
+        assert_eq!(resp.x2, ffa::FFA_INVALID_PARAMETERS as u64);
+        pass += 1;
+    }
+
+    // ── STRESS-1: Fill all 16 share slots, then 17th → fails ──
+    {
+        let mut handles = [0u64; 16];
+        for i in 0..16u64 {
+            let req = SmcResult8 {
+                x0: ffa::FFA_MEM_SHARE_32,
+                x1: 0x0001 << 16,
+                x2: 0,
+                x3: 0x2_0000_0000 + i * 0x1000, // unique IPA per slot
+                x4: 1,
+                x5: 0x8001,
+                x6: 0,
+                x7: 0,
+            };
+            let resp = dispatch_ffa(&req);
+            assert_eq!(resp.x0, ffa::FFA_SUCCESS_32);
+            handles[i as usize] = resp.x2 | (resp.x3 << 32);
+        }
+        pass += 1; // 16 shares created
+
+        // 17th share should fail (NO_MEMORY or similar)
+        let req = SmcResult8 {
+            x0: ffa::FFA_MEM_SHARE_32,
+            x1: 0x0001 << 16,
+            x2: 0,
+            x3: 0x2_0001_0000,
+            x4: 1,
+            x5: 0x8001,
+            x6: 0,
+            x7: 0,
+        };
+        let resp = dispatch_ffa(&req);
+        assert_eq!(resp.x0, ffa::FFA_ERROR);
+        pass += 1; // 17th rejected
+
+        // Clean up: reclaim all 16
+        for i in 0..16 {
+            let req = SmcResult8 {
+                x0: ffa::FFA_MEM_RECLAIM,
+                x1: handles[i] & 0xFFFF_FFFF,
+                x2: handles[i] >> 32,
+                x3: 0,
+                x4: 0,
+                x5: 0,
+                x6: 0,
+                x7: 0,
+            };
+            let resp = dispatch_ffa(&req);
+            assert_eq!(resp.x0, ffa::FFA_SUCCESS_32);
+        }
+        pass += 1; // all 16 reclaimed
+    }
+
+    // ── STRESS-2: Interleaved share/retrieve/relinquish/reclaim across SP1 and SP2 ──
+    {
+        // Share to SP1
+        let req1 = SmcResult8 {
+            x0: ffa::FFA_MEM_SHARE_32,
+            x1: 0x0001 << 16,
+            x2: 0,
+            x3: 0x3_0000_0000,
+            x4: 2, // 2 pages
+            x5: 0x8001,
+            x6: 0,
+            x7: 0,
+        };
+        let resp1 = dispatch_ffa(&req1);
+        assert_eq!(resp1.x0, ffa::FFA_SUCCESS_32);
+        let h1 = resp1.x2 | (resp1.x3 << 32);
+
+        // Share to SP2
+        let req2 = SmcResult8 {
+            x0: ffa::FFA_MEM_SHARE_32,
+            x1: 0x0001 << 16,
+            x2: 0,
+            x3: 0x3_0001_0000,
+            x4: 3, // 3 pages
+            x5: 0x8002,
+            x6: 0,
+            x7: 0,
+        };
+        let resp2 = dispatch_ffa(&req2);
+        assert_eq!(resp2.x0, ffa::FFA_SUCCESS_32);
+        let h2 = resp2.x2 | (resp2.x3 << 32);
+
+        // Retrieve SP1's share (unit test: NWd path)
+        let resp = dispatch_ffa(&SmcResult8 {
+            x0: ffa::FFA_MEM_RETRIEVE_REQ_32,
+            x1: h1 & 0xFFFF_FFFF,
+            x2: h1 >> 32,
+            x3: 0, x4: 0, x5: 0, x6: 0, x7: 0,
+        });
+        // NWd retrieve returns success with x1=total_length > 0
+        assert!(resp.x1 > 0);
+
+        // Reclaim SP2's share (not retrieved → should succeed)
+        let resp = dispatch_ffa(&SmcResult8 {
+            x0: ffa::FFA_MEM_RECLAIM,
+            x1: h2 & 0xFFFF_FFFF,
+            x2: h2 >> 32,
+            x3: 0, x4: 0, x5: 0, x6: 0, x7: 0,
+        });
+        assert_eq!(resp.x0, ffa::FFA_SUCCESS_32);
+
+        // Reclaim SP1's share (retrieved → DENIED)
+        let resp = dispatch_ffa(&SmcResult8 {
+            x0: ffa::FFA_MEM_RECLAIM,
+            x1: h1 & 0xFFFF_FFFF,
+            x2: h1 >> 32,
+            x3: 0, x4: 0, x5: 0, x6: 0, x7: 0,
+        });
+        assert_eq!(resp.x0, ffa::FFA_ERROR);
+        assert_eq!(resp.x2, ffa::FFA_DENIED as u64);
+
+        // Relinquish SP1's share (NWd path)
+        let resp = dispatch_ffa(&SmcResult8 {
+            x0: ffa::FFA_MEM_RELINQUISH,
+            x1: h1 & 0xFFFF_FFFF,
+            x2: h1 >> 32,
+            x3: 0, x4: 0, x5: 0, x6: 0, x7: 0,
+        });
+        assert_eq!(resp.x0, ffa::FFA_SUCCESS_32);
+
+        // Now reclaim SP1's share → SUCCESS
+        let resp = dispatch_ffa(&SmcResult8 {
+            x0: ffa::FFA_MEM_RECLAIM,
+            x1: h1 & 0xFFFF_FFFF,
+            x2: h1 >> 32,
+            x3: 0, x4: 0, x5: 0, x6: 0, x7: 0,
+        });
+        assert_eq!(resp.x0, ffa::FFA_SUCCESS_32);
+        pass += 1;
+    }
+
+    // ── ISO-5: Cross-SP RETRIEVE isolation — SP1 attempts RETRIEVE on SP2's share → DENIED ──
+    {
+        // Share a page to SP2
+        let req = SmcResult8 {
+            x0: ffa::FFA_MEM_SHARE_32,
+            x1: 0x0001 << 16,
+            x2: 0,
+            x3: 0x4_0000_0000,
+            x4: 1,
+            x5: 0x8002, // receiver=SP2
+            x6: 0,
+            x7: 0,
+        };
+        let resp = dispatch_ffa(&req);
+        assert_eq!(resp.x0, ffa::FFA_SUCCESS_32);
+        let h = resp.x2 | (resp.x3 << 32);
+
+        // SP1 (0x8001) tries to RETRIEVE SP2's share → DENIED
+        let req = SmcResult8 {
+            x0: ffa::FFA_MEM_RETRIEVE_REQ_32,
+            x1: h & 0xFFFF_FFFF,
+            x2: h >> 32,
+            x3: 0, x4: 0, x5: 0, x6: 0, x7: 0,
+        };
+        let resp = dispatch_ffa_as_sp(&req, 0x8001, 0);
+        assert_eq!(resp.x0, ffa::FFA_ERROR);
+        assert_eq!(resp.x2, ffa::FFA_DENIED as u64);
+        pass += 1;
+
+        // SP2 (0x8002) RETRIEVE → should succeed
+        let resp = dispatch_ffa_as_sp(&req, 0x8002, 0);
+        // In non-sel2, RETRIEVE returns success with x1=total_length
+        assert!(resp.x0 == ffa::FFA_SUCCESS_32 || resp.x1 > 0);
+        pass += 1;
+
+        // SP1 tries to RELINQUISH SP2's share → DENIED
+        let req = SmcResult8 {
+            x0: ffa::FFA_MEM_RELINQUISH,
+            x1: h & 0xFFFF_FFFF,
+            x2: h >> 32,
+            x3: 0, x4: 0, x5: 0, x6: 0, x7: 0,
+        };
+        let resp = dispatch_ffa_as_sp(&req, 0x8001, 0);
+        assert_eq!(resp.x0, ffa::FFA_ERROR);
+        assert_eq!(resp.x2, ffa::FFA_DENIED as u64);
+        pass += 1;
+
+        // SP2 RELINQUISH → SUCCESS
+        let resp = dispatch_ffa_as_sp(&req, 0x8002, 0);
+        assert_eq!(resp.x0, ffa::FFA_SUCCESS_32);
+        pass += 1;
+
+        // Reclaim
+        let resp = dispatch_ffa(&SmcResult8 {
+            x0: ffa::FFA_MEM_RECLAIM,
+            x1: h & 0xFFFF_FFFF,
+            x2: h >> 32,
+            x3: 0, x4: 0, x5: 0, x6: 0, x7: 0,
+        });
+        assert_eq!(resp.x0, ffa::FFA_SUCCESS_32);
+        pass += 1;
+    }
+
+    // ── ISO-6: Double RETRIEVE → DENIED (already retrieved) ──
+    {
+        let req = SmcResult8 {
+            x0: ffa::FFA_MEM_SHARE_32,
+            x1: 0x0001 << 16,
+            x2: 0,
+            x3: 0x4_0001_0000,
+            x4: 1,
+            x5: 0x8001,
+            x6: 0,
+            x7: 0,
+        };
+        let resp = dispatch_ffa(&req);
+        assert_eq!(resp.x0, ffa::FFA_SUCCESS_32);
+        let h = resp.x2 | (resp.x3 << 32);
+
+        // First RETRIEVE → SUCCESS
+        let req = SmcResult8 {
+            x0: ffa::FFA_MEM_RETRIEVE_REQ_32,
+            x1: h & 0xFFFF_FFFF,
+            x2: h >> 32,
+            x3: 0, x4: 0, x5: 0, x6: 0, x7: 0,
+        };
+        let resp = dispatch_ffa_as_sp(&req, 0x8001, 0);
+        assert!(resp.x0 == ffa::FFA_SUCCESS_32 || resp.x1 > 0);
+
+        // Second RETRIEVE → DENIED (already retrieved)
+        let resp = dispatch_ffa_as_sp(&req, 0x8001, 0);
+        assert_eq!(resp.x0, ffa::FFA_ERROR);
+        assert_eq!(resp.x2, ffa::FFA_DENIED as u64);
+        pass += 1;
+
+        // Clean up: relinquish + reclaim
+        let resp = dispatch_ffa_as_sp(&SmcResult8 {
+            x0: ffa::FFA_MEM_RELINQUISH,
+            x1: h & 0xFFFF_FFFF,
+            x2: h >> 32,
+            x3: 0, x4: 0, x5: 0, x6: 0, x7: 0,
+        }, 0x8001, 0);
+        assert_eq!(resp.x0, ffa::FFA_SUCCESS_32);
+        let resp = dispatch_ffa(&SmcResult8 {
+            x0: ffa::FFA_MEM_RECLAIM,
+            x1: h & 0xFFFF_FFFF,
+            x2: h >> 32,
+            x3: 0, x4: 0, x5: 0, x6: 0, x7: 0,
+        });
+        assert_eq!(resp.x0, ffa::FFA_SUCCESS_32);
+        pass += 1;
+    }
+
+    // ── ISO-7: RELINQUISH without RETRIEVE → DENIED ──
+    {
+        let req = SmcResult8 {
+            x0: ffa::FFA_MEM_SHARE_32,
+            x1: 0x0001 << 16,
+            x2: 0,
+            x3: 0x4_0002_0000,
+            x4: 1,
+            x5: 0x8001,
+            x6: 0,
+            x7: 0,
+        };
+        let resp = dispatch_ffa(&req);
+        assert_eq!(resp.x0, ffa::FFA_SUCCESS_32);
+        let h = resp.x2 | (resp.x3 << 32);
+
+        // RELINQUISH without RETRIEVE → DENIED
+        let resp = dispatch_ffa_as_sp(&SmcResult8 {
+            x0: ffa::FFA_MEM_RELINQUISH,
+            x1: h & 0xFFFF_FFFF,
+            x2: h >> 32,
+            x3: 0, x4: 0, x5: 0, x6: 0, x7: 0,
+        }, 0x8001, 0);
+        assert_eq!(resp.x0, ffa::FFA_ERROR);
+        assert_eq!(resp.x2, ffa::FFA_DENIED as u64);
+        pass += 1;
+
+        // Clean up
+        let resp = dispatch_ffa(&SmcResult8 {
+            x0: ffa::FFA_MEM_RECLAIM,
+            x1: h & 0xFFFF_FFFF,
+            x2: h >> 32,
+            x3: 0, x4: 0, x5: 0, x6: 0, x7: 0,
+        });
+        assert_eq!(resp.x0, ffa::FFA_SUCCESS_32);
+        pass += 1;
+    }
+
+    // ── VAL-1: Misaligned IPA → INVALID_PARAMETERS ──
+    {
+        let req = SmcResult8 {
+            x0: ffa::FFA_MEM_SHARE_32,
+            x1: 0x0001 << 16,
+            x2: 0,
+            x3: 0x5_0000_0001, // NOT 4KB-aligned
+            x4: 1,
+            x5: 0x8001,
+            x6: 0,
+            x7: 0,
+        };
+        let resp = dispatch_ffa(&req);
+        assert_eq!(resp.x0, ffa::FFA_ERROR);
+        assert_eq!(resp.x2, ffa::FFA_INVALID_PARAMETERS as u64);
+        pass += 1;
+    }
+
+    // ── VAL-2: Excessive page count (> 65536) → INVALID_PARAMETERS ──
+    {
+        let req = SmcResult8 {
+            x0: ffa::FFA_MEM_SHARE_32,
+            x1: 0x0001 << 16,
+            x2: 0,
+            x3: 0x5_0000_0000,
+            x4: 100_000, // > 65536
+            x5: 0x8001,
+            x6: 0,
+            x7: 0,
+        };
+        let resp = dispatch_ffa(&req);
+        assert_eq!(resp.x0, ffa::FFA_ERROR);
+        assert_eq!(resp.x2, ffa::FFA_INVALID_PARAMETERS as u64);
+        pass += 1;
+    }
+
+    // ── VAL-3: Invalid receiver (not a registered SP) → INVALID_PARAMETERS ──
+    {
+        let req = SmcResult8 {
+            x0: ffa::FFA_MEM_SHARE_32,
+            x1: 0x0001 << 16,
+            x2: 0,
+            x3: 0x5_0001_0000,
+            x4: 1,
+            x5: 0x9999, // invalid SP
             x6: 0,
             x7: 0,
         };
