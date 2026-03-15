@@ -24,7 +24,7 @@ M5: RME & CCA         ░░░░░░░░░░░░░░░░░░░�
 Android Boot          ██████████░░░░░░░░░░  50% ✅ (Phase 2 完成)
 ```
 
-**测试覆盖**: ~370 assertions / 33 test suites (100% pass)
+**测试覆盖**: ~400 assertions / 34 test suites (100% pass)
 **代码量**: ~19000 行
 **Linux启动**: 4 vCPU, BusyBox shell, virtio-blk, virtio-net, multi-VM, FF-A proxy
 **Android启动**: 4 vCPU, PL031 RTC, Binder IPC, minimal init, 1GB RAM
@@ -1445,7 +1445,9 @@ GitHub Actions配置：
 **Phase C 完成**: NS interrupt preemption — FFA_INTERRUPT + FFA_RUN resume, CNTHP timer, SP_IRQ_PREEMPTED flag, Preempted state, 9/9 BL33 tests PASS
 **Phase D 完成**: Multi-SP + secure vIRQ injection — SP2 (sp_irq), per-SP INTID ownership, HCR_EL2.VI + HF_INTERRUPT_GET paravirt (Hafnium-compatible), CNTHP poll timer, cross-SP preemption, 11/11 BL33 tests PASS, 42 SPMC handler + 28 SP context assertions
 **Phase 4.5 完成**: pKVM boot ✅ (`Protected hVHE mode initialized successfully`), SPMC FF-A responses ✅, FF-A nVHE mode ✅ (driver v1.1), FF-A protected mode ✅ (driver v1.2, firmware v1.1, AOSP android16-6.12 已修复之前的 kernel bug), secondary CPU warm-boot ✅ (FFA_SECONDARY_EP_REGISTER + per-CPU stacks + MMU install)
-**M4.6 SPMC 补全**: ✅ 核心完成 — Sprint S1 内存管理 ✅, Sprint S2 E2E共享 ✅, 通知 ✅, Sprint S3 间接消息 (ME-3) ✅, MEM_FRAG_TX/RX (ME-5) ✅, CONSOLE_LOG ✅, SRI/NPI (ME-7) ✅. ~370 assertions / 33 suites. Remaining: pKVM + real SP E2E memory sharing (stretch goal)
+**M4.6 SPMC 补全**: ✅ 核心完成 — Sprint S1 内存管理 ✅, Sprint S2 E2E共享 ✅, 通知 ✅, Sprint S3 间接消息 (ME-3) ✅, MEM_FRAG_TX/RX (ME-5) ✅, CONSOLE_LOG ✅, SRI/NPI (ME-7) ✅
+**Phase 4.6 完成**: pKVM E2E validation — FfaMemRegion struct fix, RETRIEVE_RESP x2=fragment_length, NWd vs SP RETRIEVE_REQ distinction, SP2 DIRECT_REQ_64. ffa_test.ko 20/20 PASS, 15/15 BL33 PASS
+**Phase 4.7 完成**: Security hardening — cross-SP memory isolation (`dispatch_ffa_as_sp()`), IPA alignment + page count validation, fragment sender tracking, stress tests (16-slot exhaustion, interleaved lifecycle, double RETRIEVE, RELINQUISH-without-RETRIEVE). ~400 assertions / 34 suites
 
 **Phase 8+ 候选方向** (选择一个):
 

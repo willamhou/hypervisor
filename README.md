@@ -29,8 +29,8 @@ A bare-metal Type-1 hypervisor for ARM64 (AArch64) written in Rust. Runs at EL2 
 
 ## Current Status
 
-**Progress**: Milestones 0-4.6 complete, including FF-A v1.1, TF-A boot chain, S-EL2 SPMC, pKVM integration, and E2E validation (20/20 ffa_test.ko, 15/15 BL33)
-**Tests**: 33 test suites (~370 assertions), all passing
+**Progress**: Milestones 0-4.7 complete, including FF-A v1.1, TF-A boot chain, S-EL2 SPMC, pKVM integration, E2E validation (20/20 ffa_test.ko, 15/15 BL33), and security hardening
+**Tests**: 34 test suites (~400 assertions), all passing
 **Code**: ~23,000 lines (src + tests + asm)
 
 ### Milestone Overview
@@ -211,7 +211,7 @@ Restore context → ERET back to guest
 
 ## Testing
 
-33 test suites (~370 assertions) run automatically on `make run`:
+34 test suites (~400 assertions) run automatically on `make run`:
 
 | Test | Description |
 |------|-------------|
@@ -244,7 +244,7 @@ Restore context → ERET back to guest
 | `test_virtio_net` | VirtioNet: device_id/features/queues/config/mac |
 | `test_page_ownership` | Stage-2 PTE SW bits: ownership transitions |
 | `test_ffa` | FF-A proxy: VERSION/ID_GET/FEATURES/RXTX/messaging/memory/VM-to-VM (54 assertions) |
-| `test_spmc_handler` | SPMC dispatch: VERSION/FEATURES/DIRECT_REQ/memory/multi-SP/FFA_RUN/notifications/MSG_SEND2/CONSOLE_LOG/SRI/NPI (117 assertions) |
+| `test_spmc_handler` | SPMC dispatch: VERSION/FEATURES/DIRECT_REQ/memory/multi-SP/FFA_RUN/notifications/MSG_SEND2/CONSOLE_LOG/SRI/NPI/cross-SP isolation/stress (138 assertions) |
 | `test_sp_context` | SpContext: state machine, CAS, illegal transitions, INTID ownership, IRQ overflow (58 assertions) |
 | `test_secure_stage2` | SecureStage2Config: VSTTBR/VSTCR validation (4 assertions) |
 | `test_log` | Structured logging macros |
@@ -275,6 +275,7 @@ Restore context → ERET back to guest
 - E2E memory sharing: NWd SHARE -> SP RETRIEVE -> SP write -> SP RELINQUISH -> NWd verify -> NWd RECLAIM
 - pKVM E2E validation: 20/20 ffa_test.ko (DIRECT_REQ + MEM_SHARE for SP1+SP2), 15/15 BL33 tests
 - FF-A supplemental: MEM_FRAG_TX/RX, MSG_SEND2/MSG_WAIT, CONSOLE_LOG, SRI/NPI, SpinLock for SPMC globals
+- Security hardening: cross-SP memory isolation, IPA/page count validation, fragment sender tracking, stress tests
 
 ### In Progress
 
