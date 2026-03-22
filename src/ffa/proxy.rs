@@ -619,7 +619,14 @@ fn handle_mem_share_or_lend(context: &mut VcpuContext, is_lend: bool) -> bool {
     let (sender_id_from_desc, receiver_id, ranges, range_count, total_page_count) = if mbox.mapped {
         // FF-A v1.1 descriptor path: parse TX buffer
         match parse_share_descriptor(context, mbox, is_lend) {
-            Ok(info) => info,
+            Ok(info) => {
+                // Validate range count fits storage (MAX_SHARE_RANGES = 4)
+                if info.3 > stub_spmc::MAX_SHARE_RANGES {
+                    ffa_error(context, FFA_INVALID_PARAMETERS);
+                    return true;
+                }
+                info
+            }
             Err(FRAG_NEEDS_MORE) => {
                 // Fragmented: return MEM_FRAG_RX to request next fragment
                 let vm_id = crate::global::current_vm_id();

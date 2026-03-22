@@ -184,17 +184,17 @@ static SPMC_NEXT_HANDLE: AtomicU64 = AtomicU64::new(1);
 // ── NWd fragment reassembly state ───────────────────────────────────
 
 /// State for reassembling fragmented NWd memory descriptors.
-struct NwdFragmentState {
-    active: bool,
+pub(crate) struct NwdFragmentState {
+    pub(crate) active: bool,
     accum_buf: [u8; 4096],
-    total_length: u32,
-    received: u32,
-    handle: u64,
+    pub(crate) total_length: u32,
+    pub(crate) received: u32,
+    pub(crate) handle: u64,
     is_lend: bool,
     sender_id: u16, // Track sender to prevent mid-fragment sender switching
 }
 
-static NWD_FRAG: SpinLock<NwdFragmentState> = SpinLock::new(NwdFragmentState {
+pub(crate) static NWD_FRAG: SpinLock<NwdFragmentState> = SpinLock::new(NwdFragmentState {
     active: false,
     accum_buf: [0u8; 4096],
     total_length: 0,
@@ -268,18 +268,21 @@ fn sp_mailbox_index(sp_id: u16) -> Option<usize> {
 }
 
 /// Record a memory share. Returns the handle on success.
-fn record_spmc_share(
+pub fn record_spmc_share(
     sender_id: u16,
     receiver_id: u16,
     ranges: &[(u64, u32)],
     is_lend: bool,
 ) -> Option<u64> {
+    if ranges.len() > MAX_SHARE_RANGES {
+        return None;
+    }
     let handle = spmc_alloc_handle();
     let mut records = SPMC_SHARES.lock();
     for record in records.iter_mut() {
         if !record.active {
             let mut stored = [(0u64, 0u32); MAX_SHARE_RANGES];
-            let count = ranges.len().min(MAX_SHARE_RANGES);
+            let count = ranges.len();
             for (i, &r) in ranges.iter().take(count).enumerate() {
                 stored[i] = r;
             }
@@ -1766,7 +1769,7 @@ fn handle_spmc_mem_frag_tx(req: &SmcResult8) -> SmcResult8 {
         Err(_) => return make_error(ffa::FFA_INVALID_PARAMETERS as u64),
     };
 
-    if desc.range_count == 0 {
+    if desc.range_count == 0 || desc.range_count > MAX_SHARE_RANGES {
         return make_error(ffa::FFA_INVALID_PARAMETERS as u64);
     }
 
@@ -1775,7 +1778,7 @@ fn handle_spmc_mem_frag_tx(req: &SmcResult8) -> SmcResult8 {
         return make_error(ffa::FFA_INVALID_PARAMETERS as u64);
     }
 
-    let count = desc.range_count.min(MAX_SHARE_RANGES);
+    let count = desc.range_count;
     let mut records = SPMC_SHARES.lock();
     for record in records.iter_mut() {
         if !record.active {
@@ -1873,10 +1876,10 @@ fn handle_spmc_mem_share(req: &SmcResult8, is_lend: bool) -> SmcResult8 {
                 Ok(desc) => {
                     sender_id = desc.sender_id;
                     receiver_id = desc.receiver_id;
-                    if desc.range_count == 0 {
+                    if desc.range_count == 0 || desc.range_count > MAX_SHARE_RANGES {
                         return make_error(ffa::FFA_INVALID_PARAMETERS as u64);
                     }
-                    let count = desc.range_count.min(MAX_SHARE_RANGES);
+                    let count = desc.range_count;
                     for i in 0..count {
                         ranges[i] = desc.ranges[i];
                     }

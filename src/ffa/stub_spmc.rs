@@ -93,13 +93,16 @@ pub fn record_share(
     total_page_count: u32,
     is_lend: bool,
 ) -> Option<u64> {
+    if ranges.len() > MAX_SHARE_RANGES {
+        return None;
+    }
     let handle = alloc_handle();
     // SAFETY: serialized access to SHARE_RECORDS in stub dispatch path.
     let records = unsafe { &mut *SHARE_RECORDS.0.get() };
     for record in records.iter_mut() {
         if !record.active {
             let mut stored_ranges = [(0u64, 0u32); MAX_SHARE_RANGES];
-            let count = ranges.len().min(MAX_SHARE_RANGES);
+            let count = ranges.len();
             for (i, &r) in ranges.iter().take(count).enumerate() {
                 stored_ranges[i] = r;
             }
@@ -132,12 +135,15 @@ pub fn record_share_with_handle(
     total_page_count: u32,
     is_lend: bool,
 ) -> bool {
+    if ranges.len() > MAX_SHARE_RANGES {
+        return false;
+    }
     // SAFETY: serialized access to SHARE_RECORDS in stub dispatch path.
     let records = unsafe { &mut *SHARE_RECORDS.0.get() };
     for record in records.iter_mut() {
         if !record.active {
             let mut stored_ranges = [(0u64, 0u32); MAX_SHARE_RANGES];
-            let count = ranges.len().min(MAX_SHARE_RANGES);
+            let count = ranges.len();
             for (i, &r) in ranges.iter().take(count).enumerate() {
                 stored_ranges[i] = r;
             }
