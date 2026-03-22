@@ -389,6 +389,24 @@ pub fn run_ffa_test() {
         }
     }
 
+    // MEM_LEND basic — register-based returns handle
+    {
+        let mut ctx = VcpuContext::default();
+        ctx.gp_regs.x0 = ffa::FFA_MEM_LEND_32;
+        ctx.gp_regs.x3 = 0x5C00_0000; // IPA (different from MEM_SHARE tests)
+        ctx.gp_regs.x4 = 1; // 1 page
+        ctx.gp_regs.x5 = 2; // receiver = VM1 (partition ID 2)
+        let cont = ffa::proxy::handle_ffa_call(&mut ctx);
+        let handle = ctx.gp_regs.x2 | (ctx.gp_regs.x3 << 32);
+        if cont && ctx.gp_regs.x0 == ffa::FFA_SUCCESS_32 && handle > 0 {
+            hypervisor::log_info!("  [PASS] MEM_LEND returns handle\n");
+            pass += 1;
+        } else {
+            hypervisor::log_info!("  [FAIL] MEM_LEND\n");
+            fail += 1;
+        }
+    }
+
     // Test 21: MEM_RETRIEVE_REQ by VM1 succeeds
     {
         // Share from VM0 to VM1

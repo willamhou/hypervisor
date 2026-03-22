@@ -168,6 +168,45 @@ pub fn run_tests() {
     assert_eq!(resp.x2, ffa::FFA_DENIED as u64);
     pass += 1;
 
+    // ── RXTX_UNMAP clears fragment state ──
+    {
+        // Step 1: RXTX_MAP
+        let mut req = zero_req(ffa::FFA_RXTX_MAP);
+        req.x1 = 0x4200_0000;
+        req.x2 = 0x4200_1000;
+        req.x3 = 1;
+        let resp = dispatch_ffa(&req);
+        assert_eq!(resp.x0, ffa::FFA_SUCCESS_32);
+
+        // Step 2: Manually activate NWD_FRAG to simulate in-flight fragment transfer
+        {
+            let mut frag = hypervisor::spmc_handler::NWD_FRAG.lock();
+            frag.active = true;
+            frag.handle = 0xDEAD;
+            frag.total_length = 4096;
+            frag.received = 1024;
+        }
+
+        // Step 3: RXTX_UNMAP — should clear fragment state
+        let resp = dispatch_ffa(&zero_req(ffa::FFA_RXTX_UNMAP));
+        assert_eq!(resp.x0, ffa::FFA_SUCCESS_32);
+
+        // Step 4: Verify fragment state was cleared
+        {
+            let frag = hypervisor::spmc_handler::NWD_FRAG.lock();
+            assert!(!frag.active);
+        }
+        pass += 1;
+
+        // Step 5: RXTX_MAP again + MEM_SHARE should succeed (no leftover FFA_BUSY)
+        let mut req = zero_req(ffa::FFA_RXTX_MAP);
+        req.x1 = 0x4200_0000;
+        req.x2 = 0x4200_1000;
+        req.x3 = 1;
+        let resp = dispatch_ffa(&req);
+        assert_eq!(resp.x0, ffa::FFA_SUCCESS_32);
+    }
+
     // Test 33: FFA_RXTX_MAP with misaligned TX -> INVALID_PARAMETERS
     let req = SmcResult8 {
         x0: ffa::FFA_RXTX_MAP,
@@ -562,6 +601,116 @@ pub fn run_tests() {
         let resp = dispatch_ffa(&req);
         assert_eq!(resp.x0, ffa::FFA_SUCCESS_32);
         pass += 1;
+    }
+
+    // ── Range count overflow → None (record_spmc_share rejects > MAX_SHARE_RANGES) ──
+    {
+        let too_many: [(u64, u32); 5] = [
+            (0xA000_0000, 1),
+            (0xA000_1000, 1),
+            (0xA000_2000, 1),
+            (0xA000_3000, 1),
+            (0xA000_4000, 1),
+        ];
+        let result = hypervisor::spmc_handler::record_spmc_share(0x0001, 0x8001, &too_many, false);
+        assert!(result.is_none());
+        pass += 1;
+    }
+
+    // ── LEND: double RETRIEVE → DENIED ──
+    {
+        let req = SmcResult8 {
+            x0: ffa::FFA_MEM_LEND_32,
+            x1: 0x0001 << 16,
+            x2: 0,
+            x3: 0xD000_0000,
+            x4: 1,
+            x5: 0x8001,
+            x6: 0,
+            x7: 0,
+        };
+        let resp = dispatch_ffa(&req);
+        assert_eq!(resp.x0, ffa::FFA_SUCCESS_32);
+        let h = resp.x2 | (resp.x3 << 32);
+
+        // First RETRIEVE → ok
+        let req = SmcResult8 {
+            x0: ffa::FFA_MEM_RETRIEVE_REQ_32,
+            x1: h & 0xFFFF_FFFF,
+            x2: h >> 32,
+            x3: 0, x4: 0, x5: 0, x6: 0, x7: 0,
+        };
+        let resp = dispatch_ffa(&req);
+        assert_eq!(resp.x0, ffa::FFA_MEM_RETRIEVE_RESP);
+
+        // Second RETRIEVE → DENIED
+        let resp = dispatch_ffa(&req);
+        assert_eq!(resp.x0, ffa::FFA_ERROR);
+        pass += 1;
+
+        // Cleanup: RELINQUISH + RECLAIM
+        let req = SmcResult8 {
+            x0: ffa::FFA_MEM_RELINQUISH,
+            x1: h & 0xFFFF_FFFF, x2: h >> 32,
+            x3: 0, x4: 0, x5: 0, x6: 0, x7: 0,
+        };
+        dispatch_ffa(&req);
+        let req = SmcResult8 {
+            x0: ffa::FFA_MEM_RECLAIM,
+            x1: h & 0xFFFF_FFFF, x2: h >> 32,
+            x3: 0, x4: 0, x5: 0, x6: 0, x7: 0,
+        };
+        dispatch_ffa(&req);
+    }
+
+    // ── LEND: RECLAIM without RELINQUISH → DENIED ──
+    {
+        let req = SmcResult8 {
+            x0: ffa::FFA_MEM_LEND_32,
+            x1: 0x0001 << 16,
+            x2: 0,
+            x3: 0xD100_0000,
+            x4: 1,
+            x5: 0x8001,
+            x6: 0,
+            x7: 0,
+        };
+        let resp = dispatch_ffa(&req);
+        assert_eq!(resp.x0, ffa::FFA_SUCCESS_32);
+        let h = resp.x2 | (resp.x3 << 32);
+
+        // RETRIEVE → ok
+        let req = SmcResult8 {
+            x0: ffa::FFA_MEM_RETRIEVE_REQ_32,
+            x1: h & 0xFFFF_FFFF, x2: h >> 32,
+            x3: 0, x4: 0, x5: 0, x6: 0, x7: 0,
+        };
+        let resp = dispatch_ffa(&req);
+        assert_eq!(resp.x0, ffa::FFA_MEM_RETRIEVE_RESP);
+
+        // RECLAIM (without RELINQUISH) → DENIED
+        let req = SmcResult8 {
+            x0: ffa::FFA_MEM_RECLAIM,
+            x1: h & 0xFFFF_FFFF, x2: h >> 32,
+            x3: 0, x4: 0, x5: 0, x6: 0, x7: 0,
+        };
+        let resp = dispatch_ffa(&req);
+        assert_eq!(resp.x0, ffa::FFA_ERROR);
+        pass += 1;
+
+        // Cleanup: RELINQUISH then RECLAIM
+        let req = SmcResult8 {
+            x0: ffa::FFA_MEM_RELINQUISH,
+            x1: h & 0xFFFF_FFFF, x2: h >> 32,
+            x3: 0, x4: 0, x5: 0, x6: 0, x7: 0,
+        };
+        dispatch_ffa(&req);
+        let req = SmcResult8 {
+            x0: ffa::FFA_MEM_RECLAIM,
+            x1: h & 0xFFFF_FFFF, x2: h >> 32,
+            x3: 0, x4: 0, x5: 0, x6: 0, x7: 0,
+        };
+        dispatch_ffa(&req);
     }
 
     // ── T4: RELINQUISH before RETRIEVE → DENIED ──

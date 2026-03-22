@@ -184,17 +184,17 @@ static SPMC_NEXT_HANDLE: AtomicU64 = AtomicU64::new(1);
 // ── NWd fragment reassembly state ───────────────────────────────────
 
 /// State for reassembling fragmented NWd memory descriptors.
-pub(crate) struct NwdFragmentState {
-    pub(crate) active: bool,
+pub struct NwdFragmentState {
+    pub active: bool,
     accum_buf: [u8; 4096],
-    pub(crate) total_length: u32,
-    pub(crate) received: u32,
-    pub(crate) handle: u64,
+    pub total_length: u32,
+    pub received: u32,
+    pub handle: u64,
     is_lend: bool,
     sender_id: u16, // Track sender to prevent mid-fragment sender switching
 }
 
-pub(crate) static NWD_FRAG: SpinLock<NwdFragmentState> = SpinLock::new(NwdFragmentState {
+pub static NWD_FRAG: SpinLock<NwdFragmentState> = SpinLock::new(NwdFragmentState {
     active: false,
     accum_buf: [0u8; 4096],
     total_length: 0,
@@ -1553,6 +1553,16 @@ fn handle_rxtx_unmap() -> SmcResult8 {
     nwd.rx_pa = 0;
     nwd.page_count = 0;
     nwd.mapped = false;
+
+    // Release NWD_RXTX lock before acquiring fragment locks
+    drop(nwd);
+
+    // Clean up any in-flight fragment state (FF-A spec: RXTX_UNMAP invalidates transfers)
+    reset_nwd_frag_state();
+    {
+        let mut frag_rx = NWD_FRAG_RX.lock();
+        frag_rx.active = false;
+    }
 
     SmcResult8 {
         x0: ffa::FFA_SUCCESS_32,
