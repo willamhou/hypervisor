@@ -30,6 +30,7 @@
 .equ FFA_RUN,              0x8400006D
 .equ FFA_RXTX_MAP,        0xC4000066
 .equ FFA_MEM_SHARE_32,    0x84000073
+.equ FFA_MEM_LEND_32,     0x84000072
 .equ FFA_MEM_RECLAIM,     0x84000077
 .equ MEM_TEST_MAGIC,      0xABCD0001
 .equ SHARED_PAGE_MAGIC,   0xCAFEFACE
@@ -834,8 +835,92 @@ _start:
 
     adr     x0, str_pass
     bl      uart_print
-    b       .Ldone
+    b       .Ltest_16
 .Lfail_15:
+    adr     x0, str_fail
+    bl      uart_print
+
+    /* ============ Test 16: MEM_LEND lifecycle E2E ============ */
+.Ltest_16:
+    adr     x0, str_t16
+    bl      uart_print
+
+    /* Clear _tx_page before test */
+    adr     x8, _tx_page
+    str     wzr, [x8]
+
+    /* Step 1: MEM_LEND _tx_page with SP1 — get handle */
+    ldr     x0, =FFA_MEM_LEND_32
+    movz    x1, #0x0000
+    movk    x1, #0x0001, lsl #16   /* sender = 0x0001 */
+    mov     x2, xzr
+    adr     x3, _tx_page           /* IPA of lent page */
+    mov     x4, #1                 /* 1 page */
+    movz    x5, #SP1_ID            /* receiver = SP1 */
+    mov     x6, xzr
+    mov     x7, xzr
+    smc     #0
+
+    /* Verify: x0 == FFA_SUCCESS_32 */
+    ldr     x9, =FFA_SUCCESS_32
+    cmp     x0, x9
+    b.ne    .Lfail_16
+
+    mov     x24, x2                /* handle_lo */
+    mov     x25, x3                /* handle_hi */
+
+    /* Step 2: DIRECT_REQ to SP1 with MEM_TEST_MAGIC.
+     * SP1 handler: RETRIEVE → write SHARED_PAGE_MAGIC → RELINQUISH → respond.
+     * Same handler for both SHARE and LEND — SP doesn't distinguish. */
+    ldr     x0, =FFA_DIRECT_REQ_32
+    movz    x1, #SP1_ID
+    movk    x1, #0x0001, lsl #16
+    mov     x2, xzr
+    ldr     x3, =MEM_TEST_MAGIC
+    mov     x4, x24
+    mov     x5, x25
+    adr     x6, _tx_page
+    mov     x7, xzr
+    smc     #0
+
+    ldr     x9, =FFA_DIRECT_RESP_32
+    cmp     x0, x9
+    b.ne    .Lfail_16
+
+    add     x9, x24, #0x4000
+    cmp     x4, x9
+    b.ne    .Lfail_16
+
+    ldr     x9, =SHARED_PAGE_MAGIC
+    cmp     x5, x9
+    b.ne    .Lfail_16
+
+    /* Step 3: Verify lent page has SP's write */
+    adr     x8, _tx_page
+    ldr     w9, [x8]
+    ldr     w10, =SHARED_PAGE_MAGIC
+    cmp     w9, w10
+    b.ne    .Lfail_16
+
+    /* Step 4: MEM_RECLAIM */
+    ldr     x0, =FFA_MEM_RECLAIM
+    mov     x1, x24
+    mov     x2, x25
+    mov     x3, xzr
+    mov     x4, xzr
+    mov     x5, xzr
+    mov     x6, xzr
+    mov     x7, xzr
+    smc     #0
+
+    ldr     x9, =FFA_SUCCESS_32
+    cmp     x0, x9
+    b.ne    .Lfail_16
+
+    adr     x0, str_pass
+    bl      uart_print
+    b       .Ldone
+.Lfail_16:
     adr     x0, str_fail
     bl      uart_print
 
@@ -897,6 +982,8 @@ str_t14:
     .asciz "  Test 14: Alternating SP1/SP2 ..... "
 str_t15:
     .asciz "  Test 15: MEM_SHARE E2E (SP2) ..... "
+str_t16:
+    .asciz "  Test 16: MEM_LEND lifecycle E2E .. "
 str_pass:
     .asciz "PASS\r\n"
 str_fail:
