@@ -140,14 +140,20 @@ pub fn run_tests() {
     assert!(ctx_g1b.transition_to(SpState::Blocked).is_err());
     pass += 2;
 
-    // Test 47-48: Blocked → Idle / Preempted are invalid
+    // Test 47: Blocked → Idle is invalid
     let mut ctx_g1c = SpContext::new(0x9003, 0x0e300000, 0x0e400000, [0; 4]);
     ctx_g1c.transition_to(SpState::Idle).unwrap();
     ctx_g1c.transition_to(SpState::Running).unwrap();
     ctx_g1c.transition_to(SpState::Blocked).unwrap();
     assert!(ctx_g1c.transition_to(SpState::Idle).is_err());
-    assert!(ctx_g1c.transition_to(SpState::Preempted).is_err());
-    pass += 2;
+    pass += 1;
+    // Test 48: Blocked → Preempted is valid (SP-to-SP chain preemption)
+    let mut ctx_g1c2 = SpContext::new(0x9013, 0x0e300000, 0x0e400000, [0; 4]);
+    ctx_g1c2.transition_to(SpState::Idle).unwrap();
+    ctx_g1c2.transition_to(SpState::Running).unwrap();
+    ctx_g1c2.transition_to(SpState::Blocked).unwrap();
+    assert!(ctx_g1c2.transition_to(SpState::Preempted).is_ok());
+    pass += 1;
 
     // Test 49: Preempted → Blocked is invalid
     let mut ctx_g1d = SpContext::new(0x9004, 0x0e300000, 0x0e400000, [0; 4]);

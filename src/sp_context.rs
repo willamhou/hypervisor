@@ -312,6 +312,7 @@ impl SpContext {
             (SpState::Running, SpState::Idle) => true,
             (SpState::Running, SpState::Blocked) => true,
             (SpState::Blocked, SpState::Running) => true,
+            (SpState::Blocked, SpState::Preempted) => true,  // chain preemption (SP-to-SP)
             (SpState::Running, SpState::Preempted) => true,
             (SpState::Preempted, SpState::Running) => true,
             _ => false,
