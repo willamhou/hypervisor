@@ -29,6 +29,90 @@ use core::sync::atomic::{AtomicBool, AtomicU64};
 
 use crate::platform::MAX_SMP_CPUS;
 
+// ── SP-to-SP Call Stack ────────────────────────────────────────────────
+
+/// A frame in the SP-to-SP call stack, tracking who called whom.
+pub struct CallFrame {
+    pub caller_id: u16,
+    pub callee_id: u16,
+}
+
+/// Maximum SP-to-SP call chain depth (MAX_SPS - 1; one SP must be innermost callee).
+const MAX_CALL_DEPTH: usize = 3;
+
+/// Global call stack for tracking SP-to-SP DIRECT_REQ nesting.
+/// Maximum depth is MAX_CALL_DEPTH (= MAX_SPS - 1).
+pub struct CallStack {
+    frames: [Option<CallFrame>; MAX_CALL_DEPTH],
+    depth: usize,
+}
+
+impl CallStack {
+    pub const fn new() -> Self {
+        Self {
+            frames: [None, None, None], // MAX_SPS - 1 = 3
+            depth: 0,
+        }
+    }
+
+    /// Push a new call frame. Returns Err if stack is full.
+    pub fn push(&mut self, caller: u16, callee: u16) -> Result<(), ()> {
+        if self.depth >= self.frames.len() {
+            return Err(());
+        }
+        self.frames[self.depth] = Some(CallFrame {
+            caller_id: caller,
+            callee_id: callee,
+        });
+        self.depth += 1;
+        Ok(())
+    }
+
+    /// Pop the top frame. Returns None if stack is empty.
+    pub fn pop(&mut self) -> Option<CallFrame> {
+        if self.depth == 0 {
+            return None;
+        }
+        self.depth -= 1;
+        self.frames[self.depth].take()
+    }
+
+    /// Check if sp_id appears as caller or callee anywhere in the stack.
+    /// Used for cycle detection.
+    pub fn contains(&self, sp_id: u16) -> bool {
+        self.frames[..self.depth].iter().any(|f| {
+            if let Some(frame) = f {
+                frame.caller_id == sp_id || frame.callee_id == sp_id
+            } else {
+                false
+            }
+        })
+    }
+
+    /// Current nesting depth.
+    pub fn depth(&self) -> usize {
+        self.depth
+    }
+
+    /// Find the caller that is waiting for a given callee.
+    /// Used by resume_preempted_sp() for chain-resume.
+    pub fn find_caller(&self, callee_id: u16) -> Option<u16> {
+        self.frames[..self.depth].iter().find_map(|f| {
+            if let Some(frame) = f {
+                if frame.callee_id == callee_id {
+                    return Some(frame.caller_id);
+                }
+            }
+            None
+        })
+    }
+}
+
+/// Global SP-to-SP call stack, protected by SpinLock.
+/// Lock ordering: CALL_STACK → SP_STORE_LOCK (never reverse).
+#[cfg(feature = "sel2")]
+pub static CALL_STACK: SpinLock<CallStack> = SpinLock::new(CallStack::new());
+
 /// Helper: read current CPU index (MPIDR_EL1.Aff0). Works at both NS-EL2 and S-EL2.
 #[cfg(feature = "sel2")]
 #[inline(always)]

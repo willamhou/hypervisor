@@ -1633,5 +1633,60 @@ pub fn run_tests() {
         pass += 2;
     }
 
+    // ── CallStack unit tests ──
+
+    // CS1: push/pop basic operations
+    {
+        use hypervisor::spmc_handler::CallStack;
+        let mut stack = CallStack::new();
+        assert_eq!(stack.depth(), 0);
+        assert!(stack.push(0x8001, 0x8002).is_ok());
+        assert_eq!(stack.depth(), 1);
+        assert!(stack.contains(0x8001));
+        assert!(stack.contains(0x8002));
+        assert!(!stack.contains(0x8003));
+        let frame = stack.pop().unwrap();
+        assert_eq!(frame.caller_id, 0x8001);
+        assert_eq!(frame.callee_id, 0x8002);
+        assert_eq!(stack.depth(), 0);
+        pass += 1;
+    }
+
+    // CS2: cycle detection via contains()
+    {
+        use hypervisor::spmc_handler::CallStack;
+        let mut stack = CallStack::new();
+        stack.push(0x8001, 0x8002).unwrap();
+        stack.push(0x8002, 0x8003).unwrap();
+        // SP1 is in the stack as caller → cycle detected
+        assert!(stack.contains(0x8001));
+        // SP3 is in the stack as callee → cycle detected
+        assert!(stack.contains(0x8003));
+        pass += 1;
+    }
+
+    // CS3: stack overflow (MAX_SPS - 1 = 3 frames max)
+    {
+        use hypervisor::spmc_handler::CallStack;
+        let mut stack = CallStack::new();
+        stack.push(0x8001, 0x8002).unwrap();
+        stack.push(0x8002, 0x8003).unwrap();
+        stack.push(0x8003, 0x8004).unwrap();
+        assert!(stack.push(0x8004, 0x8005).is_err());
+        pass += 1;
+    }
+
+    // CS4: find_caller lookup
+    {
+        use hypervisor::spmc_handler::CallStack;
+        let mut stack = CallStack::new();
+        stack.push(0x8001, 0x8002).unwrap();
+        stack.push(0x8002, 0x8003).unwrap();
+        assert_eq!(stack.find_caller(0x8003), Some(0x8002));
+        assert_eq!(stack.find_caller(0x8002), Some(0x8001));
+        assert_eq!(stack.find_caller(0x8001), None);
+        pass += 1;
+    }
+
     hypervisor::log_info!("    {} assertions passed\n", pass);
 }
