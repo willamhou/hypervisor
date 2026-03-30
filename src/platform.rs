@@ -109,14 +109,26 @@ pub const SP2_STACK_TOP: u64 = SP2_LOAD_ADDR + SP2_MEM_SIZE;
 /// SP2 partition ID
 #[cfg(feature = "sel2")]
 pub const SP2_PARTITION_ID: u16 = 0x8002;
+/// SP3 load address in SEC_DRAM (loaded by TF-A BL2 from FIP)
+#[cfg(feature = "sel2")]
+pub const SP3_LOAD_ADDR: u64 = 0x0e50_0000;
+/// SP3 memory size (1MB)
+#[cfg(feature = "sel2")]
+pub const SP3_MEM_SIZE: u64 = 0x10_0000;
+/// SP3 stack pointer (top of SP3 region)
+#[cfg(feature = "sel2")]
+pub const SP3_STACK_TOP: u64 = SP3_LOAD_ADDR + SP3_MEM_SIZE;
+/// SP3 partition ID
+#[cfg(feature = "sel2")]
+pub const SP3_PARTITION_ID: u16 = 0x8003;
 /// Maximum number of Secure Partitions
 #[cfg(feature = "sel2")]
 pub const MAX_SPS: usize = 4;
 
 /// Secure heap start (for S-EL2 page table allocation)
 #[cfg(feature = "sel2")]
-pub const SECURE_HEAP_START: u64 = 0x0e50_0000;
-/// Secure heap size (~11MB, up to end of SEC_DRAM)
+pub const SECURE_HEAP_START: u64 = 0x0e60_0000;
+/// Secure heap size (~10MB, up to end of SEC_DRAM)
 #[cfg(feature = "sel2")]
 pub const SECURE_HEAP_SIZE: u64 = 0x0f00_0000 - SECURE_HEAP_START;
 

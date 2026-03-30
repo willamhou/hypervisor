@@ -284,6 +284,16 @@ build-sp-irq:
 	aarch64-linux-gnu-objcopy -O binary tfa/sp_irq/sp_irq.elf $(SP_IRQ_BIN)
 	@echo "SP IRQ binary: $(SP_IRQ_BIN)"
 
+# SP Relay binary (S-EL1, SP-to-SP testing)
+SP_RELAY_BIN := tfa/sp_relay/sp_relay.bin
+
+build-sp-relay:
+	@echo "Building SP Relay (S-EL1)..."
+	aarch64-linux-gnu-as -o tfa/sp_relay/sp_relay.o tfa/sp_relay/start.S
+	aarch64-linux-gnu-ld -T tfa/sp_relay/linker.ld -o tfa/sp_relay/sp_relay.elf tfa/sp_relay/sp_relay.o
+	aarch64-linux-gnu-objcopy -O binary tfa/sp_relay/sp_relay.elf $(SP_RELAY_BIN)
+	@echo "SP Relay binary: $(SP_RELAY_BIN)"
+
 # Build BL33 FF-A test client (sends FF-A SMCs to SPMC, prints PASS/FAIL)
 build-bl33-ffa-test:
 	@echo "Building BL33 FF-A test client..."
@@ -299,7 +309,7 @@ TFA_FLASH_SPMC := $(TFA_DIR)/flash-spmc.bin
 # 2. build-spmc: builds real SPMC binary
 # 3. build-bl33-ffa-test: builds FF-A test client binary
 # 4. Recipe: Docker overwrites bl32.bin with SPMC, bl33.bin with test client, then builds TF-A
-build-tfa-spmc: build-bl32-bl33 build-spmc build-sp-hello build-sp-irq build-bl33-ffa-test
+build-tfa-spmc: build-bl32-bl33 build-spmc build-sp-hello build-sp-irq build-sp-relay build-bl33-ffa-test
 	@echo "Replacing trivial bl32.bin with real SPMC..."
 	docker run --rm \
 	    -v $(PWD)/tfa:/output \
@@ -323,7 +333,7 @@ build-tfa-spmc: build-bl32-bl33 build-spmc build-sp-hello build-sp-irq build-bl3
 # Build TF-A with real SPMC (BL32) + SP Hello + PRELOADED_BL33_BASE for our hypervisor
 TFA_FLASH_FULL := $(TFA_DIR)/flash-full.bin
 
-build-tfa-full: build-bl32-bl33 build-spmc build-sp-hello build-sp-irq
+build-tfa-full: build-bl32-bl33 build-spmc build-sp-hello build-sp-irq build-sp-relay
 	@echo "Replacing bl32.bin with real SPMC..."
 	docker run --rm \
 	    -v $(PWD)/tfa:/output \

@@ -8,5 +8,10 @@
         "image": "sp_irq/sp_irq.bin",
         "pm": "sp_irq/sp_manifest.dts",
         "owner": "Plat"
+    },
+    "SP3": {
+        "image": "sp_relay/sp_relay.bin",
+        "pm": "sp_relay/sp_manifest.dts",
+        "owner": "Plat"
     }
 }

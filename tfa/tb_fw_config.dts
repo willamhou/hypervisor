@@ -14,5 +14,11 @@
 			load-address = <0x0e400000>;
 			owner = "Plat";
 		};
+
+		sp3 {
+			uuid = "00112233-0011-2233-0011-223300112233";
+			load-address = <0x0e500000>;
+			owner = "Plat";
+		};
 	};
 };
