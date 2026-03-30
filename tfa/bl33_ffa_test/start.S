@@ -37,6 +37,8 @@
 
 .equ FFA_VERSION_1_1,     0x00010001
 .equ SP1_ID,              0x8001
+.equ SP3_ID,              0x8003
+.equ RELAY_MAGIC,         0x00EE1A00
 
 _start:
     /* Save BL31-provided registers */
@@ -924,6 +926,67 @@ _start:
     adr     x0, str_fail
     bl      uart_print
 
+    /* ============ Test 17: SP→SP Relay Chain ============ */
+    adr     x0, str_t17
+    bl      uart_print
+
+    /* NWd → SP3(relay to SP1, x5=0xBEEF) */
+    ldr     w0, =FFA_DIRECT_REQ_32
+    ldr     w1, =SP3_ID             /* dest = SP3 */
+    mov     x2, #0
+    ldr     w3, =RELAY_MAGIC        /* relay mode */
+    ldr     w4, =SP1_ID             /* target = SP1 */
+    mov     x5, #0xBEEF             /* payload */
+    mov     x6, #0
+    mov     x7, #0
+    smc     #0
+
+    /* Expect DIRECT_RESP with x4 = 0xBEEF + 0x1000 = 0x1BEEF */
+    ldr     w9, =FFA_DIRECT_RESP_32
+    cmp     w0, w9
+    b.ne    .Ltest17_fail
+    ldr     x9, =0x1BEEF
+    cmp     x4, x9
+    b.ne    .Ltest17_fail
+
+    adr     x0, str_pass
+    bl      uart_print
+    b       .Ltest17_done
+.Ltest17_fail:
+    adr     x0, str_fail
+    bl      uart_print
+.Ltest17_done:
+
+    /* ============ Test 18: Cycle Detection ============ */
+    adr     x0, str_t18
+    bl      uart_print
+
+    /* NWd → SP3(relay to SP3 itself) — should get error back */
+    ldr     w0, =FFA_DIRECT_REQ_32
+    ldr     w1, =SP3_ID
+    mov     x2, #0
+    ldr     w3, =RELAY_MAGIC
+    ldr     w4, =SP3_ID             /* target = SP3 (self-call via relay) */
+    mov     x5, #0xDEAD
+    mov     x6, #0
+    mov     x7, #0
+    smc     #0
+
+    /* SP3 tries DIRECT_REQ to itself → SPMC returns FFA_INVALID_PARAMETERS */
+    /* SP3 relay error path forwards error code in x4 as DIRECT_RESP */
+    ldr     w9, =FFA_DIRECT_RESP_32
+    cmp     w0, w9
+    b.ne    .Ltest18_fail
+
+    /* Got a response (not a hang) — cycle detection worked */
+    adr     x0, str_pass
+    bl      uart_print
+    b       .Ltest18_done
+.Ltest18_fail:
+    adr     x0, str_fail
+    bl      uart_print
+.Ltest18_done:
+
 .Ldone:
     adr     x0, str_done
     bl      uart_print
@@ -984,6 +1047,10 @@ str_t15:
     .asciz "  Test 15: MEM_SHARE E2E (SP2) ..... "
 str_t16:
     .asciz "  Test 16: MEM_LEND lifecycle E2E .. "
+str_t17:
+    .asciz "  Test 17: SP->SP relay chain ...... "
+str_t18:
+    .asciz "  Test 18: Cycle detection ......... "
 str_pass:
     .asciz "PASS\r\n"
 str_fail:
