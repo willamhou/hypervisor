@@ -1049,45 +1049,50 @@ fn handle_sp_exit(sp: &mut crate::sp_context::SpContext, sp_id: u16) -> SmcResul
                 let source_id = (x1 >> 16) as u16;
                 let dest_id = (x1 & 0xFFFF) as u16;
 
+                let mut valid = true;
+
                 // Validation 1: source must match current SP
                 if source_id != sp_id {
                     sp.set_args(ffa::FFA_ERROR, 0, ffa::FFA_INVALID_PARAMETERS as u64, 0, 0, 0, 0, 0);
-                    continue;
+                    valid = false;
                 }
                 // Validation 2: no self-calls
-                if dest_id == sp_id {
+                if valid && dest_id == sp_id {
                     sp.set_args(ffa::FFA_ERROR, 0, ffa::FFA_INVALID_PARAMETERS as u64, 0, 0, 0, 0, 0);
-                    continue;
+                    valid = false;
                 }
                 // Validation 3: destination must exist
-                if !crate::sp_context::is_registered_sp(dest_id) {
+                if valid && !crate::sp_context::is_registered_sp(dest_id) {
                     sp.set_args(ffa::FFA_ERROR, 0, ffa::FFA_INVALID_PARAMETERS as u64, 0, 0, 0, 0, 0);
-                    continue;
+                    valid = false;
                 }
                 // Validation 4+5: cycle detection + push (atomic under CALL_STACK lock)
-                {
+                if valid {
                     let mut stack = CALL_STACK.lock();
                     if stack.contains(dest_id) {
                         sp.set_args(ffa::FFA_ERROR, 0, ffa::FFA_BUSY as u64, 0, 0, 0, 0, 0);
-                        continue;
-                    }
-                    if stack.push(sp_id, dest_id).is_err() {
+                        valid = false;
+                    } else if stack.push(sp_id, dest_id).is_err() {
                         sp.set_args(ffa::FFA_ERROR, 0, ffa::FFA_BUSY as u64, 0, 0, 0, 0, 0);
-                        continue;
+                        valid = false;
                     }
                 }
-                // Transition caller: Running → Blocked
-                if sp.transition_to(crate::sp_context::SpState::Blocked).is_err() {
-                    CALL_STACK.lock().pop();
-                    sp.set_args(ffa::FFA_ERROR, 0, ffa::FFA_DENIED as u64, 0, 0, 0, 0, 0);
-                    continue;
+                if valid {
+                    // Transition caller: Running → Blocked
+                    if sp.transition_to(crate::sp_context::SpState::Blocked).is_err() {
+                        CALL_STACK.lock().pop();
+                        sp.set_args(ffa::FFA_ERROR, 0, ffa::FFA_DENIED as u64, 0, 0, 0, 0, 0);
+                        // Fall through to re-enter SP with error
+                    } else {
+                        // Return sentinel — dispatch_to_sp() handles the recursive call
+                        return SmcResult8 {
+                            x0: SP_TO_SP_PENDING,
+                            x1: dest_id as u64,
+                            x2: 0, x3: 0, x4: 0, x5: 0, x6: 0, x7: 0,
+                        };
+                    }
                 }
-                // Return sentinel — dispatch_to_sp() handles the recursive call
-                return SmcResult8 {
-                    x0: SP_TO_SP_PENDING,
-                    x1: dest_id as u64,
-                    x2: 0, x3: 0, x4: 0, x5: 0, x6: 0, x7: 0,
-                };
+                // Validation failed: fall through to re-enter SP with FFA_ERROR in args
             }
             _ => {
                 // Normal exit (FFA_DIRECT_RESP, etc.)

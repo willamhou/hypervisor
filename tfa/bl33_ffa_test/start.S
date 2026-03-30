@@ -921,10 +921,11 @@ _start:
 
     adr     x0, str_pass
     bl      uart_print
-    b       .Ldone
+    b       .Ltest16_done
 .Lfail_16:
     adr     x0, str_fail
     bl      uart_print
+.Ltest16_done:
 
     /* ============ Test 17: SP→SP Relay Chain ============ */
     adr     x0, str_t17
@@ -941,11 +942,11 @@ _start:
     mov     x7, #0
     smc     #0
 
-    /* Expect DIRECT_RESP with x4 = 0xBEEF + 0x1000 = 0x1BEEF */
+    /* Expect DIRECT_RESP with x4 = 0xBEEF + 0x1000 = 0xCEEF */
     ldr     w9, =FFA_DIRECT_RESP_32
     cmp     w0, w9
     b.ne    .Ltest17_fail
-    ldr     x9, =0x1BEEF
+    ldr     x9, =0xCEEF
     cmp     x4, x9
     b.ne    .Ltest17_fail
 
