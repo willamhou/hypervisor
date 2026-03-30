@@ -110,8 +110,11 @@ impl CallStack {
 
 /// Global SP-to-SP call stack, protected by SpinLock.
 /// Lock ordering: CALL_STACK → SP_STORE_LOCK (never reverse).
-#[cfg(feature = "sel2")]
 pub static CALL_STACK: SpinLock<CallStack> = SpinLock::new(CallStack::new());
+
+/// Internal sentinel: SP issued DIRECT_REQ targeting another SP.
+/// dispatch_to_sp() must handle the recursive dispatch.
+const SP_TO_SP_PENDING: u64 = 0xFFFF_FFFF_FFFF_FFFE;
 
 /// Helper: read current CPU index (MPIDR_EL1.Aff0). Works at both NS-EL2 and S-EL2.
 #[cfg(feature = "sel2")]
@@ -656,7 +659,7 @@ fn dispatch_to_sp(req: &SmcResult8, sp_id: u16) -> SmcResult8 {
     };
 
     let cpu = sel2_cpu_id();
-    let sp = sp_guard.sp_mut();
+    let mut sp = sp_guard.sp_mut();
 
     // Claim ownership for initial dispatch (Idle -> Running).
     if !sp.try_claim_owner_cpu(cpu) {
@@ -716,8 +719,102 @@ fn dispatch_to_sp(req: &SmcResult8, sp_id: u16) -> SmcResult8 {
     CURRENT_RUNNING_SP[cpu].store(0, Ordering::Release);
     crate::arch::aarch64::peripherals::timer::disarm_preemption_timer();
 
-    // Handle SP exit — may loop if SP calls FF-A memory operations
-    let result = handle_sp_exit(sp, sp_id);
+    // Handle SP exit — may loop if SP calls FF-A operations or SP→SP DIRECT_REQ
+    let result;
+    loop {
+        let exit_result = handle_sp_exit(sp, sp_id);
+
+        if exit_result.x0 != SP_TO_SP_PENDING {
+            result = exit_result;
+            break;
+        }
+
+        // SP→SP DIRECT_REQ: caller is now Blocked, callee dispatch needed
+        let dest_id = exit_result.x1 as u16;
+
+        // Save caller state before entering callee
+        sp.save_el1_state();
+        let caller_cpu = sel2_cpu_id();
+        CURRENT_RUNNING_SP[caller_cpu].store(0, Ordering::Release);
+        crate::arch::aarch64::peripherals::timer::disarm_preemption_timer();
+        clear_secure_stage2();
+
+        // Build callee request from caller's saved registers (the DIRECT_REQ args)
+        let (cx0, cx1, cx2, cx3, cx4, cx5, cx6, cx7) = sp.get_args();
+        let callee_req = SmcResult8 {
+            x0: cx0, x1: cx1, x2: cx2, x3: cx3,
+            x4: cx4, x5: cx5, x6: cx6, x7: cx7,
+        };
+
+        // Drop caller's dispatch lock before acquiring callee's
+        drop(sp_guard);
+
+        // Recursive dispatch to callee SP
+        let callee_result = dispatch_to_sp(&callee_req, dest_id);
+
+        // Re-acquire caller's dispatch lock
+        sp_guard = match crate::sp_context::try_lock_sp(sp_id) {
+            Ok(g) => g,
+            Err(_) => {
+                CALL_STACK.lock().pop();
+                return make_error(ffa::FFA_DENIED as u64);
+            }
+        };
+        sp = sp_guard.sp_mut();
+
+        if callee_result.x0 == ffa::FFA_INTERRUPT {
+            // Chain preemption: Blocked → Preempted, do NOT pop stack
+            if sp.transition_to(crate::sp_context::SpState::Preempted).is_err() {
+                CALL_STACK.lock().pop();
+                return make_error(ffa::FFA_DENIED as u64);
+            }
+            sp.set_preempted_cpu(sel2_cpu_id());
+            result = callee_result;
+            break;
+        }
+
+        // Normal completion: pop stack frame, Blocked → Running
+        CALL_STACK.lock().pop();
+        if sp.transition_to(crate::sp_context::SpState::Running).is_err() {
+            return make_error(ffa::FFA_DENIED as u64);
+        }
+
+        // Write callee's response to caller's registers
+        sp.set_args(
+            callee_result.x0, callee_result.x1, callee_result.x2,
+            callee_result.x3, callee_result.x4, callee_result.x5,
+            callee_result.x6, callee_result.x7,
+        );
+
+        // Re-enter caller: restore S2, EL1, re-enter guest loop
+        if sp.transition_to(crate::sp_context::SpState::Idle).is_err() {
+            return make_error(ffa::FFA_DENIED as u64);
+        }
+        if sp.transition_to(crate::sp_context::SpState::Running).is_err() {
+            return make_error(ffa::FFA_DENIED as u64);
+        }
+
+        let re_cpu = sel2_cpu_id();
+        SP_IRQ_PREEMPTED[re_cpu].store(false, Ordering::Release);
+        inject_pending_virq(sp);
+        let s2 = crate::secure_stage2::SecureStage2Config::new_from_vsttbr(sp.vsttbr());
+        s2.install();
+        CURRENT_RUNNING_SP[re_cpu].store(sp_id, Ordering::Release);
+        sp.restore_el1_state();
+        crate::arch::aarch64::peripherals::timer::arm_preemption_timer();
+        pre_enter_guest(sp);
+
+        let _exit = unsafe {
+            crate::arch::aarch64::enter_guest(
+                sp.vcpu_ctx_mut() as *mut crate::arch::aarch64::regs::VcpuContext,
+            )
+        };
+        post_enter_guest(re_cpu);
+        sp.save_el1_state();
+        CURRENT_RUNNING_SP[re_cpu].store(0, Ordering::Release);
+        crate::arch::aarch64::peripherals::timer::disarm_preemption_timer();
+        // Loop back to handle_sp_exit() for the re-entered caller
+    }
 
     // Clear Secure Stage-2 and HCR_EL2 bits before returning to SPMD.
     clear_secure_stage2();
@@ -816,6 +913,8 @@ fn handle_sp_exit(sp: &mut crate::sp_context::SpContext, sp_id: u16) -> SmcResul
             && x0 != ffa::FFA_MEM_FRAG_RX
             && x0 != ffa::FFA_CONSOLE_LOG_32
             && x0 != ffa::FFA_CONSOLE_LOG_64
+            && x0 != ffa::FFA_MSG_SEND_DIRECT_REQ_32
+            && x0 != ffa::FFA_MSG_SEND_DIRECT_REQ_64
         {
             let ctx = sp.vcpu_ctx();
             let esr = ctx.sys_regs.esr_el2;
@@ -944,6 +1043,51 @@ fn handle_sp_exit(sp: &mut crate::sp_context::SpContext, sp_id: u16) -> SmcResul
                     result.x7,
                 );
                 continue; // re-enter SP
+            }
+            ffa::FFA_MSG_SEND_DIRECT_REQ_32 | ffa::FFA_MSG_SEND_DIRECT_REQ_64 => {
+                // SP→SP DIRECT_REQ: validate, push call stack, return sentinel
+                let source_id = (x1 >> 16) as u16;
+                let dest_id = (x1 & 0xFFFF) as u16;
+
+                // Validation 1: source must match current SP
+                if source_id != sp_id {
+                    sp.set_args(ffa::FFA_ERROR, 0, ffa::FFA_INVALID_PARAMETERS as u64, 0, 0, 0, 0, 0);
+                    continue;
+                }
+                // Validation 2: no self-calls
+                if dest_id == sp_id {
+                    sp.set_args(ffa::FFA_ERROR, 0, ffa::FFA_INVALID_PARAMETERS as u64, 0, 0, 0, 0, 0);
+                    continue;
+                }
+                // Validation 3: destination must exist
+                if !crate::sp_context::is_registered_sp(dest_id) {
+                    sp.set_args(ffa::FFA_ERROR, 0, ffa::FFA_INVALID_PARAMETERS as u64, 0, 0, 0, 0, 0);
+                    continue;
+                }
+                // Validation 4+5: cycle detection + push (atomic under CALL_STACK lock)
+                {
+                    let mut stack = CALL_STACK.lock();
+                    if stack.contains(dest_id) {
+                        sp.set_args(ffa::FFA_ERROR, 0, ffa::FFA_BUSY as u64, 0, 0, 0, 0, 0);
+                        continue;
+                    }
+                    if stack.push(sp_id, dest_id).is_err() {
+                        sp.set_args(ffa::FFA_ERROR, 0, ffa::FFA_BUSY as u64, 0, 0, 0, 0, 0);
+                        continue;
+                    }
+                }
+                // Transition caller: Running → Blocked
+                if sp.transition_to(crate::sp_context::SpState::Blocked).is_err() {
+                    CALL_STACK.lock().pop();
+                    sp.set_args(ffa::FFA_ERROR, 0, ffa::FFA_DENIED as u64, 0, 0, 0, 0, 0);
+                    continue;
+                }
+                // Return sentinel — dispatch_to_sp() handles the recursive call
+                return SmcResult8 {
+                    x0: SP_TO_SP_PENDING,
+                    x1: dest_id as u64,
+                    x2: 0, x3: 0, x4: 0, x5: 0, x6: 0, x7: 0,
+                };
             }
             _ => {
                 // Normal exit (FFA_DIRECT_RESP, etc.)
@@ -1212,6 +1356,27 @@ pub fn dispatch_ffa_as_sp(req: &SmcResult8, sp_id: u16, vsttbr: u64) -> SmcResul
             handle_spmc_mem_retrieve(req, current_sp)
         }
         ffa::FFA_MEM_RELINQUISH => handle_spmc_mem_relinquish(req, current_sp),
+        ffa::FFA_MSG_SEND_DIRECT_REQ_32 | ffa::FFA_MSG_SEND_DIRECT_REQ_64 => {
+            // SP→SP DIRECT_REQ validation (unit test path — no real SP dispatch)
+            let source_id = (req.x1 >> 16) as u16;
+            let dest_id = (req.x1 & 0xFFFF) as u16;
+            if source_id != sp_id {
+                return make_error(ffa::FFA_INVALID_PARAMETERS as u64);
+            }
+            if dest_id == sp_id {
+                return make_error(ffa::FFA_INVALID_PARAMETERS as u64);
+            }
+            if !crate::sp_context::is_registered_sp(dest_id) {
+                return make_error(ffa::FFA_INVALID_PARAMETERS as u64);
+            }
+            let stack = CALL_STACK.lock();
+            if stack.contains(dest_id) {
+                return make_error(ffa::FFA_BUSY as u64);
+            }
+            drop(stack);
+            // In unit tests, cannot actually dispatch — return DENIED
+            make_error(ffa::FFA_DENIED as u64)
+        }
         _ => dispatch_ffa(req),
     }
 }

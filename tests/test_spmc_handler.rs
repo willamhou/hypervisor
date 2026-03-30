@@ -1633,6 +1633,78 @@ pub fn run_tests() {
         pass += 2;
     }
 
+    // ── SP→SP DIRECT_REQ routing tests ──
+
+    // SP2SP1: SP→SP self-call blocked (FFA_INVALID_PARAMETERS)
+    {
+        let mut req = zero_req(ffa::FFA_MSG_SEND_DIRECT_REQ_32);
+        req.x1 = ((0x8001u16 as u64) << 16)
+            | (0x8001u16 as u64);
+        let resp = dispatch_ffa_as_sp(&req, 0x8001u16, 0);
+        assert_eq!(resp.x0, ffa::FFA_ERROR);
+        assert_eq!(resp.x2 as i32, ffa::FFA_INVALID_PARAMETERS as i32);
+        pass += 1;
+    }
+
+    // SP2SP2: SP→SP source spoofing blocked
+    {
+        let mut req = zero_req(ffa::FFA_MSG_SEND_DIRECT_REQ_32);
+        // SP1 claims to be SP2
+        req.x1 = ((0x8002u16 as u64) << 16)
+            | (0x8001u16 as u64);
+        let resp = dispatch_ffa_as_sp(&req, 0x8001u16, 0);
+        assert_eq!(resp.x0, ffa::FFA_ERROR);
+        assert_eq!(resp.x2 as i32, ffa::FFA_INVALID_PARAMETERS as i32);
+        pass += 1;
+    }
+
+    // SP2SP3: SP→SP invalid destination
+    {
+        let mut req = zero_req(ffa::FFA_MSG_SEND_DIRECT_REQ_32);
+        req.x1 = ((0x8001u16 as u64) << 16)
+            | 0x8099; // non-existent SP
+        let resp = dispatch_ffa_as_sp(&req, 0x8001u16, 0);
+        assert_eq!(resp.x0, ffa::FFA_ERROR);
+        assert_eq!(resp.x2 as i32, ffa::FFA_INVALID_PARAMETERS as i32);
+        pass += 1;
+    }
+
+    // SP2SP4: SP→SP DIRECT_REQ_64 self-call also blocked
+    {
+        let mut req = zero_req(ffa::FFA_MSG_SEND_DIRECT_REQ_64);
+        req.x1 = ((0x8001u16 as u64) << 16)
+            | (0x8001u16 as u64);
+        let resp = dispatch_ffa_as_sp(&req, 0x8001u16, 0);
+        assert_eq!(resp.x0, ffa::FFA_ERROR);
+        assert_eq!(resp.x2 as i32, ffa::FFA_INVALID_PARAMETERS as i32);
+        pass += 1;
+    }
+
+    // SP2SP5: Cycle detection — manually push frame, then try DIRECT_REQ to stacked SP
+    {
+        {
+            let mut stack = hypervisor::spmc_handler::CALL_STACK.lock();
+            stack.push(
+                0x8002u16,
+                0x8001u16,
+            ).unwrap();
+        }
+        // SP1 tries to call SP2 — cycle! (SP2 is already in the stack as caller)
+        let mut req = zero_req(ffa::FFA_MSG_SEND_DIRECT_REQ_32);
+        req.x1 = ((0x8001u16 as u64) << 16)
+            | (0x8002u16 as u64);
+        let resp = dispatch_ffa_as_sp(&req, 0x8001u16, 0);
+        assert_eq!(resp.x0, ffa::FFA_ERROR);
+        assert_eq!(resp.x2 as i32, ffa::FFA_BUSY as i32);
+
+        // Clean up call stack
+        {
+            let mut stack = hypervisor::spmc_handler::CALL_STACK.lock();
+            stack.pop();
+        }
+        pass += 1;
+    }
+
     // ── CallStack unit tests ──
 
     // CS1: push/pop basic operations
