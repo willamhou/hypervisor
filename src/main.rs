@@ -452,7 +452,90 @@ pub extern "C" fn rust_main_sel2(
         }
     }
 
-    // 5.9. Register secondary entry point with SPMD
+    // 5.9. Boot SP3 (if present at SP3_LOAD_ADDR)
+    {
+        let sp3_pkg_base = hypervisor::platform::SP3_LOAD_ADDR;
+        // SAFETY: reads SP3 package magic from trusted BL2-loaded memory.
+        let sp3_magic = unsafe { core::ptr::read_volatile(sp3_pkg_base as *const u32) };
+        if sp3_magic == 0x474B5053 {
+            // "SPKG" magic found
+            hypervisor::log_info!("[SPMC] SP3 package found at {:#018x}\n", sp3_pkg_base);
+
+            // Build Secure Stage-2 for SP3
+            let mapper3 = hypervisor::secure_stage2::build_sp_stage2(
+                hypervisor::platform::SP3_LOAD_ADDR,
+                hypervisor::platform::SP3_MEM_SIZE,
+            )
+            .expect("Failed to build SP3 Stage-2");
+            let s2_config3 = hypervisor::secure_stage2::SecureStage2Config::new(mapper3.l0_addr());
+
+            // Parse SPKG header for SP3
+            // SAFETY: SP3 SPKG header is loaded by BL2 at trusted physical address.
+            let sp3_img_offset = unsafe {
+                let ptr = sp3_pkg_base as *const u32;
+                core::ptr::read_volatile(ptr.add(4)) as u64
+            };
+            let sp3_entry = sp3_pkg_base + sp3_img_offset;
+
+            hypervisor::log_info!("[SPMC] SP3 entry={:#018x}\n", sp3_entry);
+
+            // SP3 UUID from sp_manifest.dts (byte-swapped)
+            let sp3_uuid: [u32; 4] = [0x33221100, 0x33221100, 0x33221100, 0x33221100];
+            let mut sp3 = hypervisor::sp_context::SpContext::new(
+                hypervisor::platform::SP3_PARTITION_ID,
+                sp3_entry,
+                hypervisor::platform::SP3_STACK_TOP,
+                sp3_uuid,
+            );
+            sp3.set_vsttbr(s2_config3.vsttbr);
+
+            // SP3 has no owned INTIDs (relay only)
+            sp3.set_owned_intids([0, 0, 0, 0]);
+
+            // Install SP3's Stage-2, clear EL1 state, ERET to SP3
+            s2_config3.install();
+            // SAFETY: clears EL1 sysregs before first SP3 entry.
+            unsafe {
+                core::arch::asm!(
+                    "msr sctlr_el1, xzr",
+                    "msr tcr_el1, xzr",
+                    "msr ttbr0_el1, xzr",
+                    "msr vbar_el1, xzr",
+                    "isb",
+                    options(nostack, nomem),
+                );
+            }
+
+            {
+                use hypervisor::arch::aarch64::enter_guest;
+                use hypervisor::arch::aarch64::regs::VcpuContext;
+                // SAFETY: pointer is to locked SP3 VcpuContext prepared for guest entry.
+                let _exit = unsafe { enter_guest(sp3.vcpu_ctx_mut() as *mut VcpuContext) };
+            }
+
+            // Save SP3's EL1 sysregs after initial boot
+            sp3.save_el1_state();
+
+            // Verify SP3 called FFA_MSG_WAIT
+            let (x0, _, _, _, _, _, _, _) = sp3.get_args();
+            if x0 == hypervisor::ffa::FFA_MSG_WAIT {
+                hypervisor::log_info!("[SPMC] SP3 booted, now Idle (FFA_MSG_WAIT received)\n");
+                sp3.transition_to(hypervisor::sp_context::SpState::Idle)
+                    .expect("SP3 transition failed");
+            } else {
+                hypervisor::log_warn!(
+                    "[SPMC] WARNING: SP3 did not call FFA_MSG_WAIT, x0={:#018x}\n",
+                    x0
+                );
+            }
+
+            hypervisor::sp_context::register_sp(sp3);
+        } else {
+            hypervisor::log_info!("[SPMC] No SP3 package found (two-SP mode)\n");
+        }
+    }
+
+    // 5.10. Register secondary entry point with SPMD
     {
         extern "C" {
             fn secondary_entry_sel2();
