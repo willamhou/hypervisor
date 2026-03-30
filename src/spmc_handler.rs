@@ -1222,6 +1222,95 @@ fn resume_preempted_sp(sp_id: u16) -> SmcResult8 {
     crate::arch::aarch64::peripherals::timer::disarm_preemption_timer();
 
     let result = handle_sp_exit(sp, sp_id);
+
+    // Check if this SP was a callee in an SP→SP chain.
+    // If so, chain-resume the caller instead of returning to NWd.
+    let caller_id = CALL_STACK.lock().find_caller(sp_id);
+    if let Some(caller) = caller_id {
+        // Pop the frame {caller, sp_id}
+        CALL_STACK.lock().pop();
+
+        // Drop callee's lock before acquiring caller's
+        drop(sp_guard);
+
+        // Transition caller: Preempted → Running
+        let mut caller_guard = match crate::sp_context::try_lock_sp(caller) {
+            Ok(g) => g,
+            Err(_) => {
+                clear_secure_stage2();
+                return make_error(ffa::FFA_DENIED as u64);
+            }
+        };
+        let caller_sp = caller_guard.sp_mut();
+
+        match caller_sp.owner_cpu() {
+            Some(owner) if owner == cpu => {}
+            Some(owner) => {
+                if !caller_sp.try_migrate_owner_cpu(owner, cpu) {
+                    clear_secure_stage2();
+                    return make_error(ffa::FFA_BUSY as u64);
+                }
+            }
+            None => {
+                if !caller_sp.try_claim_owner_cpu(cpu) {
+                    clear_secure_stage2();
+                    return make_error(ffa::FFA_BUSY as u64);
+                }
+            }
+        }
+
+        if caller_sp
+            .try_transition(
+                crate::sp_context::SpState::Preempted,
+                crate::sp_context::SpState::Running,
+            )
+            .is_err()
+        {
+            clear_secure_stage2();
+            return make_error(ffa::FFA_DENIED as u64);
+        }
+        caller_sp.clear_preempted_cpu();
+
+        // Write callee's response to caller's registers
+        caller_sp.set_args(
+            result.x0, result.x1, result.x2, result.x3,
+            result.x4, result.x5, result.x6, result.x7,
+        );
+
+        // Chain-resume: re-enter caller SP
+        if caller_sp.transition_to(crate::sp_context::SpState::Idle).is_err() {
+            clear_secure_stage2();
+            return make_error(ffa::FFA_DENIED as u64);
+        }
+        if caller_sp.transition_to(crate::sp_context::SpState::Running).is_err() {
+            clear_secure_stage2();
+            return make_error(ffa::FFA_DENIED as u64);
+        }
+
+        SP_IRQ_PREEMPTED[cpu].store(false, Ordering::Release);
+        inject_pending_virq(caller_sp);
+        let s2 = crate::secure_stage2::SecureStage2Config::new_from_vsttbr(caller_sp.vsttbr());
+        s2.install();
+        CURRENT_RUNNING_SP[cpu].store(caller, Ordering::Release);
+        caller_sp.restore_el1_state();
+        crate::arch::aarch64::peripherals::timer::arm_preemption_timer();
+        pre_enter_guest(caller_sp);
+
+        let _exit = unsafe {
+            crate::arch::aarch64::enter_guest(
+                caller_sp.vcpu_ctx_mut() as *mut crate::arch::aarch64::regs::VcpuContext,
+            )
+        };
+        post_enter_guest(cpu);
+        caller_sp.save_el1_state();
+        CURRENT_RUNNING_SP[cpu].store(0, Ordering::Release);
+        crate::arch::aarch64::peripherals::timer::disarm_preemption_timer();
+
+        let caller_result = handle_sp_exit(caller_sp, caller);
+        clear_secure_stage2();
+        return caller_result;
+    }
+
     clear_secure_stage2();
     result
 }
