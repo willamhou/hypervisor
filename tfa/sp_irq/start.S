@@ -39,6 +39,8 @@
 .equ FFA_MEM_RELINQUISH,      0x84000076
 .equ MEM_TEST_MAGIC,          0xABCD0001
 .equ SHARED_PAGE_MAGIC,       0xCAFEFACE
+.equ SP_RETRIEVE_MAGIC,       0xABCD0003
+.equ SP2_SHARE_WRITTEN,       0xFACE0002
 
 .equ SP2_STACK_TOP,      0x0e500000
 
@@ -106,6 +108,11 @@ _start:
     ldr     x8, =MEM_TEST_MAGIC
     cmp     x3, x8
     b.eq    .Lmem_test
+
+    /* Check for SP-to-SP retrieve test: x3 == SP_RETRIEVE_MAGIC */
+    ldr     x8, =SP_RETRIEVE_MAGIC
+    cmp     x3, x8
+    b.eq    .Lretrieve_test
 
     /* Check for IRQ slow-path trigger: x3 == 0xDEADBEEF */
     ldr     x8, =0xDEADBEEF
@@ -242,6 +249,80 @@ _start:
 
 .Lmem_test_error:
     /* RETRIEVE failed — respond with error in x4 */
+    mov     x15, x23
+    bl      .Lload_resp_id
+    mov     x1, x19
+    mov     x2, xzr
+    mov     x3, xzr
+    mov     x4, xzr
+    mov     x5, xzr
+    mov     x6, xzr
+    mov     x7, xzr
+    smc     #0
+    b       .Lmsg_loop
+
+.Lretrieve_test:
+    /* SP-to-SP retrieve test: x3=SP_RETRIEVE_MAGIC, x4=handle_lo, x5=handle_hi, x6=page_ipa
+     *
+     * 1. FFA_MEM_RETRIEVE_REQ_32(handle)
+     * 2. Read page at x6 → save old value
+     * 3. Write SP2_SHARE_WRITTEN to page
+     * 4. FFA_MEM_RELINQUISH(handle)
+     * 5. Return DIRECT_RESP: x4=handle_lo+0x5000, x5=old_value_read
+     */
+    mov     x19, x1                 /* response x1 */
+    mov     x20, x4                 /* handle_lo */
+    mov     x21, x5                 /* handle_hi */
+    mov     x22, x6                 /* page IPA */
+    mov     x23, x15                /* req type */
+
+    /* Step 1: FFA_MEM_RETRIEVE_REQ_32 */
+    ldr     x0, =FFA_MEM_RETRIEVE_REQ_32
+    mov     x1, x20
+    mov     x2, x21
+    mov     x3, xzr
+    mov     x4, xzr
+    mov     x5, xzr
+    mov     x6, xzr
+    mov     x7, xzr
+    smc     #0
+
+    ldr     x8, =FFA_MEM_RETRIEVE_RESP
+    cmp     x0, x8
+    b.ne    .Lretrieve_error
+
+    /* Step 2: Read old value from shared page */
+    ldr     w28, [x22]              /* x28 = old value (SP1's write) */
+
+    /* Step 3: Write our magic to shared page */
+    ldr     w8, =SP2_SHARE_WRITTEN
+    str     w8, [x22]
+
+    /* Step 4: FFA_MEM_RELINQUISH */
+    ldr     x0, =FFA_MEM_RELINQUISH
+    mov     x1, x20
+    mov     x2, x21
+    mov     x3, xzr
+    mov     x4, xzr
+    mov     x5, xzr
+    mov     x6, xzr
+    mov     x7, xzr
+    smc     #0
+
+    /* Step 5: DIRECT_RESP with x4=handle_lo+0x5000, x5=old_value_read */
+    mov     x15, x23
+    bl      .Lload_resp_id
+    mov     x1, x19
+    mov     x2, xzr
+    ldr     x3, =SP_RETRIEVE_MAGIC
+    add     x4, x20, #0x5000
+    mov     x5, x28                 /* old value read from page */
+    mov     x6, xzr
+    mov     x7, xzr
+    smc     #0
+    b       .Lmsg_loop
+
+.Lretrieve_error:
     mov     x15, x23
     bl      .Lload_resp_id
     mov     x1, x19
