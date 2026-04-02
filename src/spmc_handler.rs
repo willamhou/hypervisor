@@ -983,57 +983,20 @@ fn handle_sp_exit(sp: &mut crate::sp_context::SpContext, sp_id: u16) -> SmcResul
             }
             ffa::FFA_MEM_SHARE_32 | ffa::FFA_MEM_SHARE_64
             | ffa::FFA_MEM_LEND_32 | ffa::FFA_MEM_LEND_64 => {
-                // SP-initiated MEM_SHARE/LEND: validate sender, record share
                 let is_lend = x0 == ffa::FFA_MEM_LEND_32 || x0 == ffa::FFA_MEM_LEND_64;
-                let sender_id = ((x1 >> 16) & 0xFFFF) as u16;
-                let receiver_id = (x5 & 0xFFFF) as u16;
-
-                if sender_id != sp_id {
-                    sp.set_args(ffa::FFA_ERROR, 0, ffa::FFA_INVALID_PARAMETERS as u64, 0, 0, 0, 0, 0);
-                } else if receiver_id == sp_id {
-                    sp.set_args(ffa::FFA_ERROR, 0, ffa::FFA_INVALID_PARAMETERS as u64, 0, 0, 0, 0, 0);
-                } else if !crate::sp_context::is_registered_sp(receiver_id) {
-                    sp.set_args(ffa::FFA_ERROR, 0, ffa::FFA_INVALID_PARAMETERS as u64, 0, 0, 0, 0, 0);
-                } else {
-                    let ipa = x3;
-                    let page_count = x4 as u32;
-                    if page_count == 0 || page_count > 65536 || (ipa & 0xFFF) != 0 {
-                        sp.set_args(ffa::FFA_ERROR, 0, ffa::FFA_INVALID_PARAMETERS as u64, 0, 0, 0, 0, 0);
-                    } else if ipa.checked_add(page_count as u64 * PAGE_SIZE_4KB).is_none() {
-                        sp.set_args(ffa::FFA_ERROR, 0, ffa::FFA_INVALID_PARAMETERS as u64, 0, 0, 0, 0, 0);
-                    } else {
-                        let ranges = [(ipa, page_count)];
-                        match record_spmc_share(sender_id, receiver_id, &ranges, is_lend) {
-                            Some(handle) => {
-                                sp.set_args(
-                                    ffa::FFA_SUCCESS_32, 0,
-                                    handle & 0xFFFF_FFFF, handle >> 32,
-                                    0, 0, 0, 0,
-                                );
-                            }
-                            None => {
-                                sp.set_args(ffa::FFA_ERROR, 0, ffa::FFA_NO_MEMORY as u64, 0, 0, 0, 0, 0);
-                            }
-                        }
-                    }
+                match validate_sp_share(sp_id, x1, x3, x4, x5, is_lend) {
+                    Ok(handle) => sp.set_args(
+                        ffa::FFA_SUCCESS_32, 0,
+                        handle & 0xFFFF_FFFF, handle >> 32,
+                        0, 0, 0, 0,
+                    ),
+                    Err(code) => sp.set_args(ffa::FFA_ERROR, 0, code, 0, 0, 0, 0, 0),
                 }
             }
             ffa::FFA_MEM_RECLAIM => {
-                // SP-initiated MEM_RECLAIM: validate sender owns the share
-                let handle = (x1 & 0xFFFF_FFFF) | (x2 << 32);
-                match lookup_spmc_share(handle) {
-                    Some((sender, _, _, _, _, _)) if sender == sp_id => {
-                        match reclaim_spmc_share(handle) {
-                            Ok(()) => sp.set_args(ffa::FFA_SUCCESS_32, 0, 0, 0, 0, 0, 0, 0),
-                            Err(code) => sp.set_args(ffa::FFA_ERROR, 0, code as u64, 0, 0, 0, 0, 0),
-                        }
-                    }
-                    Some(_) => {
-                        sp.set_args(ffa::FFA_ERROR, 0, ffa::FFA_DENIED as u64, 0, 0, 0, 0, 0);
-                    }
-                    None => {
-                        sp.set_args(ffa::FFA_ERROR, 0, ffa::FFA_INVALID_PARAMETERS as u64, 0, 0, 0, 0, 0);
-                    }
+                match validate_sp_reclaim(sp_id, x1, x2) {
+                    Ok(()) => sp.set_args(ffa::FFA_SUCCESS_32, 0, 0, 0, 0, 0, 0, 0),
+                    Err(code) => sp.set_args(ffa::FFA_ERROR, 0, code, 0, 0, 0, 0, 0),
                 }
             }
             ffa::FFA_MEM_FRAG_RX => {
@@ -1533,51 +1496,20 @@ pub fn dispatch_ffa_as_sp(req: &SmcResult8, sp_id: u16, vsttbr: u64) -> SmcResul
         }
         ffa::FFA_MEM_SHARE_32 | ffa::FFA_MEM_SHARE_64
         | ffa::FFA_MEM_LEND_32 | ffa::FFA_MEM_LEND_64 => {
-            // SP-initiated MEM_SHARE/LEND (unit test path)
             let is_lend = req.x0 == ffa::FFA_MEM_LEND_32 || req.x0 == ffa::FFA_MEM_LEND_64;
-            let sender_from_req = ((req.x1 >> 16) & 0xFFFF) as u16;
-            let receiver_id = (req.x5 & 0xFFFF) as u16;
-            if sender_from_req != sp_id {
-                return make_error(ffa::FFA_INVALID_PARAMETERS as u64);
-            }
-            if receiver_id == sp_id {
-                return make_error(ffa::FFA_INVALID_PARAMETERS as u64);
-            }
-            if !crate::sp_context::is_registered_sp(receiver_id) {
-                return make_error(ffa::FFA_INVALID_PARAMETERS as u64);
-            }
-            let ipa = req.x3;
-            let page_count = req.x4 as u32;
-            if page_count == 0 || page_count > 65536 || (ipa & 0xFFF) != 0 {
-                return make_error(ffa::FFA_INVALID_PARAMETERS as u64);
-            }
-            if ipa.checked_add(page_count as u64 * PAGE_SIZE_4KB).is_none() {
-                return make_error(ffa::FFA_INVALID_PARAMETERS as u64);
-            }
-            let ranges = [(ipa, page_count)];
-            match record_spmc_share(sp_id, receiver_id, &ranges, is_lend) {
-                Some(handle) => SmcResult8 {
-                    x0: ffa::FFA_SUCCESS_32,
-                    x1: 0,
-                    x2: handle & 0xFFFF_FFFF,
-                    x3: handle >> 32,
+            match validate_sp_share(sp_id, req.x1, req.x3, req.x4, req.x5, is_lend) {
+                Ok(handle) => SmcResult8 {
+                    x0: ffa::FFA_SUCCESS_32, x1: 0,
+                    x2: handle & 0xFFFF_FFFF, x3: handle >> 32,
                     x4: 0, x5: 0, x6: 0, x7: 0,
                 },
-                None => make_error(ffa::FFA_NO_MEMORY as u64),
+                Err(code) => make_error(code),
             }
         }
         ffa::FFA_MEM_RECLAIM => {
-            // SP-initiated MEM_RECLAIM (unit test path)
-            let handle = (req.x1 & 0xFFFF_FFFF) | (req.x2 << 32);
-            match lookup_spmc_share(handle) {
-                Some((sender, _, _, _, _, _)) if sender == sp_id => {
-                    match reclaim_spmc_share(handle) {
-                        Ok(()) => make_success(),
-                        Err(code) => make_error(code as u64),
-                    }
-                }
-                Some(_) => make_error(ffa::FFA_DENIED as u64),
-                None => make_error(ffa::FFA_INVALID_PARAMETERS as u64),
+            match validate_sp_reclaim(sp_id, req.x1, req.x2) {
+                Ok(()) => make_success(),
+                Err(code) => make_error(code),
             }
         }
         _ => dispatch_ffa(req),
@@ -2722,6 +2654,55 @@ fn handle_spmc_mem_reclaim(req: &SmcResult8) -> SmcResult8 {
             x7: 0,
         },
         Err(code) => make_error(code as u64),
+    }
+}
+
+/// Validate and record an SP-initiated MEM_SHARE/LEND.
+/// Returns Ok(handle) on success, Err(error_code) on validation failure.
+fn validate_sp_share(
+    sp_id: u16,
+    x1: u64,
+    x3: u64,
+    x4: u64,
+    x5: u64,
+    is_lend: bool,
+) -> Result<u64, u64> {
+    let sender_id = ((x1 >> 16) & 0xFFFF) as u16;
+    let receiver_id = (x5 & 0xFFFF) as u16;
+    if sender_id != sp_id {
+        return Err(ffa::FFA_INVALID_PARAMETERS as u64);
+    }
+    if receiver_id == sp_id {
+        return Err(ffa::FFA_INVALID_PARAMETERS as u64);
+    }
+    if !crate::sp_context::is_registered_sp(receiver_id) {
+        return Err(ffa::FFA_INVALID_PARAMETERS as u64);
+    }
+    let ipa = x3;
+    let page_count = x4 as u32;
+    if page_count == 0 || page_count > 65536 || (ipa & 0xFFF) != 0 {
+        return Err(ffa::FFA_INVALID_PARAMETERS as u64);
+    }
+    if (page_count as u64).checked_mul(PAGE_SIZE_4KB).is_none() {
+        return Err(ffa::FFA_INVALID_PARAMETERS as u64);
+    }
+    if ipa.checked_add(page_count as u64 * PAGE_SIZE_4KB).is_none() {
+        return Err(ffa::FFA_INVALID_PARAMETERS as u64);
+    }
+    let ranges = [(ipa, page_count)];
+    record_spmc_share(sp_id, receiver_id, &ranges, is_lend).ok_or(ffa::FFA_NO_MEMORY as u64)
+}
+
+/// Validate and execute an SP-initiated MEM_RECLAIM.
+/// Returns Ok(()) on success, Err(error_code) on failure.
+fn validate_sp_reclaim(sp_id: u16, x1: u64, x2: u64) -> Result<(), u64> {
+    let handle = (x1 & 0xFFFF_FFFF) | (x2 << 32);
+    match lookup_spmc_share(handle) {
+        Some((sender, _, _, _, _, _)) if sender == sp_id => {
+            reclaim_spmc_share(handle).map_err(|code| code as u64)
+        }
+        Some(_) => Err(ffa::FFA_DENIED as u64),
+        None => Err(ffa::FFA_INVALID_PARAMETERS as u64),
     }
 }
 
