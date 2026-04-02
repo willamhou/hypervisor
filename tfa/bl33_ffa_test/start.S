@@ -37,8 +37,12 @@
 
 .equ FFA_VERSION_1_1,     0x00010001
 .equ SP1_ID,              0x8001
+.equ SP2_ID,              0x8002
 .equ SP3_ID,              0x8003
 .equ RELAY_MAGIC,         0x00EE1A00
+.equ SP_TO_SP_SHARE_MAGIC, 0xABCD0002
+.equ SP_RETRIEVE_MAGIC,   0xABCD0003
+.equ SP1_SHARE_WRITTEN,   0xFACE0001
 
 _start:
     /* Save BL31-provided registers */
@@ -988,6 +992,76 @@ _start:
     bl      uart_print
 .Ltest18_done:
 
+    /* ============ Test 19: SP-to-SP MEM_SHARE ============ */
+    adr     x0, str_t19
+    bl      uart_print
+
+    /* Step 1: Tell SP1 to MEM_SHARE a page with SP2 */
+    ldr     w0, =FFA_DIRECT_REQ_32
+    movz    x1, #SP1_ID
+    movk    x1, #0x0001, lsl #16       /* source=NWd(0x0001), dest=SP1 */
+    mov     x2, xzr
+    ldr     w3, =SP_TO_SP_SHARE_MAGIC  /* share test command */
+    mov     x4, xzr
+    mov     x5, xzr
+    mov     x6, xzr
+    movz    x7, #SP2_ID                /* receiver = SP2 */
+    smc     #0
+
+    /* Verify: DIRECT_RESP from SP1 */
+    ldr     w9, =FFA_DIRECT_RESP_32
+    cmp     w0, w9
+    b.ne    .Ltest19_fail
+
+    /* Verify: x3 == SP_TO_SP_SHARE_MAGIC (echo) */
+    ldr     w9, =SP_TO_SP_SHARE_MAGIC
+    cmp     w3, w9
+    b.ne    .Ltest19_fail
+
+    /* Save handle + page IPA from SP1's response */
+    mov     x24, x4                    /* handle_lo */
+    mov     x25, x5                    /* handle_hi */
+    mov     x26, x6                    /* page IPA (SP1_SHARE_PAGE) */
+
+    /* Verify handle is non-zero */
+    orr     x9, x24, x25
+    cbz     x9, .Ltest19_fail
+
+    /* Step 2: Tell SP2 to RETRIEVE + read + write + RELINQUISH */
+    ldr     w0, =FFA_DIRECT_REQ_32
+    movz    x1, #SP2_ID
+    movk    x1, #0x0001, lsl #16       /* source=NWd, dest=SP2 */
+    mov     x2, xzr
+    ldr     w3, =SP_RETRIEVE_MAGIC
+    mov     x4, x24                    /* handle_lo */
+    mov     x5, x25                    /* handle_hi */
+    mov     x6, x26                    /* page IPA */
+    mov     x7, xzr
+    smc     #0
+
+    /* Verify: DIRECT_RESP from SP2 */
+    ldr     w9, =FFA_DIRECT_RESP_32
+    cmp     w0, w9
+    b.ne    .Ltest19_fail
+
+    /* Verify: x4 == handle_lo + 0x5000 (retrieve test signature) */
+    add     x9, x24, #0x5000
+    cmp     x4, x9
+    b.ne    .Ltest19_fail
+
+    /* Verify: x5 == SP1_SHARE_WRITTEN (SP2 read SP1's data!) */
+    ldr     w9, =SP1_SHARE_WRITTEN
+    cmp     w5, w9
+    b.ne    .Ltest19_fail
+
+    adr     x0, str_pass
+    bl      uart_print
+    b       .Ltest19_done
+.Ltest19_fail:
+    adr     x0, str_fail
+    bl      uart_print
+.Ltest19_done:
+
 .Ldone:
     adr     x0, str_done
     bl      uart_print
@@ -1052,6 +1126,8 @@ str_t17:
     .asciz "  Test 17: SP->SP relay chain ...... "
 str_t18:
     .asciz "  Test 18: Cycle detection ......... "
+str_t19:
+    .asciz "  Test 19: SP-to-SP MEM_SHARE ...... "
 str_pass:
     .asciz "PASS\r\n"
 str_fail:
