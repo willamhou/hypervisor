@@ -1760,5 +1760,186 @@ pub fn run_tests() {
         pass += 1;
     }
 
+    // ── SP-to-SP MEM_SHARE tests ──
+
+    // SPMEM1-4: Full lifecycle SP1→SP2 (SHARE, RETRIEVE, RELINQUISH, RECLAIM)
+    {
+        let mut req = zero_req(ffa::FFA_MEM_SHARE_32);
+        req.x1 = (0x8001u64) << 16; // sender = SP1
+        req.x3 = 0x70000000; // IPA
+        req.x4 = 1; // 1 page
+        req.x5 = 0x8002; // receiver = SP2
+        let resp = dispatch_ffa_as_sp(&req, 0x8001, 0);
+        assert_eq!(resp.x0, ffa::FFA_SUCCESS_32);
+        let h = resp.x2 | (resp.x3 << 32);
+        assert!(h > 0);
+        pass += 1;
+
+        // SP2 RETRIEVE
+        let mut req2 = zero_req(ffa::FFA_MEM_RETRIEVE_REQ_32);
+        req2.x1 = h & 0xFFFF_FFFF;
+        req2.x2 = h >> 32;
+        let resp2 = dispatch_ffa_as_sp(&req2, 0x8002, 0);
+        assert_eq!(resp2.x0, ffa::FFA_MEM_RETRIEVE_RESP);
+        pass += 1;
+
+        // SP2 RELINQUISH
+        let mut req3 = zero_req(ffa::FFA_MEM_RELINQUISH);
+        req3.x1 = h & 0xFFFF_FFFF;
+        req3.x2 = h >> 32;
+        let resp3 = dispatch_ffa_as_sp(&req3, 0x8002, 0);
+        assert_eq!(resp3.x0, ffa::FFA_SUCCESS_32);
+        pass += 1;
+
+        // SP1 RECLAIM
+        let mut req4 = zero_req(ffa::FFA_MEM_RECLAIM);
+        req4.x1 = h & 0xFFFF_FFFF;
+        req4.x2 = h >> 32;
+        let resp4 = dispatch_ffa_as_sp(&req4, 0x8001, 0);
+        assert_eq!(resp4.x0, ffa::FFA_SUCCESS_32);
+        pass += 1;
+    }
+
+    // SPMEM5: Self-sharing blocked
+    {
+        let mut req = zero_req(ffa::FFA_MEM_SHARE_32);
+        req.x1 = (0x8001u64) << 16;
+        req.x3 = 0x70000000;
+        req.x4 = 1;
+        req.x5 = 0x8001; // self
+        let resp = dispatch_ffa_as_sp(&req, 0x8001, 0);
+        assert_eq!(resp.x0, ffa::FFA_ERROR);
+        assert_eq!(resp.x2 as i32, ffa::FFA_INVALID_PARAMETERS as i32);
+        pass += 1;
+    }
+
+    // SPMEM6: Non-existent receiver blocked
+    {
+        let mut req = zero_req(ffa::FFA_MEM_SHARE_32);
+        req.x1 = (0x8001u64) << 16;
+        req.x3 = 0x70000000;
+        req.x4 = 1;
+        req.x5 = 0x8099;
+        let resp = dispatch_ffa_as_sp(&req, 0x8001, 0);
+        assert_eq!(resp.x0, ffa::FFA_ERROR);
+        assert_eq!(resp.x2 as i32, ffa::FFA_INVALID_PARAMETERS as i32);
+        pass += 1;
+    }
+
+    // SPMEM7: Source spoofing blocked
+    {
+        let mut req = zero_req(ffa::FFA_MEM_SHARE_32);
+        req.x1 = (0x8002u64) << 16; // claims SP2
+        req.x3 = 0x70000000;
+        req.x4 = 1;
+        req.x5 = 0x8001;
+        let resp = dispatch_ffa_as_sp(&req, 0x8001, 0); // actually SP1
+        assert_eq!(resp.x0, ffa::FFA_ERROR);
+        assert_eq!(resp.x2 as i32, ffa::FFA_INVALID_PARAMETERS as i32);
+        pass += 1;
+    }
+
+    // SPMEM8-10: Cross-SP RECLAIM blocked
+    {
+        let mut req = zero_req(ffa::FFA_MEM_SHARE_32);
+        req.x1 = (0x8001u64) << 16;
+        req.x3 = 0x71000000;
+        req.x4 = 1;
+        req.x5 = 0x8002;
+        let resp = dispatch_ffa_as_sp(&req, 0x8001, 0);
+        assert_eq!(resp.x0, ffa::FFA_SUCCESS_32);
+        let h = resp.x2 | (resp.x3 << 32);
+        pass += 1;
+
+        // SP2 tries to reclaim — denied (not sender)
+        let mut req2 = zero_req(ffa::FFA_MEM_RECLAIM);
+        req2.x1 = h & 0xFFFF_FFFF;
+        req2.x2 = h >> 32;
+        let resp2 = dispatch_ffa_as_sp(&req2, 0x8002, 0);
+        assert_eq!(resp2.x0, ffa::FFA_ERROR);
+        assert_eq!(resp2.x2 as i32, ffa::FFA_DENIED as i32);
+        pass += 1;
+
+        // SP1 reclaims — success
+        let mut req3 = zero_req(ffa::FFA_MEM_RECLAIM);
+        req3.x1 = h & 0xFFFF_FFFF;
+        req3.x2 = h >> 32;
+        let resp3 = dispatch_ffa_as_sp(&req3, 0x8001, 0);
+        assert_eq!(resp3.x0, ffa::FFA_SUCCESS_32);
+        pass += 1;
+    }
+
+    // SPMEM11-15: SP-to-SP MEM_LEND lifecycle
+    {
+        let mut req = zero_req(ffa::FFA_MEM_LEND_32);
+        req.x1 = (0x8001u64) << 16;
+        req.x3 = 0x72000000;
+        req.x4 = 1;
+        req.x5 = 0x8002;
+        let resp = dispatch_ffa_as_sp(&req, 0x8001, 0);
+        assert_eq!(resp.x0, ffa::FFA_SUCCESS_32);
+        let h = resp.x2 | (resp.x3 << 32);
+        pass += 1;
+
+        // SP2 retrieve
+        let mut req2 = zero_req(ffa::FFA_MEM_RETRIEVE_REQ_32);
+        req2.x1 = h & 0xFFFF_FFFF;
+        req2.x2 = h >> 32;
+        let resp2 = dispatch_ffa_as_sp(&req2, 0x8002, 0);
+        assert_eq!(resp2.x0, ffa::FFA_MEM_RETRIEVE_RESP);
+        pass += 1;
+
+        // SP1 reclaim while retrieved — DENIED
+        let mut req3 = zero_req(ffa::FFA_MEM_RECLAIM);
+        req3.x1 = h & 0xFFFF_FFFF;
+        req3.x2 = h >> 32;
+        let resp3 = dispatch_ffa_as_sp(&req3, 0x8001, 0);
+        assert_eq!(resp3.x0, ffa::FFA_ERROR);
+        assert_eq!(resp3.x2 as i32, ffa::FFA_DENIED as i32);
+        pass += 1;
+
+        // SP2 relinquish
+        let mut req4 = zero_req(ffa::FFA_MEM_RELINQUISH);
+        req4.x1 = h & 0xFFFF_FFFF;
+        req4.x2 = h >> 32;
+        let resp4 = dispatch_ffa_as_sp(&req4, 0x8002, 0);
+        assert_eq!(resp4.x0, ffa::FFA_SUCCESS_32);
+        pass += 1;
+
+        // SP1 reclaim after relinquish — SUCCESS
+        let mut req5 = zero_req(ffa::FFA_MEM_RECLAIM);
+        req5.x1 = h & 0xFFFF_FFFF;
+        req5.x2 = h >> 32;
+        let resp5 = dispatch_ffa_as_sp(&req5, 0x8001, 0);
+        assert_eq!(resp5.x0, ffa::FFA_SUCCESS_32);
+        pass += 1;
+    }
+
+    // SPMEM16: Zero page count — INVALID_PARAMETERS
+    {
+        let mut req = zero_req(ffa::FFA_MEM_SHARE_32);
+        req.x1 = (0x8001u64) << 16;
+        req.x3 = 0x70000000;
+        req.x4 = 0;
+        req.x5 = 0x8002;
+        let resp = dispatch_ffa_as_sp(&req, 0x8001, 0);
+        assert_eq!(resp.x0, ffa::FFA_ERROR);
+        assert_eq!(resp.x2 as i32, ffa::FFA_INVALID_PARAMETERS as i32);
+        pass += 1;
+    }
+
+    // SPMEM17: Misaligned IPA — INVALID_PARAMETERS
+    {
+        let mut req = zero_req(ffa::FFA_MEM_SHARE_32);
+        req.x1 = (0x8001u64) << 16;
+        req.x3 = 0x70000001; // not 4KB-aligned
+        req.x4 = 1;
+        req.x5 = 0x8002;
+        let resp = dispatch_ffa_as_sp(&req, 0x8001, 0);
+        assert_eq!(resp.x0, ffa::FFA_ERROR);
+        assert_eq!(resp.x2 as i32, ffa::FFA_INVALID_PARAMETERS as i32);
+        pass += 1;
+    }
+
     hypervisor::log_info!("    {} assertions passed\n", pass);
 }
