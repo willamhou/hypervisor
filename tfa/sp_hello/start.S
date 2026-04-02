@@ -26,8 +26,14 @@
 .equ FFA_MEM_RETRIEVE_REQ_32,   0x84000074
 .equ FFA_MEM_RETRIEVE_RESP,     0x84000075
 .equ FFA_MEM_RELINQUISH,        0x84000076
+.equ FFA_MEM_SHARE_32,          0x84000073
+.equ FFA_SUCCESS_32,            0x84000061
 .equ MEM_TEST_MAGIC,            0xABCD0001
 .equ SHARED_PAGE_MAGIC,         0xCAFEFACE
+.equ SP_TO_SP_SHARE_MAGIC,      0xABCD0002
+.equ SP1_PARTITION_ID,          0x8001
+.equ SP1_SHARE_PAGE,            0x0e3F0000
+.equ SP1_SHARE_WRITTEN,         0xFACE0001
 
 .equ SP_STACK_TOP,       0x0e400000
 
@@ -85,6 +91,11 @@ _start:
     ldr     x8, =MEM_TEST_MAGIC
     cmp     x3, x8
     b.eq    .Lmem_test
+
+    /* Check for SP-to-SP share test: x3 == SP_TO_SP_SHARE_MAGIC */
+    ldr     x8, =SP_TO_SP_SHARE_MAGIC
+    cmp     x3, x8
+    b.eq    .Lshare_test
 
     /* Check for slow-path trigger: x3 == 0xDEADBEEF */
     ldr     x8, =0xDEADBEEF
@@ -189,6 +200,70 @@ _start:
     mov     x15, x23                /* restore req type from callee-saved */
     bl      .Lload_resp_id          /* x0 = matching RESP function ID */
     mov     x1, x19                 /* response x1 */
+    mov     x2, xzr
+    mov     x3, xzr
+    mov     x4, xzr                 /* x4 = 0 signals error */
+    mov     x5, xzr
+    mov     x6, xzr
+    mov     x7, xzr
+    smc     #0
+    b       .Lmsg_loop
+
+.Lshare_test:
+    /* SP-to-SP share test: x3=SP_TO_SP_SHARE_MAGIC, x7=receiver_sp_id
+     *
+     * 1. Write SP1_SHARE_WRITTEN to SP1_SHARE_PAGE (our own Secure DRAM)
+     * 2. Call FFA_MEM_SHARE_32(sender=SP1, receiver=x7, ipa=SP1_SHARE_PAGE, pages=1)
+     * 3. Return DIRECT_RESP: x3=echo magic, x4=handle_lo, x5=handle_hi, x6=page_ipa
+     */
+    mov     x19, x1                 /* response x1 (already swapped src/dest) */
+    mov     x27, x7                 /* receiver SP ID */
+    mov     x23, x15                /* req type (0=32bit, 1=64bit) */
+
+    /* Step 1: Write magic to our share page */
+    ldr     x22, =SP1_SHARE_PAGE
+    ldr     w8, =SP1_SHARE_WRITTEN
+    str     w8, [x22]
+
+    /* Step 2: FFA_MEM_SHARE_32(sender=SP1, receiver=x27, ipa=SP1_SHARE_PAGE, pages=1) */
+    ldr     x0, =FFA_MEM_SHARE_32
+    ldr     w1, =SP1_PARTITION_ID
+    lsl     w1, w1, #16             /* sender = SP1 in x1[31:16] */
+    mov     x2, xzr
+    mov     x3, x22                 /* IPA = SP1_SHARE_PAGE */
+    mov     x4, #1                  /* 1 page */
+    mov     x5, x27                 /* receiver SP ID */
+    mov     x6, xzr
+    mov     x7, xzr
+    smc     #0
+
+    /* Check: x0 == FFA_SUCCESS_32 */
+    ldr     x8, =FFA_SUCCESS_32
+    cmp     x0, x8
+    b.ne    .Lshare_test_error
+
+    /* Save handle from MEM_SHARE response */
+    mov     x20, x2                 /* handle_lo */
+    mov     x21, x3                 /* handle_hi */
+
+    /* Step 3: Return DIRECT_RESP with handle + page IPA */
+    mov     x15, x23
+    bl      .Lload_resp_id
+    mov     x1, x19
+    mov     x2, xzr
+    ldr     x3, =SP_TO_SP_SHARE_MAGIC  /* echo magic back */
+    mov     x4, x20                 /* handle_lo */
+    mov     x5, x21                 /* handle_hi */
+    mov     x6, x22                 /* page IPA = SP1_SHARE_PAGE */
+    mov     x7, xzr
+    smc     #0
+    b       .Lmsg_loop
+
+.Lshare_test_error:
+    /* MEM_SHARE failed — respond with error */
+    mov     x15, x23
+    bl      .Lload_resp_id
+    mov     x1, x19
     mov     x2, xzr
     mov     x3, xzr
     mov     x4, xzr                 /* x4 = 0 signals error */
