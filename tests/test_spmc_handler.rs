@@ -1941,5 +1941,31 @@ pub fn run_tests() {
         pass += 1;
     }
 
+    // SPMEM18: page_count > 65536 — INVALID_PARAMETERS
+    {
+        let mut req = zero_req(ffa::FFA_MEM_SHARE_32);
+        req.x1 = (0x8001u64) << 16;
+        req.x3 = 0x70000000;
+        req.x4 = 65537; // exceeds limit
+        req.x5 = 0x8002;
+        let resp = dispatch_ffa_as_sp(&req, 0x8001, 0);
+        assert_eq!(resp.x0, ffa::FFA_ERROR);
+        assert_eq!(resp.x2 as i32, ffa::FFA_INVALID_PARAMETERS as i32);
+        pass += 1;
+    }
+
+    // SPMEM19: Address wrap overflow — INVALID_PARAMETERS
+    {
+        let mut req = zero_req(ffa::FFA_MEM_SHARE_32);
+        req.x1 = (0x8001u64) << 16;
+        req.x3 = 0xFFFF_FFFF_FFFF_F000; // near u64 max, 4KB-aligned
+        req.x4 = 2; // ipa + 2*4096 wraps
+        req.x5 = 0x8002;
+        let resp = dispatch_ffa_as_sp(&req, 0x8001, 0);
+        assert_eq!(resp.x0, ffa::FFA_ERROR);
+        assert_eq!(resp.x2 as i32, ffa::FFA_INVALID_PARAMETERS as i32);
+        pass += 1;
+    }
+
     hypervisor::log_info!("    {} assertions passed\n", pass);
 }
