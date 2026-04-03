@@ -2153,6 +2153,8 @@ fn handle_spmc_mem_frag_tx(req: &SmcResult8) -> SmcResult8 {
             frag.active = false;
             return make_error(ffa::FFA_INVALID_PARAMETERS as u64);
         }
+        // DSB SY: ensure NWd's fragment writes are visible (cross-CPU cache coherency)
+        unsafe { core::arch::asm!("dsb sy", options(nostack, nomem)) }
         unsafe {
             core::ptr::copy_nonoverlapping(
                 tx_pa as *const u8,
@@ -2263,6 +2265,12 @@ fn handle_spmc_mem_share(req: &SmcResult8, is_lend: bool, is_donate: bool) -> Sm
                 return make_error(ffa::FFA_INVALID_PARAMETERS as u64);
             }
 
+            // DSB SY: ensure NWd's TX buffer writes are visible to S-EL2.
+            // pKVM's per-CPU SPMD may enter S-EL2 on a different physical CPU
+            // than the one that wrote the descriptor — L1 D-cache can be stale.
+            // SAFETY: DSB SY is a barrier instruction with no side effects.
+            unsafe { core::arch::asm!("dsb sy", options(nostack, nomem)) }
+
             // Fragmented: first fragment only — initiate reassembly
             if total_length != fragment_length && fragment_length > 0 && total_length > 0 {
                 if total_length > 4096 || fragment_length > total_length {
@@ -2301,11 +2309,23 @@ fn handle_spmc_mem_share(req: &SmcResult8, is_lend: bool, is_donate: bool) -> Sm
                 };
             }
 
-            // Non-fragmented: parse entire descriptor directly from NWd TX buffer.
-            // No local copy — stack space is limited on secondary CPUs (16KB).
-            // tx_pa was validated above and points to S-EL2-accessible NS DRAM.
+            // Non-fragmented: copy descriptor to local buffer first, then parse.
+            // Direct reads from NWd TX buffer are unreliable on multi-CPU pKVM
+            // (SPMD enters S-EL2 on different CPU than the one that wrote the descriptor).
+            let tlen = total_length as usize;
+            if tlen > 4096 {
+                return make_error(ffa::FFA_INVALID_PARAMETERS as u64);
+            }
+            let mut local_buf = [0u8; 4096];
+            unsafe {
+                core::ptr::copy_nonoverlapping(
+                    tx_pa as *const u8,
+                    local_buf.as_mut_ptr(),
+                    tlen,
+                );
+            }
             let parsed = unsafe {
-                crate::ffa::descriptors::parse_mem_region(tx_pa as *const u8, total_length)
+                crate::ffa::descriptors::parse_mem_region(local_buf.as_ptr(), total_length)
             };
             match parsed {
                 Ok(desc) => {
@@ -2411,7 +2431,17 @@ fn handle_spmc_mem_retrieve(req: &SmcResult8, _current_sp: Option<(u16, u64)>) -
                 (nwd.mapped, nwd.tx_pa)
             };
             if mapped && total_length > 0 {
-                handle = unsafe { core::ptr::read_volatile((tx_pa + 8) as *const u64) };
+                // DSB SY + local copy: NWd TX buffer may be stale on multi-CPU pKVM
+                unsafe { core::arch::asm!("dsb sy", options(nostack, nomem)) }
+                let mut h_buf = [0u8; 8];
+                unsafe {
+                    core::ptr::copy_nonoverlapping(
+                        (tx_pa + 8) as *const u8,
+                        h_buf.as_mut_ptr(),
+                        8,
+                    );
+                }
+                handle = u64::from_le_bytes(h_buf);
             } else {
                 handle = (req.x1 & 0xFFFF_FFFF) | (req.x2 << 32);
             }
