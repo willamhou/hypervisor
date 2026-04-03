@@ -32,7 +32,7 @@ make build-tfa-spmc # Build TF-A with real SPMC as BL32 + SP Hello + SP IRQ
 make build-pkvm-kernel # Build AOSP android16-6.12 kernel for pKVM (Docker, ~15-30min first time)
 make build-tfa-pkvm # Build TF-A flash-pkvm.bin (ARM_LINUX_KERNEL_AS_BL33, Linux as BL33)
 make run-pkvm     # Boot pKVM (NS-EL2) + our SPMC (S-EL2) — AOSP kernel as BL33 (requires build-pkvm-kernel + build-tfa-pkvm)
-make run-pkvm-ffa-test # Boot pKVM with FF-A test module (20/20 PASS)
+make run-pkvm-ffa-test # Boot pKVM with FF-A test module (26/26 PASS)
 make build-crosvm # Build crosvm VMM for aarch64 (Docker, ~5-10min first time)
 make build-crosvm-initramfs # Build pKVM initramfs with crosvm + pVM kernel
 make run-crosvm   # Boot pKVM (nVHE) + crosvm pVM (AVF validation, requires ARM64 host for KVM accel)
@@ -452,6 +452,7 @@ NS-EL1: Linux/Android guest
 **Phase 4.5 AVF** (partial): AVF validation — crosvm VMM in pKVM host (EL0) creates pVM via /dev/kvm. Protected hVHE mode works without SMMU (`pKVM enabled without an IOMMU driver`). KVM API validated: /dev/kvm, KVM_CREATE_VM, KVM_CREATE_VCPU all PASS (5/5). crosvm fails with `failed to create IRQ chip` — QEMU TCG cannot create `KVM_DEV_TYPE_ARM_VGIC_V3` device. SMMUv3 tested (`iommu=smmuv3`) but hangs at CPU3 GIC redistributor init (custom DTB lacks SMMU nodes). Embedded initramfs approach (nested kernel + crosvm at `/nested/`), virtio-console (`console=hvc0`) fixes ttyS0 probe failure. `make build-crosvm` (Docker cross-compile), `make build-crosvm-initramfs`, `make run-crosvm` (protected mode). Requires ARM64 hardware for full AVF validation.
 **Phase 4.7** (done): Security hardening — SPMC cross-SP isolation fix (RETRIEVE/RELINQUISH validate caller==receiver_id via `dispatch_ffa_as_sp()`, prevents SP1 mapping pages into SP2's Stage-2), IPA alignment + page count validation (4KB-aligned, max 65536 pages/range, overflow checks), fragment sender tracking (`NwdFragmentState.sender_id`), `reset_nwd_frag_state()` cleanup helper, stress tests (16-slot exhaustion, interleaved lifecycle, double RETRIEVE, RELINQUISH-without-RETRIEVE). Robustness hardening: range count overflow validation (reject > MAX_SHARE_RANGES instead of silent truncation), RXTX_UNMAP fragment state cleanup (NWD_FRAG + NWD_FRAG_RX), MEM_LEND negative tests + E2E lifecycle (BL33 Test 16). ~415 assertions / 34 test suites
 **Phase 5.1** (done): SP-to-SP DIRECT_REQ — CallStack cycle detection, recursive dispatch_to_sp, chain preemption (Blocked→Preempted), SP3 (sp_relay) at 0x0e500000, BL33 Tests 17-18 (relay chain + cycle detection). SP-to-SP MEM_SHARE — SP-initiated MEM_SHARE/LEND/RECLAIM in handle_sp_exit, SP1→SP2 Secure DRAM sharing (BL33 Test 19). 19/19 BL33 tests, ~440 assertions / 34 test suites
+**Phase 5.1 pKVM** (done): pKVM SP-to-SP E2E verification — SP3 (sp_relay) added to pKVM flash (`build-tfa-pkvm`), SP3 DIRECT_REQ_64 support, ffa_test.ko extended with SP3 echo test + NWd→SP3→SP1 relay chain test. ffa_test.ko: 26/26 PASS (SP1 10 + SP2 10 + SP3 6). `make run-pkvm-ffa-test`
 **Phase 5**: RME & CCA (Realm Manager)
 
 See `DEVELOPMENT_PLAN.md` for full details.

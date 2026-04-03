@@ -2,9 +2,10 @@
 /*
  * FF-A DIRECT_REQ Test — Linux FF-A Client Driver
  *
- * Registers as an FF-A driver that matches SP1 (0x8001) and SP2 (0x8002)
- * by UUID. On probe(), sends DIRECT_REQ via the FF-A transport layer
- * (ffa_dev->ops->msg_ops->sync_send_receive) and validates responses.
+ * Registers as an FF-A driver that matches SP1 (0x8001), SP2 (0x8002),
+ * and SP3 (0x8003) by UUID. On probe(), sends DIRECT_REQ via the FF-A
+ * transport layer and validates responses. SP3 also tests SP-to-SP relay
+ * (NWd → SP3 → SP1 chain via DIRECT_REQ).
  *
  * This is the correct approach for pKVM: raw SMC calls from EL1 bypass
  * pKVM's FF-A proxy expectations and may hang. The FF-A driver API goes
@@ -255,6 +256,54 @@ cleanup_page:
 	pr_info("ffa_test: ---- MEM_SHARE E2E Test done ----\n");
 }
 
+/*
+ * SP3 relay test: NWd → SP3 → SP1 chain.
+ * SP3 relay mode: x3=RELAY_MAGIC, x4[15:0]=target_sp_id,
+ *   x5-x7 forwarded as x4-x6 to target.
+ * SP1 echo: x4 += 0x1000 — so the chain result should have x4 = 0xBBBB + 0x1000 = 0xCBBB.
+ */
+#define RELAY_MAGIC 0x00EE1A00
+#define SP1_ID      0x8001
+
+static void ffa_test_sp3_relay(struct ffa_device *ffa_dev)
+{
+	const struct ffa_msg_ops *msg_ops;
+	struct ffa_send_direct_data data;
+	int ret;
+
+	pr_info("ffa_test: ---- SP3 Relay Test (SP3 → SP1) ----\n");
+	msg_ops = ffa_dev->ops->msg_ops;
+
+	/* Relay through SP3 to SP1:
+	 *   x3 = RELAY_MAGIC (triggers relay mode)
+	 *   x4 = SP1_ID (target)
+	 *   x5 = 0xBBBB → becomes SP1's x4 → SP1 adds 0x1000 → 0xCBBB
+	 *   x6 = 0xCCCC → becomes SP1's x5 → echoed
+	 *   x7 = 0xDDDD → becomes SP1's x6 → echoed
+	 */
+	memset(&data, 0, sizeof(data));
+	data.data0 = RELAY_MAGIC;
+	data.data1 = SP1_ID;
+	data.data2 = 0xBBBB;
+	data.data3 = 0xCCCC;
+	data.data4 = 0xDDDD;
+
+	ret = msg_ops->sync_send_receive(ffa_dev, &data);
+	pr_info("ffa_test: SP3 relay: ret=%d x4=0x%lx x5=0x%lx x6=0x%lx\n",
+		ret, data.data1, data.data2, data.data3);
+
+	ffa_test_check("SP3 relay DIRECT_REQ returns success", ret == 0);
+	if (ret == 0) {
+		/* SP1 processes: x4=0xBBBB → x4+0x1000=0xCBBB, x5=0xCCCC echoed */
+		ffa_test_check("SP3 relay: x4 = 0xBBBB + 0x1000 (SP1 proof)",
+			       (u32)data.data1 == 0xCBBB);
+		ffa_test_check("SP3 relay: x5 echoes 0xCCCC",
+			       (u32)data.data2 == 0xCCCC);
+	}
+
+	pr_info("ffa_test: ---- SP3 Relay Test done ----\n");
+}
+
 static int ffa_test_probe(struct ffa_device *ffa_dev)
 {
 	const struct ffa_msg_ops *msg_ops;
@@ -281,6 +330,33 @@ static int ffa_test_probe(struct ffa_device *ffa_dev)
 	if (!ffa_partition_supports_direct_recv(ffa_dev)) {
 		pr_warn("ffa_test: SP 0x%04x does not advertise DIRECT_RECV\n",
 			sp_id);
+	}
+
+	/* SP3 (0x8003): relay tests only — SP3 uses x4 += 0x2000 for echo */
+	if (sp_id == 0x8003) {
+		/* Echo test with SP3's signature (x4 += 0x2000) */
+		memset(&data, 0, sizeof(data));
+		data.data0 = 0xAAAA;
+		data.data1 = 0xBBBB;
+		data.data2 = 0xCCCC;
+		data.data3 = 0xDDDD;
+		data.data4 = 0xEEEE;
+
+		ret = msg_ops->sync_send_receive(ffa_dev, &data);
+		ffa_test_check("DIRECT_REQ to SP3 returns success", ret == 0);
+		if (ret == 0) {
+			ffa_test_check("SP3 x3 echoes 0xAAAA",
+				       data.data0 == 0xAAAA);
+			ffa_test_check("SP3 x4 = 0xBBBB + 0x2000",
+				       data.data1 == 0xDBBB);
+		}
+
+		/* Relay test: NWd → SP3 → SP1 */
+		ffa_test_sp3_relay(ffa_dev);
+
+		pr_info("ffa_test: ---- SP 0x%04x done (%d/%d) ----\n",
+			sp_id, tests_pass, tests_run);
+		return 0;
 	}
 
 	/* Send DIRECT_REQ with echo test payload:
@@ -321,7 +397,7 @@ static int ffa_test_probe(struct ffa_device *ffa_dev)
 		ffa_test_check(desc, data.data2 == 0xCCCC);
 	}
 
-	/* Run MEM_SHARE E2E test for both SP1 and SP2 */
+	/* Run MEM_SHARE E2E test for SP1 and SP2 */
 	ffa_test_mem_share(ffa_dev);
 
 	pr_info("ffa_test: ---- SP 0x%04x done (%d/%d) ----\n",
@@ -341,6 +417,7 @@ static void ffa_test_remove(struct ffa_device *ffa_dev)
  * These are the byte-swapped UUIDs as seen in sysfs:
  *   SP1: 78563412-7856-3412-7856-341278563412
  *   SP2: ddccbbaa-ddcc-bbaa-ddcc-bbaaddccbbaa
+ *   SP3: 00112233-0011-2233-0011-223300112233
  */
 static const struct ffa_device_id ffa_test_ids[] = {
 	/* SP1 (0x8001) */
@@ -349,6 +426,9 @@ static const struct ffa_device_id ffa_test_ids[] = {
 	/* SP2 (0x8002) */
 	{ UUID_INIT(0xddccbbaa, 0xddcc, 0xbbaa,
 		    0xdd, 0xcc, 0xbb, 0xaa, 0xdd, 0xcc, 0xbb, 0xaa) },
+	/* SP3 (0x8003) — sp_relay */
+	{ UUID_INIT(0x00112233, 0x0011, 0x2233,
+		    0x00, 0x11, 0x22, 0x33, 0x00, 0x11, 0x22, 0x33) },
 	{}
 };
 
@@ -460,5 +540,5 @@ module_init(ffa_test_init);
 module_exit(ffa_test_exit);
 
 MODULE_LICENSE("GPL");
-MODULE_DESCRIPTION("FF-A End-to-End Test: DIRECT_REQ + MEM_SHARE (FF-A driver API)");
+MODULE_DESCRIPTION("FF-A End-to-End Test: DIRECT_REQ + MEM_SHARE + SP-to-SP relay (FF-A driver API)");
 MODULE_AUTHOR("Hypervisor Project");

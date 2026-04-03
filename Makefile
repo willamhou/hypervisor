@@ -392,7 +392,7 @@ build-pkvm-dtb:
 	dtc -I dts -O dtb guest/linux/guest-pkvm.dts -o $(PKVM_DTB)
 
 # Build TF-A with SPMC + Linux kernel as BL33 (ARM_LINUX_KERNEL_AS_BL33=1)
-build-tfa-pkvm: build-bl32-bl33 build-spmc build-sp-hello build-sp-irq
+build-tfa-pkvm: build-bl32-bl33 build-spmc build-sp-hello build-sp-irq build-sp-relay
 	@echo "Replacing bl32.bin with real SPMC..."
 	docker run --rm \
 	    -v $(PWD)/tfa:/output \

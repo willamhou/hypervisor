@@ -23,6 +23,8 @@
 .equ FFA_MSG_WAIT,              0x8400006B
 .equ FFA_DIRECT_REQ_32,         0x8400006F
 .equ FFA_DIRECT_RESP_32,        0x84000070
+.equ FFA_DIRECT_REQ_64,         0xC400006F
+.equ FFA_DIRECT_RESP_64,        0xC4000070
 .equ FFA_ERROR,                 0x84000060
 .equ SP3_PARTITION_ID,          0x8003
 .equ RELAY_MAGIC,               0x00EE1A00
@@ -44,10 +46,19 @@ _start:
 
     /* ---- Main dispatch loop ---- */
 .Lwait_loop:
-    /* Check if we received DIRECT_REQ_32 */
+    /* Check if we received DIRECT_REQ_32 or DIRECT_REQ_64 */
     ldr     w9, =FFA_DIRECT_REQ_32
     cmp     w0, w9
+    b.eq    .Ldirect_req
+    ldr     x9, =FFA_DIRECT_REQ_64
+    cmp     x0, x9
     b.ne    .Lunexpected
+
+.Ldirect_req:
+    /* Save req type: x15 = 0 for 32-bit, 1 for 64-bit */
+    ldr     x9, =FFA_DIRECT_REQ_64
+    cmp     x0, x9
+    cset    x15, eq
 
     /* Save caller info: x1 has source<<16|dest */
     mov     x20, x1         /* save original x1 (source|dest) */
@@ -94,7 +105,7 @@ _start:
     mov     x10, x6
     mov     x11, x7
 
-    ldr     w0, =FFA_DIRECT_RESP_32
+    bl      .Lload_resp_id      /* x0 = matching RESP function ID */
     ldr     w1, =SP3_PARTITION_ID
     lsl     w1, w1, #16
     orr     w1, w1, w26         /* x1 = SP3<<16 | original_caller */
@@ -110,7 +121,7 @@ _start:
 .Lrelay_error:
     /* Forward error back to caller */
     mov     x28, x2             /* save error code */
-    ldr     w0, =FFA_DIRECT_RESP_32
+    bl      .Lload_resp_id      /* x0 = matching RESP function ID */
     ldr     w1, =SP3_PARTITION_ID
     lsl     w1, w1, #16
     orr     w1, w1, w26         /* x1 = SP3<<16 | original_caller */
@@ -126,7 +137,7 @@ _start:
     /* ---- Echo mode: x4 += 0x2000 ---- */
 .Lecho_mode:
     add     x22, x22, #0x2000
-    ldr     w0, =FFA_DIRECT_RESP_32
+    bl      .Lload_resp_id      /* x0 = matching RESP function ID */
     ldr     w1, =SP3_PARTITION_ID
     lsl     w1, w1, #16
     orr     w1, w1, w26         /* x1 = SP3<<16 | caller */
@@ -138,6 +149,15 @@ _start:
     mov     x7, x25
     smc     #0
     b       .Lwait_loop
+
+/* Helper: load matching DIRECT_RESP function ID based on x15 (0=32bit, 1=64bit) */
+.Lload_resp_id:
+    cbz     x15, 1f
+    ldr     x0, =FFA_DIRECT_RESP_64
+    ret
+1:
+    ldr     x0, =FFA_DIRECT_RESP_32
+    ret
 
 .Lunexpected:
     /* Unexpected call — return to MSG_WAIT */
