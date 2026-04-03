@@ -42,6 +42,7 @@
 .equ RELAY_MAGIC,         0x00EE1A00
 .equ SP_TO_SP_SHARE_MAGIC, 0xABCD0002
 .equ SP_RETRIEVE_MAGIC,   0xABCD0003
+.equ SP_TO_SP_RECLAIM_MAGIC, 0xABCD0004
 .equ SP1_SHARE_WRITTEN,   0xFACE0001
 
 _start:
@@ -1062,6 +1063,47 @@ _start:
     bl      uart_print
 .Ltest19_done:
 
+    /* ============ Test 20: SP-to-SP MEM_RECLAIM ============ */
+    /* Requires Test 19 to have run (SP1 shared a page with SP2, SP2 retrieved+relinquished).
+     * Tell SP1 to RECLAIM the shared page using its saved handle. */
+    adr     x0, str_t20
+    bl      uart_print
+
+    /* Tell SP1 to reclaim */
+    ldr     w0, =FFA_DIRECT_REQ_32
+    movz    x1, #SP1_ID
+    movk    x1, #0x0001, lsl #16       /* source=NWd(0x0001), dest=SP1 */
+    mov     x2, xzr
+    ldr     w3, =SP_TO_SP_RECLAIM_MAGIC
+    mov     x4, xzr
+    mov     x5, xzr
+    mov     x6, xzr
+    mov     x7, xzr
+    smc     #0
+
+    /* Verify: DIRECT_RESP from SP1 */
+    ldr     w9, =FFA_DIRECT_RESP_32
+    cmp     w0, w9
+    b.ne    .Ltest20_fail
+
+    /* Verify: x3 == SP_TO_SP_RECLAIM_MAGIC (echo) */
+    ldr     w9, =SP_TO_SP_RECLAIM_MAGIC
+    cmp     w3, w9
+    b.ne    .Ltest20_fail
+
+    /* Verify: x5 == FFA_SUCCESS_32 (reclaim succeeded) */
+    ldr     w9, =FFA_SUCCESS_32
+    cmp     w5, w9
+    b.ne    .Ltest20_fail
+
+    adr     x0, str_pass
+    bl      uart_print
+    b       .Ltest20_done
+.Ltest20_fail:
+    adr     x0, str_fail
+    bl      uart_print
+.Ltest20_done:
+
 .Ldone:
     adr     x0, str_done
     bl      uart_print
@@ -1128,6 +1170,8 @@ str_t18:
     .asciz "  Test 18: Cycle detection ......... "
 str_t19:
     .asciz "  Test 19: SP-to-SP MEM_SHARE ...... "
+str_t20:
+    .asciz "  Test 20: SP-to-SP MEM_RECLAIM .... "
 str_pass:
     .asciz "PASS\r\n"
 str_fail:

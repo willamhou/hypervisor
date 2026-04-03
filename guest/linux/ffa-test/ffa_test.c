@@ -313,10 +313,11 @@ static void ffa_test_sp3_relay(struct ffa_device *ffa_dev)
  * Verifies SP2 can read data written by SP1 through SPMC-managed sharing.
  * Called after all SPs are probed (needs both sp1_dev and sp2_dev).
  */
-#define SP_TO_SP_SHARE_MAGIC 0xABCD0002
-#define SP_RETRIEVE_MAGIC    0xABCD0003
-#define SP1_SHARE_WRITTEN    0xFACE0001
-#define SP2_ID               0x8002
+#define SP_TO_SP_SHARE_MAGIC   0xABCD0002
+#define SP_RETRIEVE_MAGIC      0xABCD0003
+#define SP_TO_SP_RECLAIM_MAGIC 0xABCD0004
+#define SP1_SHARE_WRITTEN      0xFACE0001
+#define SP2_ID                 0x8002
 
 static void ffa_test_sp_to_sp_share(void)
 {
@@ -380,7 +381,22 @@ static void ffa_test_sp_to_sp_share(void)
 	ffa_test_check("SP2 read SP1's data (0xFACE0001)",
 		       (u32)data.data2 == SP1_SHARE_WRITTEN);
 
-	pr_info("ffa_test: ---- SP-to-SP MEM_SHARE Test done ----\n");
+	/* Step 3: Tell SP1 to RECLAIM the shared page */
+	msg_ops = sp1_dev->ops->msg_ops;
+	memset(&data, 0, sizeof(data));
+	data.data0 = SP_TO_SP_RECLAIM_MAGIC; /* x3: reclaim command */
+
+	ret = msg_ops->sync_send_receive(sp1_dev, &data);
+	pr_info("ffa_test: SP1 reclaim: ret=%d x3=0x%lx x4=0x%lx x5=0x%lx\n",
+		ret, data.data0, data.data1, data.data2);
+
+	ffa_test_check("SP1 reclaim command returns success", ret == 0);
+	ffa_test_check("SP1 echoes SP_TO_SP_RECLAIM_MAGIC",
+		       (u32)data.data0 == SP_TO_SP_RECLAIM_MAGIC);
+	ffa_test_check("SP1 RECLAIM returns FFA_SUCCESS",
+		       (u32)data.data2 == 0x84000061); /* FFA_SUCCESS_32 */
+
+	pr_info("ffa_test: ---- SP-to-SP MEM_SHARE + RECLAIM Test done ----\n");
 }
 
 static int ffa_test_probe(struct ffa_device *ffa_dev)

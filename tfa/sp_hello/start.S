@@ -27,10 +27,12 @@
 .equ FFA_MEM_RETRIEVE_RESP,     0x84000075
 .equ FFA_MEM_RELINQUISH,        0x84000076
 .equ FFA_MEM_SHARE_32,          0x84000073
+.equ FFA_MEM_RECLAIM,           0x84000077
 .equ FFA_SUCCESS_32,            0x84000061
 .equ MEM_TEST_MAGIC,            0xABCD0001
 .equ SHARED_PAGE_MAGIC,         0xCAFEFACE
 .equ SP_TO_SP_SHARE_MAGIC,      0xABCD0002
+.equ SP_TO_SP_RECLAIM_MAGIC,    0xABCD0004
 .equ SP1_PARTITION_ID,          0x8001
 .equ SP1_SHARE_PAGE,            0x0e3F0000
 .equ SP1_SHARE_WRITTEN,         0xFACE0001
@@ -96,6 +98,11 @@ _start:
     ldr     x8, =SP_TO_SP_SHARE_MAGIC
     cmp     x3, x8
     b.eq    .Lshare_test
+
+    /* Check for SP-to-SP reclaim test: x3 == SP_TO_SP_RECLAIM_MAGIC */
+    ldr     x8, =SP_TO_SP_RECLAIM_MAGIC
+    cmp     x3, x8
+    b.eq    .Lreclaim_test
 
     /* Check for slow-path trigger: x3 == 0xDEADBEEF */
     ldr     x8, =0xDEADBEEF
@@ -242,9 +249,11 @@ _start:
     cmp     x0, x8
     b.ne    .Lshare_test_error
 
-    /* Save handle from MEM_SHARE response */
+    /* Save handle from MEM_SHARE response — persist in memory for RECLAIM */
     mov     x20, x2                 /* handle_lo */
     mov     x21, x3                 /* handle_hi */
+    adr     x8, saved_share_handle
+    stp     x20, x21, [x8]
 
     /* Step 3: Return DIRECT_RESP with handle + page IPA */
     mov     x15, x23
@@ -272,6 +281,51 @@ _start:
     mov     x7, xzr
     smc     #0
     b       .Lmsg_loop
+
+.Lreclaim_test:
+    /* SP-to-SP reclaim: x3=SP_TO_SP_RECLAIM_MAGIC
+     * Calls FFA_MEM_RECLAIM with saved handle from previous MEM_SHARE.
+     * Returns DIRECT_RESP: x3=echo magic, x4=handle_lo, x5=FFA_SUCCESS status
+     */
+    mov     x19, x1                 /* response x1 */
+    mov     x23, x15                /* req type */
+
+    /* Load saved handle */
+    adr     x8, saved_share_handle
+    ldp     x20, x21, [x8]
+
+    /* FFA_MEM_RECLAIM: x1=handle_lo, x2=handle_hi, x3=flags(0) */
+    ldr     x0, =FFA_MEM_RECLAIM
+    mov     x1, x20                 /* handle_lo */
+    mov     x2, x21                 /* handle_hi */
+    mov     x3, xzr                 /* flags = 0 */
+    mov     x4, xzr
+    mov     x5, xzr
+    mov     x6, xzr
+    mov     x7, xzr
+    smc     #0
+
+    /* Save reclaim result */
+    mov     x24, x0                 /* FFA_SUCCESS or error */
+
+    /* Return DIRECT_RESP: x3=magic, x4=handle_lo, x5=reclaim status */
+    mov     x15, x23
+    bl      .Lload_resp_id
+    mov     x1, x19
+    mov     x2, xzr
+    ldr     x3, =SP_TO_SP_RECLAIM_MAGIC  /* echo magic */
+    mov     x4, x20                 /* handle_lo */
+    mov     x5, x24                 /* reclaim result (x0 from SMC) */
+    mov     x6, xzr
+    mov     x7, xzr
+    smc     #0
+    b       .Lmsg_loop
+
+/* Saved handle from last SP-to-SP MEM_SHARE (persists across DIRECT_REQ) */
+.align 3
+saved_share_handle:
+    .quad   0   /* handle_lo */
+    .quad   0   /* handle_hi */
 
 .Lunknown_msg:
     /* Unknown message — respond with FFA_MSG_WAIT to go idle */
