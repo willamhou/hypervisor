@@ -24,6 +24,8 @@
 
 static int tests_run;
 static int tests_pass;
+static struct ffa_device *sp1_dev;
+static struct ffa_device *sp2_dev;
 
 static void ffa_test_check(const char *name, bool cond)
 {
@@ -304,6 +306,83 @@ static void ffa_test_sp3_relay(struct ffa_device *ffa_dev)
 	pr_info("ffa_test: ---- SP3 Relay Test done ----\n");
 }
 
+/*
+ * SP-to-SP MEM_SHARE E2E test: SP1 shares a Secure DRAM page with SP2.
+ * Flow: NWd→SP1(share) → SP1 writes + MEM_SHARE → returns handle
+ *       NWd→SP2(retrieve) → SP2 RETRIEVE + reads SP1's data + RELINQUISH
+ * Verifies SP2 can read data written by SP1 through SPMC-managed sharing.
+ * Called after all SPs are probed (needs both sp1_dev and sp2_dev).
+ */
+#define SP_TO_SP_SHARE_MAGIC 0xABCD0002
+#define SP_RETRIEVE_MAGIC    0xABCD0003
+#define SP1_SHARE_WRITTEN    0xFACE0001
+#define SP2_ID               0x8002
+
+static void ffa_test_sp_to_sp_share(void)
+{
+	const struct ffa_msg_ops *msg_ops;
+	struct ffa_send_direct_data data;
+	u64 handle_lo, handle_hi, page_ipa;
+	int ret;
+
+	if (!sp1_dev || !sp2_dev) {
+		pr_warn("ffa_test: SP-to-SP test skipped (SP1/SP2 not probed)\n");
+		return;
+	}
+
+	pr_info("ffa_test: ---- SP-to-SP MEM_SHARE Test ----\n");
+
+	/* Step 1: Tell SP1 to MEM_SHARE a page with SP2 */
+	msg_ops = sp1_dev->ops->msg_ops;
+	memset(&data, 0, sizeof(data));
+	data.data0 = SP_TO_SP_SHARE_MAGIC; /* x3: share test command */
+	data.data4 = SP2_ID;               /* x7: receiver = SP2 */
+
+	ret = msg_ops->sync_send_receive(sp1_dev, &data);
+	pr_info("ffa_test: SP1 share: ret=%d x3=0x%lx x4=0x%lx x5=0x%lx x6=0x%lx\n",
+		ret, data.data0, data.data1, data.data2, data.data3);
+
+	ffa_test_check("SP1 share command returns success", ret == 0);
+	if (ret != 0)
+		return;
+
+	ffa_test_check("SP1 echoes SP_TO_SP_SHARE_MAGIC",
+		       (u32)data.data0 == SP_TO_SP_SHARE_MAGIC);
+
+	handle_lo = data.data1;  /* x4 = handle_lo */
+	handle_hi = data.data2;  /* x5 = handle_hi */
+	page_ipa = data.data3;   /* x6 = page IPA */
+
+	ffa_test_check("SP1 share handle != 0",
+		       (handle_lo | handle_hi) != 0);
+
+	pr_info("ffa_test: SP1 shared: handle=0x%llx:%llx ipa=0x%llx\n",
+		(u64)handle_hi, (u64)handle_lo, (u64)page_ipa);
+
+	/* Step 2: Tell SP2 to RETRIEVE + read + RELINQUISH */
+	msg_ops = sp2_dev->ops->msg_ops;
+	memset(&data, 0, sizeof(data));
+	data.data0 = SP_RETRIEVE_MAGIC;    /* x3: retrieve test command */
+	data.data1 = handle_lo;            /* x4: handle_lo */
+	data.data2 = handle_hi;            /* x5: handle_hi */
+	data.data3 = page_ipa;             /* x6: page IPA */
+
+	ret = msg_ops->sync_send_receive(sp2_dev, &data);
+	pr_info("ffa_test: SP2 retrieve: ret=%d x4=0x%lx x5=0x%lx\n",
+		ret, data.data1, data.data2);
+
+	ffa_test_check("SP2 retrieve command returns success", ret == 0);
+	if (ret != 0)
+		return;
+
+	ffa_test_check("SP2 x4 = handle_lo + 0x5000 (retrieve proof)",
+		       (u32)data.data1 == (u32)(handle_lo + 0x5000));
+	ffa_test_check("SP2 read SP1's data (0xFACE0001)",
+		       (u32)data.data2 == SP1_SHARE_WRITTEN);
+
+	pr_info("ffa_test: ---- SP-to-SP MEM_SHARE Test done ----\n");
+}
+
 static int ffa_test_probe(struct ffa_device *ffa_dev)
 {
 	const struct ffa_msg_ops *msg_ops;
@@ -325,6 +404,12 @@ static int ffa_test_probe(struct ffa_device *ffa_dev)
 		pr_err("ffa_test: No sync_send_receive for SP 0x%04x\n", sp_id);
 		return -ENODEV;
 	}
+
+	/* Save ffa_dev for cross-SP tests */
+	if (sp_id == 0x8001)
+		sp1_dev = ffa_dev;
+	else if (sp_id == 0x8002)
+		sp2_dev = ffa_dev;
 
 	/* Check partition supports direct receive */
 	if (!ffa_partition_supports_direct_recv(ffa_dev)) {
@@ -522,6 +607,10 @@ static int __init ffa_test_init(void)
 	}
 
 	pr_info("ffa_test: Driver registered — probe called per matched SP\n");
+
+	/* Cross-SP test: run after all SPs probed */
+	ffa_test_sp_to_sp_share();
+
 	pr_info("ffa_test: ============================================\n");
 	pr_info("ffa_test:   Results: %d/%d PASS\n", tests_pass, tests_run);
 	pr_info("ffa_test: ============================================\n");
