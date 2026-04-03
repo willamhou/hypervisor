@@ -1659,22 +1659,8 @@ pub fn dispatch_ffa(req: &SmcResult8) -> SmcResult8 {
         ffa::FFA_MSG_SEND2 => handle_spmc_msg_send2(req),
         ffa::FFA_MSG_WAIT => handle_spmc_msg_wait_nwd(),
 
-        ffa::FFA_MSG_SEND_DIRECT_REQ_32 => handle_direct_req_32(req),
-
-        ffa::FFA_MSG_SEND_DIRECT_REQ_64 => {
-            // Echo x3-x7 back, swap source/dest in x1
-            let source = (req.x1 >> 16) & 0xFFFF;
-            let dest = req.x1 & 0xFFFF;
-            SmcResult8 {
-                x0: ffa::FFA_MSG_SEND_DIRECT_RESP_64,
-                x1: (dest << 16) | source,
-                x2: 0,
-                x3: req.x3,
-                x4: req.x4,
-                x5: req.x5,
-                x6: req.x6,
-                x7: req.x7,
-            }
+        ffa::FFA_MSG_SEND_DIRECT_REQ_32 | ffa::FFA_MSG_SEND_DIRECT_REQ_64 => {
+            handle_direct_req(req)
         }
 
         ffa::FFA_MEM_SHARE_32 | ffa::FFA_MEM_SHARE_64 => handle_spmc_mem_share(req, false),
@@ -2052,9 +2038,16 @@ fn handle_partition_info_get() -> SmcResult8 {
 /// SPMD wraps certain FF-A calls (e.g. FFA_VERSION) as framework messages
 /// inside DIRECT_REQ with FFA_FWK_MSG_BIT set in x2. We must detect and
 /// respond to these before falling through to the normal echo handler.
-fn handle_direct_req_32(req: &SmcResult8) -> SmcResult8 {
-    // Check for SPMD framework message (FFA_FWK_MSG_BIT set in x2)
-    if (req.x2 & ffa::FFA_FWK_MSG_BIT) != 0 {
+fn handle_direct_req(req: &SmcResult8) -> SmcResult8 {
+    let is_64 = req.x0 == ffa::FFA_MSG_SEND_DIRECT_REQ_64;
+    let resp_fid = if is_64 {
+        ffa::FFA_MSG_SEND_DIRECT_RESP_64
+    } else {
+        ffa::FFA_MSG_SEND_DIRECT_RESP_32
+    };
+
+    // Check for SPMD framework message (FFA_FWK_MSG_BIT set in x2, 32-bit only)
+    if !is_64 && (req.x2 & ffa::FFA_FWK_MSG_BIT) != 0 {
         let fwk_func = req.x2 & !ffa::FFA_FWK_MSG_BIT;
         // Swap source/dest from the request so SPMD recognizes us.
         // SPMD sends x1 = (SPMD_EP_ID << 16) | SPMC_ID.
@@ -2083,7 +2076,7 @@ fn handle_direct_req_32(req: &SmcResult8) -> SmcResult8 {
     let source = (req.x1 >> 16) & 0xFFFF;
     let dest = req.x1 & 0xFFFF;
     SmcResult8 {
-        x0: ffa::FFA_MSG_SEND_DIRECT_RESP_32,
+        x0: resp_fid,
         x1: (dest << 16) | source,
         x2: 0,
         x3: req.x3,

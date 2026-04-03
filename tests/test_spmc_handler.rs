@@ -99,6 +99,27 @@ pub fn run_tests() {
     assert_eq!(resp.x7, 0xEEEE);
     pass += 7;
 
+    // Test 22a-22g: DIRECT_REQ_64 echoes payload with RESP_64
+    let req = SmcResult8 {
+        x0: ffa::FFA_MSG_SEND_DIRECT_REQ_64,
+        x1: (0x0001 << 16) | 0x8001, // source=1, dest=0x8001
+        x2: 0,
+        x3: 0x1111_2222_3333,
+        x4: 0x4444_5555_6666,
+        x5: 0x7777,
+        x6: 0x8888,
+        x7: 0x9999,
+    };
+    let resp = dispatch_ffa(&req);
+    assert_eq!(resp.x0, ffa::FFA_MSG_SEND_DIRECT_RESP_64);
+    assert_eq!(resp.x1, (0x8001 << 16) | 0x0001); // swapped
+    assert_eq!(resp.x3, 0x1111_2222_3333);
+    assert_eq!(resp.x4, 0x4444_5555_6666);
+    assert_eq!(resp.x5, 0x7777);
+    assert_eq!(resp.x6, 0x8888);
+    assert_eq!(resp.x7, 0x9999);
+    pass += 7;
+
     // Test 22-26: SPMD framework message (FFA_VERSION_REQ)
     // SPMD sends x1 = (SPMD_EP_ID << 16) | SPMC_ID = (0xFFFF << 16) | 0x8000
     let spmd_ep_id: u64 = 0xFFFF;
