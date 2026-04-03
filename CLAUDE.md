@@ -287,7 +287,7 @@ Falls back to QEMU virt defaults if DTB parse fails (e.g., QEMU passes addr=0 wi
 
 `VmGlobalState` contains per-VM: `pending_sgis[MAX_VCPUS]`, `pending_spis[MAX_VCPUS]`, `terminal_exit[MAX_VCPUS]`, `vcpu_online_mask`, `current_vcpu_id`, `pending_cpu_on`, `preemption_exit`. Accessed via `vm_state(vm_id)` or `current_vm_state()`.
 
-**SPMC globals** (sel2 feature, `SpinLock`-protected for per-CPU SPMD concurrency): `NWD_RXTX` (NWd RXTX buffer state), `SPMC_SHARES` (memory share records), `NOTIF_STATE` (notification bitmaps). SpinLock required because pKVM's per-CPU SPMD breaks the single-event-loop serialization assumption.
+**SPMC globals** (sel2 feature, `SpinLock`-protected for per-CPU SPMD concurrency): `NWD_RXTX` (NWd RXTX buffer state), `SPMC_SHARES` (memory share records), `NOTIF_STATE` (notification bitmaps), `STAGE2_LOCK` (serializes all `map_page`/`unmap_page` calls to prevent TOCTOU in page table walks). SpinLock required because pKVM's per-CPU SPMD breaks the single-event-loop serialization assumption. Global heap (`src/mm/heap.rs`) also uses `SpinLock<Option<BumpAllocator>>` for concurrent `alloc_page()` safety.
 
 ### Device Manager Pattern
 
@@ -394,7 +394,7 @@ TF-A's default `CPTR_EL3.TFP=1` traps ALL FP/SIMD instructions from S-EL2 to EL3
 ### S-EL2 SPMC Boot (`sel2` feature)
 Entry point: `boot_sel2.S` → `rust_main_sel2(manifest_addr, hw_config_addr, core_id)`. SPMD passes x0=TOS_FW_CONFIG (manifest DTB at 0x0e002000), x1=HW_CONFIG, x4=core_id. Init: exception vectors → manifest parse → **S-EL2 Stage-1 MMU** (identity map with NS=1 for NWd DRAM) → GIC init (enables PPI 26+29 as Secure Group 1) → CNTHCTL_EL2 timer access → Secure Stage-2 → parse SPKG header (img_offset=0x4000) → clear SCTLR_EL1/VBAR_EL1 → ERET to SP1 → SP calls FFA_MSG_WAIT → detect SP2 at SP2_LOAD_ADDR (0x0e400000) → boot SP2 if present → **register secondary EP** (FFA_SECONDARY_EP_REGISTER) → FFA_MSG_WAIT → SPMC event loop. `src/manifest.rs` parses `/attribute` node (spmc_id, maj_ver, min_ver) per FF-A Core Manifest v1.0 (DEN0077A).
 
-**Secondary CPU warm-boot**: When pKVM issues PSCI CPU_ON, TF-A's SPMD routes the secondary CPU through `spmd_cpu_on_finish_handler()` → ERET to our registered `secondary_entry_sel2` in `boot_sel2.S`. The secondary path: set per-CPU stack (3 × 16KB in `.bss.sel2_pcpu_stacks`) → `rust_main_sel2_secondary()` → install VBAR → install S-EL2 Stage-1 MMU (reuse primary's page tables via `install_sel2_stage1_secondary()`) → FFA_MSG_WAIT → SPMD completes PSCI CPU_ON → NS-EL2 secondary boots.
+**Secondary CPU warm-boot**: When pKVM issues PSCI CPU_ON, TF-A's SPMD routes the secondary CPU through `spmd_cpu_on_finish_handler()` → ERET to our registered `secondary_entry_sel2` in `boot_sel2.S`. The secondary path: set per-CPU stack (3 × 32KB in `.bss.sel2_pcpu_stacks`) → `rust_main_sel2_secondary()` → install VBAR → install S-EL2 Stage-1 MMU (reuse primary's page tables via `install_sel2_stage1_secondary()`) → FFA_MSG_WAIT → SPMD completes PSCI CPU_ON → NS-EL2 secondary boots.
 
 ### S-EL2 Stage-1 MMU (`src/sel2_mmu.rs`)
 S-EL2 runs with MMU off by default. All memory accesses target the **Secure** physical address space. NWd RXTX buffer PAs (e.g. 0x42a16000) are in **Non-Secure** DRAM — writing without Stage-1 translation hits the Secure alias, so pKVM reads zeros from the NS alias.

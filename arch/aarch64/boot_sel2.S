@@ -62,7 +62,7 @@ secondary_entry_sel2:
     sub     x5, x4, #1              // 1->0, 2->1, 3->2
     adrp    x6, sel2_pcpu_stacks
     add     x6, x6, :lo12:sel2_pcpu_stacks
-    mov     x7, #(16 * 1024)        // 16KB per CPU
+    mov     x7, #(32 * 1024)        // 32KB per CPU
     mul     x8, x5, x7
     add     x8, x8, x6              // x8 = base + index * 16KB
     add     sp, x8, x7              // sp = top of stack (grows down)
@@ -88,12 +88,12 @@ stack_bottom:
     .space 65536
 stack_top:
 
-// Per-CPU stacks for secondary CPUs (3 CPUs x 16KB = 48KB)
-// CPU1 uses offset 0, CPU2 uses offset 16K, CPU3 uses offset 32K
+// Per-CPU stacks for secondary CPUs (3 CPUs x 32KB = 96KB)
+// CPU1 uses offset 0, CPU2 uses offset 32K, CPU3 uses offset 64K
 .section .bss.sel2_pcpu_stacks
 .align 16
 sel2_pcpu_stacks:
-    .space 3 * 16 * 1024
+    .space 3 * 32 * 1024
 
 // Weak symbols for BSS
 .weak __bss_start

@@ -268,6 +268,12 @@ static SPMC_SHARES: SpinLock<[SpmcShareRecord; MAX_SPMC_SHARES]> = SpinLock::new
 
 static SPMC_NEXT_HANDLE: AtomicU64 = AtomicU64::new(1);
 
+/// Global lock for Stage-2 page table modifications (map_page/unmap_page).
+/// Prevents TOCTOU races when two CPUs concurrently walk/modify the same
+/// SP's page tables (e.g., concurrent MEM_RETRIEVE_REQ via per-CPU SPMD).
+#[cfg(feature = "sel2")]
+static STAGE2_LOCK: SpinLock<()> = SpinLock::new(());
+
 // ── NWd fragment reassembly state ───────────────────────────────────
 
 /// State for reassembling fragmented NWd memory descriptors.
@@ -1892,6 +1898,19 @@ fn handle_rxtx_map(req: &SmcResult8) -> SmcResult8 {
         return make_error(ffa::FFA_INVALID_PARAMETERS as u64);
     }
 
+    // In sel2 mode, validate PAs are in S-EL2 Stage-1 accessible NS DRAM range.
+    // Only accept addresses that S-EL2 can safely dereference.
+    #[cfg(feature = "sel2")]
+    if tx_pa < 0x4000_0000 || tx_pa >= 0xC000_0000 || rx_pa < 0x4000_0000 || rx_pa >= 0xC000_0000
+    {
+        crate::log_debug!(
+            "[SPMC] RXTX_MAP: rejecting out-of-range tx={:#x} rx={:#x}\n",
+            tx_pa,
+            rx_pa
+        );
+        return make_error(ffa::FFA_INVALID_PARAMETERS as u64);
+    }
+
     let mut nwd = NWD_RXTX.lock();
     // Allow re-mapping: pKVM's ffa_map_hyp_buffers() issues a second
     // RXTX_MAP after the host kernel's FF-A driver already registered
@@ -2113,6 +2132,10 @@ fn handle_spmc_mem_frag_tx(req: &SmcResult8) -> SmcResult8 {
             }
             nwd.tx_pa
         };
+        if tx_pa < 0x4000_0000 || tx_pa >= 0xC000_0000 {
+            frag.active = false;
+            return make_error(ffa::FFA_INVALID_PARAMETERS as u64);
+        }
         unsafe {
             core::ptr::copy_nonoverlapping(
                 tx_pa as *const u8,
@@ -2216,6 +2239,11 @@ fn handle_spmc_mem_share(req: &SmcResult8, is_lend: bool) -> SmcResult8 {
         if mapped && total_length > 0 {
             let fragment_length = req.x2 as u32;
 
+            // Validate tx_pa is in S-EL2 Stage-1 accessible NS DRAM range
+            if tx_pa < 0x4000_0000 || tx_pa >= 0xC000_0000 {
+                return make_error(ffa::FFA_INVALID_PARAMETERS as u64);
+            }
+
             // Fragmented: first fragment only — initiate reassembly
             if total_length != fragment_length && fragment_length > 0 && total_length > 0 {
                 if total_length > 4096 || fragment_length > total_length {
@@ -2253,9 +2281,9 @@ fn handle_spmc_mem_share(req: &SmcResult8, is_lend: bool) -> SmcResult8 {
                 };
             }
 
-            // Non-fragmented: parse entire descriptor
-            // SAFETY: `tx_pa` comes from validated RXTX_MAP registration and
-            // `total_length` is bounded by the FF-A request payload length.
+            // Non-fragmented: parse entire descriptor directly from NWd TX buffer.
+            // No local copy — stack space is limited on secondary CPUs (16KB).
+            // tx_pa was validated above and points to S-EL2-accessible NS DRAM.
             let parsed = unsafe {
                 crate::ffa::descriptors::parse_mem_region(tx_pa as *const u8, total_length)
             };
@@ -2400,9 +2428,12 @@ fn handle_spmc_mem_retrieve(req: &SmcResult8, _current_sp: Option<(u16, u64)>) -
             return make_error(ffa::FFA_DENIED as u64);
         }
 
-        // In sel2 mode, map pages into the receiver SP's Secure Stage-2
+        // In sel2 mode, map pages into the receiver SP's Secure Stage-2.
+        // STAGE2_LOCK serializes all page table walks to prevent TOCTOU races
+        // when two CPUs concurrently allocate L2/L3 tables via map_page().
         #[cfg(feature = "sel2")]
         {
+            let _s2guard = STAGE2_LOCK.lock();
             let mut mapped = false;
             if let Some((current_sp_id, current_vsttbr)) = _current_sp {
                 if current_sp_id == receiver_id {
@@ -2577,9 +2608,11 @@ fn handle_spmc_mem_relinquish(req: &SmcResult8, _current_sp: Option<(u16, u64)>)
         return make_error(ffa::FFA_DENIED as u64);
     }
 
-    // In sel2 mode, unmap pages from the receiver SP's Secure Stage-2
+    // In sel2 mode, unmap pages from the receiver SP's Secure Stage-2.
+    // STAGE2_LOCK serializes page table modifications across CPUs.
     #[cfg(feature = "sel2")]
     {
+        let _s2guard = STAGE2_LOCK.lock();
         let mut unmapped = false;
         if let Some((current_sp_id, current_vsttbr)) = _current_sp {
             if current_sp_id == receiver_id {
