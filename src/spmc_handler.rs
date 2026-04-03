@@ -246,6 +246,7 @@ struct SpmcShareRecord {
     range_count: usize,
     active: bool,
     is_lend: bool,
+    is_donate: bool,
     retrieved: bool,
 }
 
@@ -258,6 +259,7 @@ static SPMC_SHARES: SpinLock<[SpmcShareRecord; MAX_SPMC_SHARES]> = SpinLock::new
         range_count: 0,
         active: false,
         is_lend: false,
+        is_donate: false,
         retrieved: false,
     };
     [
@@ -284,6 +286,7 @@ pub struct NwdFragmentState {
     pub received: u32,
     pub handle: u64,
     is_lend: bool,
+    is_donate: bool,
     sender_id: u16, // Track sender to prevent mid-fragment sender switching
 }
 
@@ -294,6 +297,7 @@ pub static NWD_FRAG: SpinLock<NwdFragmentState> = SpinLock::new(NwdFragmentState
     received: 0,
     handle: 0,
     is_lend: false,
+    is_donate: false,
     sender_id: 0,
 });
 
@@ -366,6 +370,7 @@ pub fn record_spmc_share(
     receiver_id: u16,
     ranges: &[(u64, u32)],
     is_lend: bool,
+    is_donate: bool,
 ) -> Option<u64> {
     if ranges.len() > MAX_SHARE_RANGES {
         return None;
@@ -387,6 +392,7 @@ pub fn record_spmc_share(
                 range_count: count,
                 active: true,
                 is_lend,
+                is_donate,
                 retrieved: false,
             };
             return Some(handle);
@@ -398,7 +404,7 @@ pub fn record_spmc_share(
 /// Look up a share record by handle (immutable).
 fn lookup_spmc_share(
     handle: u64,
-) -> Option<(u16, u16, [(u64, u32); MAX_SHARE_RANGES], usize, bool, bool)> {
+) -> Option<(u16, u16, [(u64, u32); MAX_SHARE_RANGES], usize, bool, bool, bool)> {
     let records = SPMC_SHARES.lock();
     for record in records.iter() {
         if record.active && record.handle == handle {
@@ -408,6 +414,7 @@ fn lookup_spmc_share(
                 record.ranges,
                 record.range_count,
                 record.is_lend,
+                record.is_donate,
                 record.retrieved,
             ));
         }
@@ -439,11 +446,14 @@ fn mark_spmc_relinquished(handle: u64) -> bool {
     false
 }
 
-/// Reclaim (delete) a share record. Fails if still retrieved.
+/// Reclaim (delete) a share record. Fails if still retrieved or if donated.
 fn reclaim_spmc_share(handle: u64) -> Result<(), i32> {
     let mut records = SPMC_SHARES.lock();
     for record in records.iter_mut() {
         if record.active && record.handle == handle {
+            if record.is_donate {
+                return Err(ffa::FFA_DENIED);
+            }
             if record.retrieved {
                 return Err(ffa::FFA_DENIED);
             }
@@ -920,6 +930,8 @@ fn handle_sp_exit(sp: &mut crate::sp_context::SpContext, sp_id: u16) -> SmcResul
             && x0 != ffa::FFA_MEM_SHARE_64
             && x0 != ffa::FFA_MEM_LEND_32
             && x0 != ffa::FFA_MEM_LEND_64
+            && x0 != ffa::FFA_MEM_DONATE_32
+            && x0 != ffa::FFA_MEM_DONATE_64
             && x0 != ffa::FFA_MEM_RECLAIM
             && x0 != ffa::FFA_MEM_FRAG_RX
             && x0 != ffa::FFA_CONSOLE_LOG_32
@@ -988,9 +1000,11 @@ fn handle_sp_exit(sp: &mut crate::sp_context::SpContext, sp_id: u16) -> SmcResul
                 );
             }
             ffa::FFA_MEM_SHARE_32 | ffa::FFA_MEM_SHARE_64
-            | ffa::FFA_MEM_LEND_32 | ffa::FFA_MEM_LEND_64 => {
+            | ffa::FFA_MEM_LEND_32 | ffa::FFA_MEM_LEND_64
+            | ffa::FFA_MEM_DONATE_32 | ffa::FFA_MEM_DONATE_64 => {
                 let is_lend = x0 == ffa::FFA_MEM_LEND_32 || x0 == ffa::FFA_MEM_LEND_64;
-                match validate_sp_share(sp_id, x1, x3, x4, x5, is_lend) {
+                let is_donate = x0 == ffa::FFA_MEM_DONATE_32 || x0 == ffa::FFA_MEM_DONATE_64;
+                match validate_sp_share(sp_id, x1, x3, x4, x5, is_lend, is_donate) {
                     Ok(handle) => sp.set_args(
                         ffa::FFA_SUCCESS_32, 0,
                         handle & 0xFFFF_FFFF, handle >> 32,
@@ -1501,9 +1515,11 @@ pub fn dispatch_ffa_as_sp(req: &SmcResult8, sp_id: u16, vsttbr: u64) -> SmcResul
             make_error(ffa::FFA_DENIED as u64)
         }
         ffa::FFA_MEM_SHARE_32 | ffa::FFA_MEM_SHARE_64
-        | ffa::FFA_MEM_LEND_32 | ffa::FFA_MEM_LEND_64 => {
+        | ffa::FFA_MEM_LEND_32 | ffa::FFA_MEM_LEND_64
+        | ffa::FFA_MEM_DONATE_32 | ffa::FFA_MEM_DONATE_64 => {
             let is_lend = req.x0 == ffa::FFA_MEM_LEND_32 || req.x0 == ffa::FFA_MEM_LEND_64;
-            match validate_sp_share(sp_id, req.x1, req.x3, req.x4, req.x5, is_lend) {
+            let is_donate = req.x0 == ffa::FFA_MEM_DONATE_32 || req.x0 == ffa::FFA_MEM_DONATE_64;
+            match validate_sp_share(sp_id, req.x1, req.x3, req.x4, req.x5, is_lend, is_donate) {
                 Ok(handle) => SmcResult8 {
                     x0: ffa::FFA_SUCCESS_32, x1: 0,
                     x2: handle & 0xFFFF_FFFF, x3: handle >> 32,
@@ -1606,6 +1622,7 @@ pub fn dispatch_ffa(req: &SmcResult8) -> SmcResult8 {
                     | ffa::FFA_RUN
                     | ffa::FFA_MEM_SHARE_32
                     | ffa::FFA_MEM_LEND_32
+                    | ffa::FFA_MEM_DONATE_32
                     | ffa::FFA_MEM_RETRIEVE_REQ_32
                     | ffa::FFA_MEM_RELINQUISH
                     | ffa::FFA_MEM_RECLAIM
@@ -1669,8 +1686,8 @@ pub fn dispatch_ffa(req: &SmcResult8) -> SmcResult8 {
             handle_direct_req(req)
         }
 
-        ffa::FFA_MEM_SHARE_32 | ffa::FFA_MEM_SHARE_64 => handle_spmc_mem_share(req, false),
-        ffa::FFA_MEM_LEND_32 | ffa::FFA_MEM_LEND_64 => handle_spmc_mem_share(req, true),
+        ffa::FFA_MEM_SHARE_32 | ffa::FFA_MEM_SHARE_64 => handle_spmc_mem_share(req, false, false),
+        ffa::FFA_MEM_LEND_32 | ffa::FFA_MEM_LEND_64 => handle_spmc_mem_share(req, true, false),
         ffa::FFA_MEM_RETRIEVE_REQ_32 | ffa::FFA_MEM_RETRIEVE_REQ_64 => {
             handle_spmc_mem_retrieve(req, None)
         }
@@ -1679,7 +1696,7 @@ pub fn dispatch_ffa(req: &SmcResult8) -> SmcResult8 {
         ffa::FFA_MEM_FRAG_TX => handle_spmc_mem_frag_tx(req),
         ffa::FFA_MEM_FRAG_RX => handle_spmc_mem_frag_rx(req),
         ffa::FFA_MEM_DONATE_32 | ffa::FFA_MEM_DONATE_64 => {
-            make_error(ffa::FFA_NOT_SUPPORTED as u64)
+            handle_spmc_mem_share(req, false, true)
         }
 
         // ── Notifications ──────────────────────────────────────────────
@@ -2166,6 +2183,7 @@ fn handle_spmc_mem_frag_tx(req: &SmcResult8) -> SmcResult8 {
     // extract result, then release lock before acquiring SPMC_SHARES.
     let total_length = frag.total_length;
     let is_lend = frag.is_lend;
+    let is_donate = frag.is_donate;
     let frag_handle = frag.handle;
 
     let parsed = unsafe {
@@ -2204,6 +2222,7 @@ fn handle_spmc_mem_frag_tx(req: &SmcResult8) -> SmcResult8 {
                 range_count: count,
                 active: true,
                 is_lend,
+                is_donate,
                 retrieved: false,
             };
             return SmcResult8 {
@@ -2222,7 +2241,7 @@ fn handle_spmc_mem_frag_tx(req: &SmcResult8) -> SmcResult8 {
 ///
 /// In sel2 mode: reads FF-A v1.1 composite memory region descriptor from NWd TX buffer.
 /// In unit tests (no sel2): uses register-based protocol (x3=IPA, x4=count, x5=receiver).
-fn handle_spmc_mem_share(req: &SmcResult8, is_lend: bool) -> SmcResult8 {
+fn handle_spmc_mem_share(req: &SmcResult8, is_lend: bool, is_donate: bool) -> SmcResult8 {
     let sender_id: u16;
     let receiver_id: u16;
     let mut ranges = [(0u64, 0u32); MAX_SHARE_RANGES];
@@ -2264,6 +2283,7 @@ fn handle_spmc_mem_share(req: &SmcResult8, is_lend: bool) -> SmcResult8 {
                 frag.received = fragment_length;
                 frag.handle = spmc_alloc_handle();
                 frag.is_lend = is_lend;
+                frag.is_donate = is_donate;
                 // Extract sender_id from FfaMemRegion header (offset 2, u16)
                 frag.sender_id = if fragment_length >= 4 {
                     unsafe { core::ptr::read_unaligned(frag.accum_buf.as_ptr().add(2) as *const u16) }
@@ -2357,7 +2377,7 @@ fn handle_spmc_mem_share(req: &SmcResult8, is_lend: bool) -> SmcResult8 {
         }
     }
 
-    match record_spmc_share(sender_id, receiver_id, &ranges[..range_count], is_lend) {
+    match record_spmc_share(sender_id, receiver_id, &ranges[..range_count], is_lend, is_donate) {
         Some(handle) => SmcResult8 {
             x0: ffa::FFA_SUCCESS_32,
             x1: 0,
@@ -2402,11 +2422,11 @@ fn handle_spmc_mem_retrieve(req: &SmcResult8, _current_sp: Option<(u16, u64)>) -
         handle = (req.x1 & 0xFFFF_FFFF) | (req.x2 << 32);
     }
 
-    let (_sender, receiver_id, ranges, range_count, _, retrieved) = match lookup_spmc_share(handle)
-    {
-        Some(info) => info,
-        None => return make_error(ffa::FFA_INVALID_PARAMETERS as u64),
-    };
+    let (_sender, receiver_id, ranges, range_count, _, _is_donate, retrieved) =
+        match lookup_spmc_share(handle) {
+            Some(info) => info,
+            None => return make_error(ffa::FFA_INVALID_PARAMETERS as u64),
+        };
 
     // NWd RETRIEVE_REQ (pKVM reclaim path, sel2 only): _current_sp is None.
     // Only return descriptor — don't map pages or mark retrieved.
@@ -2591,11 +2611,16 @@ fn handle_spmc_mem_frag_rx(req: &SmcResult8) -> SmcResult8 {
 fn handle_spmc_mem_relinquish(req: &SmcResult8, _current_sp: Option<(u16, u64)>) -> SmcResult8 {
     let handle = (req.x1 & 0xFFFF_FFFF) | (req.x2 << 32);
 
-    let (_sender, receiver_id, ranges, range_count, _, retrieved) = match lookup_spmc_share(handle)
-    {
-        Some(info) => info,
-        None => return make_error(ffa::FFA_INVALID_PARAMETERS as u64),
-    };
+    let (_sender, receiver_id, ranges, range_count, _, is_donate, retrieved) =
+        match lookup_spmc_share(handle) {
+            Some(info) => info,
+            None => return make_error(ffa::FFA_INVALID_PARAMETERS as u64),
+        };
+
+    // Donated pages belong permanently to receiver — RELINQUISH is not valid
+    if is_donate {
+        return make_error(ffa::FFA_DENIED as u64);
+    }
 
     // Validate caller is the authorized receiver (isolation: SP1 cannot relinquish SP2's share)
     if let Some((current_sp_id, _)) = _current_sp {
@@ -2683,7 +2708,7 @@ fn handle_spmc_mem_reclaim(req: &SmcResult8) -> SmcResult8 {
     }
 }
 
-/// Validate and record an SP-initiated MEM_SHARE/LEND.
+/// Validate and record an SP-initiated MEM_SHARE/LEND/DONATE.
 /// Returns Ok(handle) on success, Err(error_code) on validation failure.
 fn validate_sp_share(
     sp_id: u16,
@@ -2692,6 +2717,7 @@ fn validate_sp_share(
     x4: u64,
     x5: u64,
     is_lend: bool,
+    is_donate: bool,
 ) -> Result<u64, u64> {
     let sender_id = ((x1 >> 16) & 0xFFFF) as u16;
     let receiver_id = (x5 & 0xFFFF) as u16;
@@ -2716,7 +2742,8 @@ fn validate_sp_share(
         return Err(ffa::FFA_INVALID_PARAMETERS as u64);
     }
     let ranges = [(ipa, page_count)];
-    record_spmc_share(sp_id, receiver_id, &ranges, is_lend).ok_or(ffa::FFA_NO_MEMORY as u64)
+    record_spmc_share(sp_id, receiver_id, &ranges, is_lend, is_donate)
+        .ok_or(ffa::FFA_NO_MEMORY as u64)
 }
 
 /// Validate and execute an SP-initiated MEM_RECLAIM.
@@ -2724,7 +2751,7 @@ fn validate_sp_share(
 fn validate_sp_reclaim(sp_id: u16, x1: u64, x2: u64) -> Result<(), u64> {
     let handle = (x1 & 0xFFFF_FFFF) | (x2 << 32);
     match lookup_spmc_share(handle) {
-        Some((sender, _, _, _, _, _)) if sender == sp_id => {
+        Some((sender, _, _, _, _, _, _)) if sender == sp_id => {
             reclaim_spmc_share(handle).map_err(|code| code as u64)
         }
         Some(_) => Err(ffa::FFA_DENIED as u64),

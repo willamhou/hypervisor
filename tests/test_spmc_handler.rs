@@ -471,11 +471,122 @@ pub fn run_tests() {
         pass += 1;
     }
 
-    // Test: FFA_MEM_DONATE -> NOT_SUPPORTED
+    // ── DONATE: basic NWd → SP1 ──
+    let donate_handle: u64;
     {
-        let resp = dispatch_ffa(&zero_req(ffa::FFA_MEM_DONATE_32));
+        let req = SmcResult8 {
+            x0: ffa::FFA_MEM_DONATE_32,
+            x1: 0x0001_8001, // sender=NWd(0x0001), receiver=SP1(0x8001)
+            x2: 0,
+            x3: 0xA000_0000, // IPA
+            x4: 1,           // 1 page
+            x5: 0x8001,      // receiver_id
+            x6: 0,
+            x7: 0,
+        };
+        let resp = dispatch_ffa(&req);
+        assert_eq!(resp.x0, ffa::FFA_SUCCESS_32);
+        donate_handle = resp.x2 | (resp.x3 << 32);
+        assert!(donate_handle != 0);
+        pass += 1;
+    }
+
+    // ── DONATE: RECLAIM by sender → DENIED (sender no longer owns) ──
+    {
+        let req = SmcResult8 {
+            x0: ffa::FFA_MEM_RECLAIM,
+            x1: donate_handle & 0xFFFF_FFFF,
+            x2: donate_handle >> 32,
+            x3: 0,
+            x4: 0,
+            x5: 0,
+            x6: 0,
+            x7: 0,
+        };
+        let resp = dispatch_ffa(&req);
         assert_eq!(resp.x0, ffa::FFA_ERROR);
-        assert_eq!(resp.x2, ffa::FFA_NOT_SUPPORTED as u64);
+        assert_eq!(resp.x2 as i32, ffa::FFA_DENIED);
+        pass += 1;
+    }
+
+    // ── DONATE: SP RETRIEVE → SUCCESS ──
+    {
+        let req = SmcResult8 {
+            x0: ffa::FFA_MEM_RETRIEVE_REQ_32,
+            x1: donate_handle & 0xFFFF_FFFF,
+            x2: donate_handle >> 32,
+            x3: 0,
+            x4: 0,
+            x5: 0,
+            x6: 0,
+            x7: 0,
+        };
+        let resp = dispatch_ffa_as_sp(&req, 0x8001, 0);
+        assert_eq!(resp.x0, ffa::FFA_MEM_RETRIEVE_RESP);
+        pass += 1;
+    }
+
+    // ── DONATE: SP RELINQUISH → DENIED (donated pages are permanent) ──
+    {
+        let req = SmcResult8 {
+            x0: ffa::FFA_MEM_RELINQUISH,
+            x1: donate_handle & 0xFFFF_FFFF,
+            x2: donate_handle >> 32,
+            x3: 0,
+            x4: 0,
+            x5: 0,
+            x6: 0,
+            x7: 0,
+        };
+        let resp = dispatch_ffa_as_sp(&req, 0x8001, 0);
+        assert_eq!(resp.x0, ffa::FFA_ERROR);
+        assert_eq!(resp.x2 as i32, ffa::FFA_DENIED);
+        pass += 1;
+    }
+
+    // ── DONATE: 64-bit variant also works ──
+    {
+        let req = SmcResult8 {
+            x0: ffa::FFA_MEM_DONATE_64,
+            x1: 0x0001_8002, // sender=NWd(0x0001), receiver=SP2(0x8002)
+            x2: 0,
+            x3: 0xA001_0000,
+            x4: 1,
+            x5: 0x8002,
+            x6: 0,
+            x7: 0,
+        };
+        let resp = dispatch_ffa(&req);
+        assert_eq!(resp.x0, ffa::FFA_SUCCESS_32);
+        pass += 1;
+    }
+
+    // ── DONATE: SP-to-SP via dispatch_ffa_as_sp ──
+    {
+        let req = SmcResult8 {
+            x0: ffa::FFA_MEM_DONATE_32,
+            x1: (0x8001u64 << 16) | 0x8001, // sender=SP1
+            x2: 0,
+            x3: 0xB000_0000,
+            x4: 1,
+            x5: 0x8002, // receiver=SP2
+            x6: 0,
+            x7: 0,
+        };
+        let resp = dispatch_ffa_as_sp(&req, 0x8001, 0);
+        assert_eq!(resp.x0, ffa::FFA_SUCCESS_32);
+        let sp_donate_handle = resp.x2 | (resp.x3 << 32);
+
+        // SP1 (sender) RECLAIM → DENIED
+        let req2 = SmcResult8 {
+            x0: ffa::FFA_MEM_RECLAIM,
+            x1: sp_donate_handle & 0xFFFF_FFFF,
+            x2: sp_donate_handle >> 32,
+            x3: 0, x4: 0, x5: 0, x6: 0, x7: 0,
+        };
+        let resp2 = dispatch_ffa_as_sp(&req2, 0x8001, 0);
+        assert_eq!(resp2.x0, ffa::FFA_ERROR);
+        assert_eq!(resp2.x2 as i32, ffa::FFA_DENIED);
         pass += 1;
     }
 
@@ -633,7 +744,7 @@ pub fn run_tests() {
             (0xA000_3000, 1),
             (0xA000_4000, 1),
         ];
-        let result = hypervisor::spmc_handler::record_spmc_share(0x0001, 0x8001, &too_many, false);
+        let result = hypervisor::spmc_handler::record_spmc_share(0x0001, 0x8001, &too_many, false, false);
         assert!(result.is_none());
         pass += 1;
     }
@@ -931,10 +1042,11 @@ pub fn run_tests() {
         pass += 1;
     }
 
-    // ── STRESS-1: Fill all 16 share slots, then 17th → fails ──
+    // ── STRESS-1: Fill remaining share slots, then overflow → fails ──
+    // 3 slots permanently occupied by DONATE records (non-reclaimable)
     {
-        let mut handles = [0u64; 16];
-        for i in 0..16u64 {
+        let mut handles = [0u64; 13];
+        for i in 0..13u64 {
             let req = SmcResult8 {
                 x0: ffa::FFA_MEM_SHARE_32,
                 x1: 0x0001 << 16,
@@ -949,9 +1061,9 @@ pub fn run_tests() {
             assert_eq!(resp.x0, ffa::FFA_SUCCESS_32);
             handles[i as usize] = resp.x2 | (resp.x3 << 32);
         }
-        pass += 1; // 16 shares created
+        pass += 1; // 13 shares created
 
-        // 17th share should fail (NO_MEMORY or similar)
+        // 14th share should fail (NO_MEMORY — all 16 slots occupied)
         let req = SmcResult8 {
             x0: ffa::FFA_MEM_SHARE_32,
             x1: 0x0001 << 16,
@@ -964,10 +1076,10 @@ pub fn run_tests() {
         };
         let resp = dispatch_ffa(&req);
         assert_eq!(resp.x0, ffa::FFA_ERROR);
-        pass += 1; // 17th rejected
+        pass += 1; // overflow rejected
 
-        // Clean up: reclaim all 16
-        for i in 0..16 {
+        // Clean up: reclaim all 13
+        for i in 0..13 {
             let req = SmcResult8 {
                 x0: ffa::FFA_MEM_RECLAIM,
                 x1: handles[i] & 0xFFFF_FFFF,
@@ -981,7 +1093,7 @@ pub fn run_tests() {
             let resp = dispatch_ffa(&req);
             assert_eq!(resp.x0, ffa::FFA_SUCCESS_32);
         }
-        pass += 1; // all 16 reclaimed
+        pass += 1; // all 13 reclaimed
     }
 
     // ── STRESS-2: Interleaved share/retrieve/relinquish/reclaim across SP1 and SP2 ──
