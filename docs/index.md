@@ -1,6 +1,12 @@
-# Two Hypervisors, One SoC: Replacing Hafnium with 30K Lines of Rust
+---
+layout: default
+title: "Two Hypervisors, One SoC: Replacing Hafnium with 30K Lines of Rust"
+description: "A bare-metal SPMC at S-EL2 that boots Linux, manages Secure Partitions, and runs alongside Android pKVM"
+---
 
 *A bare-metal SPMC at S-EL2 that boots Linux, manages Secure Partitions, and runs alongside Android pKVM — from first ERET to 35/35 E2E tests in 10 weeks.*
+
+[View on GitHub](https://github.com/willamhou/hypervisor)
 
 ---
 
