@@ -1,0 +1,126 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  check:
+    name: Check, Clippy, Format
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust nightly
+        uses: dtolnay/rust-toolchain@nightly
+        with:
+          components: rust-src, rustfmt, clippy
+          targets: aarch64-unknown-none
+
+      - name: Install cross-compilation tools
+        run: sudo apt-get update && sudo apt-get install -y binutils-aarch64-linux-gnu
+
+      - name: Cache cargo
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock', '**/Cargo.toml') }}
+          restore-keys: ${{ runner.os }}-cargo-
+
+      - name: Build
+        run: cargo build --target aarch64-unknown-none
+
+      - name: Clippy (0 warnings)
+        run: cargo clippy --target aarch64-unknown-none -- -D warnings
+
+      - name: Format check
+        run: cargo fmt --check
+
+  qemu-test:
+    name: QEMU Unit Tests
+    runs-on: ubuntu-latest
+    needs: check
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust nightly
+        uses: dtolnay/rust-toolchain@nightly
+        with:
+          components: rust-src
+          targets: aarch64-unknown-none
+
+      - name: Install tools
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y qemu-system-aarch64 binutils-aarch64-linux-gnu
+
+      - name: Cache cargo
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock', '**/Cargo.toml') }}
+          restore-keys: ${{ runner.os }}-cargo-
+
+      - name: Build
+        run: cargo build --target aarch64-unknown-none
+
+      - name: Create raw binary
+        run: aarch64-linux-gnu-objcopy -O binary target/aarch64-unknown-none/debug/hypervisor target/aarch64-unknown-none/debug/hypervisor.bin
+
+      - name: Run unit tests on QEMU
+        run: |
+          timeout 120 qemu-system-aarch64 \
+            -machine virt,virtualization=on,gic-version=3 \
+            -cpu max -smp 4 -m 2G -nographic \
+            -kernel target/aarch64-unknown-none/debug/hypervisor \
+            2>&1 | tee qemu-output.txt &
+          QEMU_PID=$!
+
+          # Wait for last test suite to complete or timeout
+          for i in $(seq 1 110); do
+            if grep -q "guest_interrupt" qemu-output.txt 2>/dev/null; then
+              sleep 3
+              kill $QEMU_PID 2>/dev/null || true
+              break
+            fi
+            sleep 1
+          done
+          kill $QEMU_PID 2>/dev/null || true
+          wait $QEMU_PID 2>/dev/null || true
+
+          # Verify results
+          echo "=== Test Results ==="
+          grep "Results:\|PASSED\|FAILED\|PANIC" qemu-output.txt || true
+
+          # Fail if any PANIC or FAIL found (excluding expected test output patterns)
+          if grep -q "^!!! PANIC" qemu-output.txt; then
+            echo "PANIC detected in test output!"
+            exit 1
+          fi
+
+          # Count FAIL lines (excluding lines that say "0 failed")
+          FAILS=$(grep -c "\[FAIL\]" qemu-output.txt || true)
+          if [ "$FAILS" -gt 0 ]; then
+            echo "$FAILS test failures detected!"
+            exit 1
+          fi
+
+          echo "All tests passed."
+
+      - name: Upload test log
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: qemu-test-output
+          path: qemu-output.txt
