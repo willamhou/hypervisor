@@ -26,7 +26,9 @@ pub fn alloc_page() -> Option<u64> {
 
 /// Allocate memory with specified size and alignment
 pub fn alloc_aligned(size: u64, align: u64) -> Option<u64> {
-    HEAP.lock().as_mut().and_then(|a| a.alloc_aligned(size, align))
+    HEAP.lock()
+        .as_mut()
+        .and_then(|a| a.alloc_aligned(size, align))
 }
 
 /// Allocate memory with default alignment (8 bytes)

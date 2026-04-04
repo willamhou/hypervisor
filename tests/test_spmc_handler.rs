@@ -582,7 +582,11 @@ pub fn run_tests() {
             x0: ffa::FFA_MEM_RECLAIM,
             x1: sp_donate_handle & 0xFFFF_FFFF,
             x2: sp_donate_handle >> 32,
-            x3: 0, x4: 0, x5: 0, x6: 0, x7: 0,
+            x3: 0,
+            x4: 0,
+            x5: 0,
+            x6: 0,
+            x7: 0,
         };
         let resp2 = dispatch_ffa_as_sp(&req2, 0x8001, 0);
         assert_eq!(resp2.x0, ffa::FFA_ERROR);
@@ -744,7 +748,8 @@ pub fn run_tests() {
             (0xA000_3000, 1),
             (0xA000_4000, 1),
         ];
-        let result = hypervisor::spmc_handler::record_spmc_share(0x0001, 0x8001, &too_many, false, false);
+        let result =
+            hypervisor::spmc_handler::record_spmc_share(0x0001, 0x8001, &too_many, false, false);
         assert!(result.is_none());
         pass += 1;
     }
@@ -770,7 +775,11 @@ pub fn run_tests() {
             x0: ffa::FFA_MEM_RETRIEVE_REQ_32,
             x1: h & 0xFFFF_FFFF,
             x2: h >> 32,
-            x3: 0, x4: 0, x5: 0, x6: 0, x7: 0,
+            x3: 0,
+            x4: 0,
+            x5: 0,
+            x6: 0,
+            x7: 0,
         };
         let resp = dispatch_ffa(&req);
         assert_eq!(resp.x0, ffa::FFA_MEM_RETRIEVE_RESP);
@@ -783,14 +792,24 @@ pub fn run_tests() {
         // Cleanup: RELINQUISH + RECLAIM
         let req = SmcResult8 {
             x0: ffa::FFA_MEM_RELINQUISH,
-            x1: h & 0xFFFF_FFFF, x2: h >> 32,
-            x3: 0, x4: 0, x5: 0, x6: 0, x7: 0,
+            x1: h & 0xFFFF_FFFF,
+            x2: h >> 32,
+            x3: 0,
+            x4: 0,
+            x5: 0,
+            x6: 0,
+            x7: 0,
         };
         dispatch_ffa(&req);
         let req = SmcResult8 {
             x0: ffa::FFA_MEM_RECLAIM,
-            x1: h & 0xFFFF_FFFF, x2: h >> 32,
-            x3: 0, x4: 0, x5: 0, x6: 0, x7: 0,
+            x1: h & 0xFFFF_FFFF,
+            x2: h >> 32,
+            x3: 0,
+            x4: 0,
+            x5: 0,
+            x6: 0,
+            x7: 0,
         };
         dispatch_ffa(&req);
     }
@@ -814,8 +833,13 @@ pub fn run_tests() {
         // RETRIEVE → ok
         let req = SmcResult8 {
             x0: ffa::FFA_MEM_RETRIEVE_REQ_32,
-            x1: h & 0xFFFF_FFFF, x2: h >> 32,
-            x3: 0, x4: 0, x5: 0, x6: 0, x7: 0,
+            x1: h & 0xFFFF_FFFF,
+            x2: h >> 32,
+            x3: 0,
+            x4: 0,
+            x5: 0,
+            x6: 0,
+            x7: 0,
         };
         let resp = dispatch_ffa(&req);
         assert_eq!(resp.x0, ffa::FFA_MEM_RETRIEVE_RESP);
@@ -823,8 +847,13 @@ pub fn run_tests() {
         // RECLAIM (without RELINQUISH) → DENIED
         let req = SmcResult8 {
             x0: ffa::FFA_MEM_RECLAIM,
-            x1: h & 0xFFFF_FFFF, x2: h >> 32,
-            x3: 0, x4: 0, x5: 0, x6: 0, x7: 0,
+            x1: h & 0xFFFF_FFFF,
+            x2: h >> 32,
+            x3: 0,
+            x4: 0,
+            x5: 0,
+            x6: 0,
+            x7: 0,
         };
         let resp = dispatch_ffa(&req);
         assert_eq!(resp.x0, ffa::FFA_ERROR);
@@ -833,14 +862,24 @@ pub fn run_tests() {
         // Cleanup: RELINQUISH then RECLAIM
         let req = SmcResult8 {
             x0: ffa::FFA_MEM_RELINQUISH,
-            x1: h & 0xFFFF_FFFF, x2: h >> 32,
-            x3: 0, x4: 0, x5: 0, x6: 0, x7: 0,
+            x1: h & 0xFFFF_FFFF,
+            x2: h >> 32,
+            x3: 0,
+            x4: 0,
+            x5: 0,
+            x6: 0,
+            x7: 0,
         };
         dispatch_ffa(&req);
         let req = SmcResult8 {
             x0: ffa::FFA_MEM_RECLAIM,
-            x1: h & 0xFFFF_FFFF, x2: h >> 32,
-            x3: 0, x4: 0, x5: 0, x6: 0, x7: 0,
+            x1: h & 0xFFFF_FFFF,
+            x2: h >> 32,
+            x3: 0,
+            x4: 0,
+            x5: 0,
+            x6: 0,
+            x7: 0,
         };
         dispatch_ffa(&req);
     }
@@ -1133,7 +1172,11 @@ pub fn run_tests() {
             x0: ffa::FFA_MEM_RETRIEVE_REQ_32,
             x1: h1 & 0xFFFF_FFFF,
             x2: h1 >> 32,
-            x3: 0, x4: 0, x5: 0, x6: 0, x7: 0,
+            x3: 0,
+            x4: 0,
+            x5: 0,
+            x6: 0,
+            x7: 0,
         });
         // NWd retrieve returns success with x1=total_length > 0
         assert!(resp.x1 > 0);
@@ -1143,7 +1186,11 @@ pub fn run_tests() {
             x0: ffa::FFA_MEM_RECLAIM,
             x1: h2 & 0xFFFF_FFFF,
             x2: h2 >> 32,
-            x3: 0, x4: 0, x5: 0, x6: 0, x7: 0,
+            x3: 0,
+            x4: 0,
+            x5: 0,
+            x6: 0,
+            x7: 0,
         });
         assert_eq!(resp.x0, ffa::FFA_SUCCESS_32);
 
@@ -1152,7 +1199,11 @@ pub fn run_tests() {
             x0: ffa::FFA_MEM_RECLAIM,
             x1: h1 & 0xFFFF_FFFF,
             x2: h1 >> 32,
-            x3: 0, x4: 0, x5: 0, x6: 0, x7: 0,
+            x3: 0,
+            x4: 0,
+            x5: 0,
+            x6: 0,
+            x7: 0,
         });
         assert_eq!(resp.x0, ffa::FFA_ERROR);
         assert_eq!(resp.x2, ffa::FFA_DENIED as u64);
@@ -1162,7 +1213,11 @@ pub fn run_tests() {
             x0: ffa::FFA_MEM_RELINQUISH,
             x1: h1 & 0xFFFF_FFFF,
             x2: h1 >> 32,
-            x3: 0, x4: 0, x5: 0, x6: 0, x7: 0,
+            x3: 0,
+            x4: 0,
+            x5: 0,
+            x6: 0,
+            x7: 0,
         });
         assert_eq!(resp.x0, ffa::FFA_SUCCESS_32);
 
@@ -1171,7 +1226,11 @@ pub fn run_tests() {
             x0: ffa::FFA_MEM_RECLAIM,
             x1: h1 & 0xFFFF_FFFF,
             x2: h1 >> 32,
-            x3: 0, x4: 0, x5: 0, x6: 0, x7: 0,
+            x3: 0,
+            x4: 0,
+            x5: 0,
+            x6: 0,
+            x7: 0,
         });
         assert_eq!(resp.x0, ffa::FFA_SUCCESS_32);
         pass += 1;
@@ -1199,7 +1258,11 @@ pub fn run_tests() {
             x0: ffa::FFA_MEM_RETRIEVE_REQ_32,
             x1: h & 0xFFFF_FFFF,
             x2: h >> 32,
-            x3: 0, x4: 0, x5: 0, x6: 0, x7: 0,
+            x3: 0,
+            x4: 0,
+            x5: 0,
+            x6: 0,
+            x7: 0,
         };
         let resp = dispatch_ffa_as_sp(&req, 0x8001, 0);
         assert_eq!(resp.x0, ffa::FFA_ERROR);
@@ -1217,7 +1280,11 @@ pub fn run_tests() {
             x0: ffa::FFA_MEM_RELINQUISH,
             x1: h & 0xFFFF_FFFF,
             x2: h >> 32,
-            x3: 0, x4: 0, x5: 0, x6: 0, x7: 0,
+            x3: 0,
+            x4: 0,
+            x5: 0,
+            x6: 0,
+            x7: 0,
         };
         let resp = dispatch_ffa_as_sp(&req, 0x8001, 0);
         assert_eq!(resp.x0, ffa::FFA_ERROR);
@@ -1234,7 +1301,11 @@ pub fn run_tests() {
             x0: ffa::FFA_MEM_RECLAIM,
             x1: h & 0xFFFF_FFFF,
             x2: h >> 32,
-            x3: 0, x4: 0, x5: 0, x6: 0, x7: 0,
+            x3: 0,
+            x4: 0,
+            x5: 0,
+            x6: 0,
+            x7: 0,
         });
         assert_eq!(resp.x0, ffa::FFA_SUCCESS_32);
         pass += 1;
@@ -1261,7 +1332,11 @@ pub fn run_tests() {
             x0: ffa::FFA_MEM_RETRIEVE_REQ_32,
             x1: h & 0xFFFF_FFFF,
             x2: h >> 32,
-            x3: 0, x4: 0, x5: 0, x6: 0, x7: 0,
+            x3: 0,
+            x4: 0,
+            x5: 0,
+            x6: 0,
+            x7: 0,
         };
         let resp = dispatch_ffa_as_sp(&req, 0x8001, 0);
         assert!(resp.x0 == ffa::FFA_SUCCESS_32 || resp.x1 > 0);
@@ -1273,18 +1348,30 @@ pub fn run_tests() {
         pass += 1;
 
         // Clean up: relinquish + reclaim
-        let resp = dispatch_ffa_as_sp(&SmcResult8 {
-            x0: ffa::FFA_MEM_RELINQUISH,
-            x1: h & 0xFFFF_FFFF,
-            x2: h >> 32,
-            x3: 0, x4: 0, x5: 0, x6: 0, x7: 0,
-        }, 0x8001, 0);
+        let resp = dispatch_ffa_as_sp(
+            &SmcResult8 {
+                x0: ffa::FFA_MEM_RELINQUISH,
+                x1: h & 0xFFFF_FFFF,
+                x2: h >> 32,
+                x3: 0,
+                x4: 0,
+                x5: 0,
+                x6: 0,
+                x7: 0,
+            },
+            0x8001,
+            0,
+        );
         assert_eq!(resp.x0, ffa::FFA_SUCCESS_32);
         let resp = dispatch_ffa(&SmcResult8 {
             x0: ffa::FFA_MEM_RECLAIM,
             x1: h & 0xFFFF_FFFF,
             x2: h >> 32,
-            x3: 0, x4: 0, x5: 0, x6: 0, x7: 0,
+            x3: 0,
+            x4: 0,
+            x5: 0,
+            x6: 0,
+            x7: 0,
         });
         assert_eq!(resp.x0, ffa::FFA_SUCCESS_32);
         pass += 1;
@@ -1307,12 +1394,20 @@ pub fn run_tests() {
         let h = resp.x2 | (resp.x3 << 32);
 
         // RELINQUISH without RETRIEVE → DENIED
-        let resp = dispatch_ffa_as_sp(&SmcResult8 {
-            x0: ffa::FFA_MEM_RELINQUISH,
-            x1: h & 0xFFFF_FFFF,
-            x2: h >> 32,
-            x3: 0, x4: 0, x5: 0, x6: 0, x7: 0,
-        }, 0x8001, 0);
+        let resp = dispatch_ffa_as_sp(
+            &SmcResult8 {
+                x0: ffa::FFA_MEM_RELINQUISH,
+                x1: h & 0xFFFF_FFFF,
+                x2: h >> 32,
+                x3: 0,
+                x4: 0,
+                x5: 0,
+                x6: 0,
+                x7: 0,
+            },
+            0x8001,
+            0,
+        );
         assert_eq!(resp.x0, ffa::FFA_ERROR);
         assert_eq!(resp.x2, ffa::FFA_DENIED as u64);
         pass += 1;
@@ -1322,7 +1417,11 @@ pub fn run_tests() {
             x0: ffa::FFA_MEM_RECLAIM,
             x1: h & 0xFFFF_FFFF,
             x2: h >> 32,
-            x3: 0, x4: 0, x5: 0, x6: 0, x7: 0,
+            x3: 0,
+            x4: 0,
+            x5: 0,
+            x6: 0,
+            x7: 0,
         });
         assert_eq!(resp.x0, ffa::FFA_SUCCESS_32);
         pass += 1;
@@ -1571,7 +1670,10 @@ pub fn run_tests() {
             x1: 0xDEAD, // bogus handle lo
             x2: 0xBEEF, // bogus handle hi
             x3: 64,     // fragment length
-            x4: 0, x5: 0, x6: 0, x7: 0,
+            x4: 0,
+            x5: 0,
+            x6: 0,
+            x7: 0,
         };
         let resp = dispatch_ffa(&req);
         assert_eq!(resp.x0, ffa::FFA_ERROR);
@@ -1599,18 +1701,21 @@ pub fn run_tests() {
     // Write message header: sender=0x0001 (NWd VM0), receiver=0x8001 (SP1), size=4, payload=0xCAFEBABE
     unsafe {
         let p = tx_buf.0.as_mut_ptr();
-        core::ptr::write_unaligned(p as *mut u16, 0x0001u16);        // sender_id
+        core::ptr::write_unaligned(p as *mut u16, 0x0001u16); // sender_id
         core::ptr::write_unaligned(p.add(2) as *mut u16, 0x8001u16); // receiver_id
-        core::ptr::write_unaligned(p.add(4) as *mut u32, 4u32);      // payload size
+        core::ptr::write_unaligned(p.add(4) as *mut u32, 4u32); // payload size
         core::ptr::write_unaligned(p.add(8) as *mut u32, 0xCAFE_BABEu32); // payload
     }
 
     let rxtx_req = SmcResult8 {
         x0: ffa::FFA_RXTX_MAP,
         x1: tx_buf.0.as_ptr() as u64, // TX = stack buffer
-        x2: 0x6000_2000,               // RX (unused for MSG_SEND2)
+        x2: 0x6000_2000,              // RX (unused for MSG_SEND2)
         x3: 1,
-        x4: 0, x5: 0, x6: 0, x7: 0,
+        x4: 0,
+        x5: 0,
+        x6: 0,
+        x7: 0,
     };
     let resp = dispatch_ffa(&rxtx_req);
     assert_eq!(resp.x0, ffa::FFA_SUCCESS_32);
@@ -1771,8 +1876,7 @@ pub fn run_tests() {
     // SP2SP1: SP→SP self-call blocked (FFA_INVALID_PARAMETERS)
     {
         let mut req = zero_req(ffa::FFA_MSG_SEND_DIRECT_REQ_32);
-        req.x1 = ((0x8001u16 as u64) << 16)
-            | (0x8001u16 as u64);
+        req.x1 = ((0x8001u16 as u64) << 16) | (0x8001u16 as u64);
         let resp = dispatch_ffa_as_sp(&req, 0x8001u16, 0);
         assert_eq!(resp.x0, ffa::FFA_ERROR);
         assert_eq!(resp.x2 as i32, ffa::FFA_INVALID_PARAMETERS as i32);
@@ -1783,8 +1887,7 @@ pub fn run_tests() {
     {
         let mut req = zero_req(ffa::FFA_MSG_SEND_DIRECT_REQ_32);
         // SP1 claims to be SP2
-        req.x1 = ((0x8002u16 as u64) << 16)
-            | (0x8001u16 as u64);
+        req.x1 = ((0x8002u16 as u64) << 16) | (0x8001u16 as u64);
         let resp = dispatch_ffa_as_sp(&req, 0x8001u16, 0);
         assert_eq!(resp.x0, ffa::FFA_ERROR);
         assert_eq!(resp.x2 as i32, ffa::FFA_INVALID_PARAMETERS as i32);
@@ -1794,8 +1897,7 @@ pub fn run_tests() {
     // SP2SP3: SP→SP invalid destination
     {
         let mut req = zero_req(ffa::FFA_MSG_SEND_DIRECT_REQ_32);
-        req.x1 = ((0x8001u16 as u64) << 16)
-            | 0x8099; // non-existent SP
+        req.x1 = ((0x8001u16 as u64) << 16) | 0x8099; // non-existent SP
         let resp = dispatch_ffa_as_sp(&req, 0x8001u16, 0);
         assert_eq!(resp.x0, ffa::FFA_ERROR);
         assert_eq!(resp.x2 as i32, ffa::FFA_INVALID_PARAMETERS as i32);
@@ -1805,8 +1907,7 @@ pub fn run_tests() {
     // SP2SP4: SP→SP DIRECT_REQ_64 self-call also blocked
     {
         let mut req = zero_req(ffa::FFA_MSG_SEND_DIRECT_REQ_64);
-        req.x1 = ((0x8001u16 as u64) << 16)
-            | (0x8001u16 as u64);
+        req.x1 = ((0x8001u16 as u64) << 16) | (0x8001u16 as u64);
         let resp = dispatch_ffa_as_sp(&req, 0x8001u16, 0);
         assert_eq!(resp.x0, ffa::FFA_ERROR);
         assert_eq!(resp.x2 as i32, ffa::FFA_INVALID_PARAMETERS as i32);
@@ -1817,15 +1918,11 @@ pub fn run_tests() {
     {
         {
             let mut stack = hypervisor::spmc_handler::CALL_STACK.lock();
-            stack.push(
-                0x8002u16,
-                0x8001u16,
-            ).unwrap();
+            stack.push(0x8002u16, 0x8001u16).unwrap();
         }
         // SP1 tries to call SP2 — cycle! (SP2 is already in the stack as caller)
         let mut req = zero_req(ffa::FFA_MSG_SEND_DIRECT_REQ_32);
-        req.x1 = ((0x8001u16 as u64) << 16)
-            | (0x8002u16 as u64);
+        req.x1 = ((0x8001u16 as u64) << 16) | (0x8002u16 as u64);
         let resp = dispatch_ffa_as_sp(&req, 0x8001u16, 0);
         assert_eq!(resp.x0, ffa::FFA_ERROR);
         assert_eq!(resp.x2 as i32, ffa::FFA_BUSY as i32);
