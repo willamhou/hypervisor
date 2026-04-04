@@ -1,0 +1,786 @@
+========================================
+  ARM64 Hypervisor - Sprint 2.4
+  API Documentation
+========================================
+
+[INIT] Initializing at EL2...
+[INIT] Parsing host DTB at 0x0000000000000000...
+[INIT] DTB: parse failed, using defaults
+[INIT] Setting up exception vector table...
+[INIT] Exception handling initialized
+[GIC] Checking GICv3/v4 availability...
+[GIC] Initializing GICv3/v4 (system register interface)...
+[GIC] ICC_SRE_EL2 configured (Enable=1, SRE=1)
+[GIC] VGIC capabilities:
+  - List Registers: 4
+  - Priority bits: 5
+[GIC] ICC_CTLR_EL1.EOImode=1 (split priority drop/deactivation)
+[GIC] GICv3 initialization complete
+[INIT] Configuring timer...
+[TIMER] Frequency: 62500000 Hz
+[TIMER] Counter: 231703
+[TIMER] Control: 0x0000000000000000
+[INIT] Current EL: EL2
+[INIT] Initializing heap...
+[INIT] Heap initialized (16MB at 0x41000000)
+
+[TEST REGISTRY] START: dtb
+
+========================================
+  DTB Parsing Test
+========================================
+
+[DTB] Test 1: DTB initialized...
+[DTB] WARN: DTB not initialized (using defaults)
+[DTB] Test 2: UART base...
+[DTB] Test 2 PASSED
+
+[DTB] Test 3: GICD base...
+[DTB] Test 3 PASSED
+
+[DTB] Test 4: GICR base...
+[DTB] Test 4 PASSED
+
+[DTB] Test 5: num_cpus...
+[DTB] Test 5 PASSED
+
+[DTB] Test 6: RAM base...
+[DTB] Test 6 PASSED
+
+[DTB] Test 7: RAM size...
+[DTB] Test 7 PASSED
+
+[DTB] Test 8: GICR helpers...
+[DTB] Test 8 PASSED
+
+=== DTB Parsing: All 8 tests PASSED ===
+[TEST REGISTRY] END:   dtb
+[TEST REGISTRY] START: allocator
+
+========================================
+  Bump Allocator Test
+========================================
+
+[ALLOC] Test 1: Page allocation...
+[ALLOC] Test 1 PASSED
+
+[ALLOC] Test 2: Sequential allocation...
+[ALLOC] Test 2 PASSED
+
+[ALLOC] Test 3: Aligned allocation...
+[ALLOC] Test 3 PASSED
+
+[ALLOC] Test 4: Remaining space check...
+[ALLOC] Test 4 PASSED
+
+========================================
+  Bump Allocator Test PASSED
+========================================
+
+[TEST REGISTRY] END:   allocator
+[TEST REGISTRY] START: heap
+
+========================================
+  Global Heap Test
+========================================
+
+[HEAP] Test 1: Page allocation...
+[HEAP] Test 1 PASSED
+
+[HEAP] Test 2: Write to allocated page...
+[HEAP] Test 2 PASSED
+
+[HEAP] Test 3: Remaining space check...
+[HEAP] Test 3 PASSED
+
+[HEAP] Test 4: Multiple allocations...
+[HEAP] Test 4 PASSED
+
+========================================
+  Global Heap Test PASSED
+========================================
+
+[TEST REGISTRY] END:   heap
+[TEST REGISTRY] START: dynamic_pagetable
+
+========================================
+  Dynamic Page Table Test
+========================================
+
+[DYN PT] Test 1: Create mapper...
+[DYN PT] Test 1 PASSED
+
+[DYN PT] Test 2: Map 2MB region...
+[DYN PT] Test 2 PASSED
+
+[DYN PT] Test 3: Map multiple regions...
+[DYN PT] Test 3 PASSED
+
+[DYN PT] Test 4: Verify VTTBR...
+[DYN PT] Test 4 PASSED
+
+[DYN PT] Test 5: Unmap 4KB page...
+[DYN PT] Test 5 PASSED
+
+[DYN PT] Test 6: Unmap multiple 4KB pages...
+[DYN PT] Test 6 PASSED
+
+========================================
+  Dynamic Page Table Test PASSED (6 assertions)
+========================================
+
+[TEST REGISTRY] END:   dynamic_pagetable
+[TEST REGISTRY] START: multi_vcpu
+
+========================================
+  Multi-vCPU Support Test
+========================================
+
+[MULTI] Test 1: Create multiple vCPUs...
+[MULTI] vCPU 0 created
+[MULTI] vCPU 1 created
+[MULTI] Test 1 PASSED
+
+[MULTI] Test 2: vCPU state independence...
+[MULTI] vCPU state independence verified
+[MULTI] Test 2 PASSED
+
+[MULTI] Test 3: vCPU count...
+[MULTI] Test 3 PASSED
+
+[MULTI] Test 4: Duplicate vCPU rejection...
+[MULTI] Duplicate vCPU correctly rejected
+[MULTI] Test 4 PASSED
+
+========================================
+  Multi-vCPU Support Test PASSED
+========================================
+
+[TEST REGISTRY] END:   multi_vcpu
+[TEST REGISTRY] START: scheduler
+
+========================================
+  Scheduler Test
+========================================
+
+[SCHED] Test 1: Add vCPUs and pick first...
+[SCHED] Test 1 PASSED
+
+[SCHED] Test 2: Round-robin...
+[SCHED] Test 2 PASSED
+
+[SCHED] Test 3: Wrap-around...
+[SCHED] Test 3 PASSED
+
+[SCHED] Test 4: Block/unblock...
+[SCHED] Test 4 PASSED
+
+========================================
+  Scheduler Test PASSED
+========================================
+
+[TEST REGISTRY] END:   scheduler
+[TEST REGISTRY] START: vm_scheduler
+
+========================================
+  VM Scheduler Integration Test
+========================================
+
+[VM SCHED] Test 1: Create and schedule...
+[VM SCHED] Test 1 PASSED
+
+[VM SCHED] Test 2: Yield and reschedule...
+[VM SCHED] Test 2 PASSED
+
+[VM SCHED] Test 3: Block and reschedule...
+[VM SCHED] Test 3 PASSED
+
+[VM SCHED] Test 4: Unblock...
+[VM SCHED] Test 4 PASSED
+
+[VM SCHED] Test 5: Mark done...
+[VM SCHED] Test 5 PASSED
+
+========================================
+  VM Scheduler Integration Test PASSED
+========================================
+
+[TEST REGISTRY] END:   vm_scheduler
+[TEST REGISTRY] START: mmio
+
+========================================
+  MMIO Device Emulation Test
+========================================
+
+[MMIO TEST] Creating VM...
+[MMIO TEST] Guest entry: 0x0000000040234000
+[VM] Initializing memory mapping...
+[VM] Mapping region: 0x0000000040200000 - 0x0000000040400000
+[VM] Stage-2 region applied: gic-map (prio=10 Device ReadWrite ExecuteNever Map)
+[VM] Stage-2 region applied: gicd-trap (prio=100 Device ReadWrite ExecuteNever Trap)
+[VM] Stage-2 region applied: gicr-trap (prio=110 Device ReadWrite ExecuteNever Trap)
+[VM] Stage-2 region applied: pl011-uart-trap (prio=120 Device ReadWrite ExecuteNever Trap)
+[VM] Memory mapping complete
+[MMIO TEST] Created vCPU 0
+[MMIO TEST] Starting guest...
+[GUEST OUTPUT] MMIO
+
+[VCPU] Guest requested exit
+[MMIO TEST] Guest exited successfully
+
+[MMIO TEST] Test complete!
+========================================
+
+[TEST REGISTRY] END:   mmio
+[TEST REGISTRY] START: gicv3_virt
+
+========================================
+  GICv3 Virtual Interface Test
+========================================
+
+[GICv3 VIRT] GICv3 is available
+[GICv3 VIRT] Test 1: Reading VTR...
+[GICv3 VIRT] Number of List Registers: 4
+[GICv3 VIRT] Test 1 PASSED
+
+[GICv3 VIRT] Test 2: Building LR value...
+[GICv3 VIRT] LR fields verified: state=Pending, intid=27, priority=0xA0
+[GICv3 VIRT] Test 2 PASSED
+
+[GICv3 VIRT] Test 3: Write/Read LR...
+[GICv3 VIRT] LR write/read verified
+[GICv3 VIRT] LR cleared successfully
+[GICv3 VIRT] Test 3 PASSED
+
+[GICv3 VIRT] Test 4: Find free LR...
+[GICv3 VIRT] Found free LR at index: 0
+[GICv3 VIRT] Test 4 PASSED
+
+[GICv3 VIRT] Test 5: Pending count...
+[GICv3 VIRT] Initial pending count: 0
+[GICv3 VIRT] After inject: pending count = 1
+[GICv3 VIRT] After clear: pending count = 0
+[GICv3 VIRT] Test 5 PASSED
+
+[GICv3 VIRT] Test 6: ARMv8.4 feature check...
+[GICv3 VIRT] ARMv8.4+ features not available
+[GICv3 VIRT] Test 6 PASSED (informational)
+
+========================================
+  GICv3 Virtual Interface Test PASSED
+========================================
+
+[TEST REGISTRY] END:   gicv3_virt
+[TEST REGISTRY] START: complete_interrupt
+
+========================================
+  Complete Interrupt Handling Test
+  (GICv3 List Register Mode)
+========================================
+
+[COMPLETE IRQ] This test demonstrates:
+  1. GICv3 virtual interrupt injection
+  2. List Register usage for vIRQ
+  3. Guest interrupt handling
+
+[COMPLETE IRQ] Creating VM...
+[COMPLETE IRQ] GICv3 List Register injection is active
+[COMPLETE IRQ] Virtual interrupt infrastructure ready
+[COMPLETE IRQ] Available List Registers: 4
+[COMPLETE IRQ] Testing List Register write...
+[COMPLETE IRQ] SUCCESS: IRQ 27 injected into List Register
+[COMPLETE IRQ] List Register cleared
+
+[COMPLETE IRQ] Test complete!
+[COMPLETE IRQ] GICv3 virtual interrupt injection working
+========================================
+
+[TEST REGISTRY] END:   complete_interrupt
+[TEST REGISTRY] START: guest
+
+[TEST] Starting guest execution test...
+[TEST] Guest entry point: 0x000000004023e000
+[TEST] Guest stack: 0x0000000040288000
+[VM] Initializing memory mapping...
+[VM] Mapping region: 0x0000000040200000 - 0x0000000040400000
+[VM] Stage-2 region applied: gic-map (prio=10 Device ReadWrite ExecuteNever Map)
+[VM] Stage-2 region applied: gicd-trap (prio=100 Device ReadWrite ExecuteNever Trap)
+[VM] Stage-2 region applied: gicr-trap (prio=110 Device ReadWrite ExecuteNever Trap)
+[VM] Stage-2 region applied: pl011-uart-trap (prio=120 Device ReadWrite ExecuteNever Trap)
+[VM] Memory mapping complete
+[TEST] Created vCPU 0
+[TEST] Entering guest...
+[GUEST] G!
+
+[VCPU] Guest requested exit
+[TEST] Guest exited successfully
+[TEST] Guest test complete!
+
+[TEST REGISTRY] END:   guest
+[TEST REGISTRY] START: guest_loader
+
+[TEST] Guest Loader Test
+[TEST] ========================
+[GUEST] First 8 bytes at load addr: 00 00 00 00 00 00 00 00 
+[GUEST] No ELF magic - checking for branch instruction
+[GUEST] First instruction: 0x00000000
+[GUEST] Using load address as entry
+[TEST] Checking load_addr... PASS
+[TEST] Checking mem_size... PASS
+[TEST] Checking entry_point... PASS
+[TEST] Guest Loader Test PASSED
+
+[TEST REGISTRY] END:   guest_loader
+[TEST REGISTRY] START: simple_guest
+
+[TEST] Simple Guest Test
+[TEST] ========================
+[TEST] Guest code at: 0x000000004023a000
+[VM] Initializing memory mapping...
+[VM] Mapping region: 0x0000000040200000 - 0x0000000040600000
+[VM] Stage-2 region applied: gic-map (prio=10 Device ReadWrite ExecuteNever Map)
+[VM] Stage-2 region applied: gicd-trap (prio=100 Device ReadWrite ExecuteNever Trap)
+[VM] Stage-2 region applied: gicr-trap (prio=110 Device ReadWrite ExecuteNever Trap)
+[VM] Stage-2 region applied: pl011-uart-trap (prio=120 Device ReadWrite ExecuteNever Trap)
+[VM] Memory mapping complete
+[TEST] Running guest (expect 'Z'): Z
+[VCPU] Guest requested exit
+
+[TEST] Simple Guest Test PASSED
+
+[TEST REGISTRY] END:   simple_guest
+[TEST REGISTRY] START: decode
+
+========================================
+  MMIO Instruction Decode Test
+========================================
+
+[DECODE] Test 1: ISS store word x5...
+[DECODE] ISS store word x5 PASSED
+
+[DECODE] Test 2: ISS load byte x10...
+[DECODE] ISS load byte x10 PASSED
+
+[DECODE] Test 3: ISS load dword x0...
+[DECODE] ISS load dword x0 PASSED
+
+[DECODE] Test 4: ISS store half x15...
+[DECODE] ISS store half x15 PASSED
+
+[DECODE] Test 5: Instruction STR W1, [X19]...
+[DECODE] insn STR W1 PASSED
+
+[DECODE] Test 6: Instruction LDR W2, [X19]...
+[DECODE] insn LDR W2 PASSED
+
+[DECODE] Test 7: Instruction STRB W3, [X0]...
+[DECODE] insn STRB W3 PASSED
+
+[DECODE] Test 8: Instruction LDRH W4, [X1]...
+[DECODE] insn LDRH W4 PASSED
+
+[DECODE] Test 9: Unsupported instruction...
+[DECODE] Test 9 PASSED
+
+========================================
+  MMIO Instruction Decode Test PASSED (9 assertions)
+========================================
+
+[TEST REGISTRY] END:   decode
+[TEST REGISTRY] START: gicd
+
+========================================
+  Virtual GICD Emulation Test
+========================================
+
+[GICD] Test 1: CTLR ARE_NS forced...
+[GICD] Test 1 PASSED
+
+[GICD] Test 2: CTLR write preserves ARE_NS...
+[GICD] Test 2 PASSED
+
+[GICD] Test 3: TYPER CPUNumber...
+[GICD] Test 3 PASSED
+
+[GICD] Test 4: ISENABLER/ICENABLER...
+[GICD] Test 4 PASSED
+
+[GICD] Test 5: IROUTER + route_spi...
+[GICD] Test 5 PASSED
+
+[GICD] Test 6: route_spi boundary...
+[GICD] Test 6 PASSED
+
+[GICD] Test 7: PIDR2...
+[GICD] Test 7 PASSED
+
+[GICD] Test 8: IIDR...
+[GICD] Test 8 PASSED
+
+========================================
+  Virtual GICD Emulation Test PASSED (8 assertions)
+========================================
+
+[TEST REGISTRY] END:   gicd
+[TEST REGISTRY] START: gicr
+
+========================================
+  Virtual GICR Emulation Test
+========================================
+
+[GICR] Test 1: TYPER vCPU 0...
+[GICR] Test 1 PASSED
+
+[GICR] Test 2: TYPER vCPU 3 (last)...
+[GICR] Test 2 PASSED
+
+[GICR] Test 3: WAKER reset state...
+[GICR] Test 3 PASSED
+
+[GICR] Test 4: WAKER clear ProcessorSleep...
+[GICR] Test 4 PASSED
+
+[GICR] Test 5: ISENABLER0/ICENABLER0 vCPU 1...
+[GICR] Test 5 PASSED
+
+[GICR] Test 6: vCPU isolation...
+[GICR] Test 6 PASSED
+
+[GICR] Test 7: PIDR2...
+[GICR] Test 7 PASSED
+
+[GICR] Test 8: ICFGR0 read-only...
+[GICR] Test 8 PASSED
+
+========================================
+  Virtual GICR Emulation Test PASSED (8 assertions)
+========================================
+
+[TEST REGISTRY] END:   gicr
+[TEST REGISTRY] START: global
+
+========================================
+  Global State Test
+========================================
+
+[GLOBAL] Test 1: PendingCpuOn empty...
+[GLOBAL] Test 1 PASSED
+
+[GLOBAL] Test 2: PendingCpuOn request+take...
+[GLOBAL] Test 2 PASSED
+
+[GLOBAL] Test 3: PendingCpuOn consumed...
+[GLOBAL] Test 3 PASSED
+
+[GLOBAL] Test 4: UartRxRing empty...
+[GLOBAL] Test 4 PASSED
+
+[GLOBAL] Test 5: UartRxRing push+pop...
+[GLOBAL] Test 5 PASSED
+
+[GLOBAL] Test 6: UartRxRing overflow...
+[GLOBAL] Test 6 PASSED
+
+========================================
+  Global State Test PASSED (6 assertions)
+========================================
+
+[TEST REGISTRY] END:   global
+[TEST REGISTRY] START: guest_irq
+
+========================================
+  Interrupt Queue Test
+========================================
+
+[IRQ Q] Test 1: Queue SGI...
+[IRQ Q] Test 1 PASSED
+
+[IRQ Q] Test 2: Multiple SGIs...
+[IRQ Q] Test 2 PASSED
+
+[IRQ Q] Test 3: Consume SGIs...
+[IRQ Q] Test 3 PASSED
+
+[IRQ Q] Test 4: Queue SPI...
+[IRQ Q] Test 4 PASSED
+
+[IRQ Q] Test 5: vCPU isolation...
+[IRQ Q] Test 5 PASSED
+
+========================================
+  Interrupt Queue Test PASSED (5 assertions)
+========================================
+
+[TEST REGISTRY] END:   guest_irq
+[TEST REGISTRY] START: device_routing
+
+========================================
+  Device Manager Routing Test
+========================================
+
+[DEVMGR] Test 1: Empty read...
+[DEVMGR] Test 1 PASSED
+
+[DEVMGR] Test 2: Register + route UART...
+[DEVMGR] Test 2 PASSED
+
+[DEVMGR] Test 3: Miss address...
+[DEVMGR] Test 3 PASSED
+
+[DEVMGR] Test 4: GICD route_spi...
+[DEVMGR] Test 4 PASSED
+
+[DEVMGR] Test 5: uart_mut accessor...
+[DEVMGR] Test 5 PASSED
+
+[DEVMGR] Test 6: Reset...
+[DEVMGR] Test 6 PASSED
+
+========================================
+  Device Manager Routing Test PASSED (6 assertions)
+========================================
+
+[TEST REGISTRY] END:   device_routing
+[TEST REGISTRY] START: vm_state_isolation
+
+========================================
+  VM State Isolation Test
+========================================
+
+[VM-ISO] Test 1: SGI isolation...
+[VM-ISO] Test 1 PASSED
+
+[VM-ISO] Test 2: SPI isolation...
+[VM-ISO] Test 2 PASSED
+
+[VM-ISO] Test 3: online mask isolation...
+[VM-ISO] Test 3 PASSED
+
+[VM-ISO] Test 4: current_vcpu_id isolation...
+[VM-ISO] Test 4 PASSED
+
+========================================
+  VM State Isolation Test PASSED (4 assertions)
+========================================
+
+[TEST REGISTRY] END:   vm_state_isolation
+[TEST REGISTRY] START: vmid_vttbr
+
+========================================
+  VMID/VTTBR Encoding Test
+========================================
+
+[VMID] Test 1: VMID 0 encoding...
+[VMID] Test 1 PASSED
+
+[VMID] Test 2: VMID 1 encoding...
+[VMID] Test 2 PASSED
+
+========================================
+  VMID/VTTBR Encoding Test PASSED (2 assertions)
+========================================
+
+[TEST REGISTRY] END:   vmid_vttbr
+[TEST REGISTRY] START: multi_vm_devices
+
+========================================
+  Multi-VM Device Isolation Test
+========================================
+
+[MV-DEV] Test 1: Device registration isolation...
+[MV-DEV] Test 1 PASSED
+
+[MV-DEV] Test 2: Independent GICD registration...
+[MV-DEV] Test 2 PASSED
+
+[MV-DEV] Test 3: No cross-leak...
+[MV-DEV] Test 3 PASSED
+
+========================================
+  Multi-VM Device Isolation Test PASSED (3 assertions)
+========================================
+
+[TEST REGISTRY] END:   multi_vm_devices
+[TEST REGISTRY] START: vm_activate
+
+========================================
+  VM Activate Test
+========================================
+
+[VM-ACT] Test 1: Initial VTTBR/VTCR are zero...
+[VM-ACT] Test 1 PASSED
+
+[VM-ACT] Test 2: VM 1 initial state...
+[VM-ACT] Test 2 PASSED
+
+========================================
+  VM Activate Test PASSED (2 assertions)
+========================================
+
+[TEST REGISTRY] END:   vm_activate
+[TEST REGISTRY] START: net_rx_ring
+
+========================================
+  NetRxRing Test
+========================================
+
+[NETRX] Test 1: Empty take...
+[NETRX] Test 1 PASSED
+
+[NETRX] Test 2: Store + take...
+[NETRX] Test 2 PASSED
+
+[NETRX] Test 3: Take empties...
+[NETRX] Test 3 PASSED
+
+[NETRX] Test 4: Fill 8...
+[NETRX] Test 4 PASSED
+
+[NETRX] Test 5: Overflow...
+[NETRX] Test 5 PASSED
+
+[NETRX] Test 6: Wraparound...
+[NETRX] Test 6 PASSED
+
+========================================
+  NetRxRing Test PASSED (8 assertions)
+========================================
+
+[TEST REGISTRY] END:   net_rx_ring
+[TEST REGISTRY] START: vswitch
+
+========================================
+  VSwitch Test
+========================================
+
+[VSWITCH] Test 1: Unknown unicast flood...
+[VSWITCH] Test 1 PASSED
+
+[VSWITCH] Test 2: MAC learning + precise forward...
+[VSWITCH] Test 2 PASSED
+
+[VSWITCH] Test 3: Broadcast flood...
+[VSWITCH] Test 3 PASSED
+
+[VSWITCH] Test 4: No self-delivery...
+[VSWITCH] Test 4 PASSED
+
+[VSWITCH] Test 5: MAC table capacity...
+[VSWITCH] Test 5 PASSED
+
+========================================
+  VSwitch Test PASSED (6 assertions)
+========================================
+
+[TEST REGISTRY] END:   vswitch
+[TEST REGISTRY] START: virtio_net
+
+========================================
+  VirtioNet Device Test
+========================================
+
+[VNET] Test 1: device_id...
+[VNET] Test 1 PASSED
+
+[VNET] Test 2: device_features...
+[VNET] Test 2 PASSED
+
+[VNET] Test 3: num_queues...
+[VNET] Test 3 PASSED
+
+[VNET] Test 4: config_read MAC...
+[VNET] Test 4 PASSED
+
+[VNET] Test 5: config_read status...
+[VNET] Test 5 PASSED
+
+[VNET] Test 6: mac_for_vm...
+[VNET] Test 6 PASSED
+
+========================================
+  VirtioNet Device Test PASSED (8 assertions)
+========================================
+
+[TEST REGISTRY] END:   virtio_net
+[TEST REGISTRY] START: page_ownership
+
+=== Test: Page Ownership (SW bits) ===
+  [PASS] Default SW bits = 0 (OWNED)
+  [PASS] Write/read SHARED_OWNED
+  [PASS] Restore to OWNED
+  [PASS] Unmapped IPA returns None
+  [PASS] Pre-split: base page SW=OWNED
+  [PASS] Post-split: target page SW=SHARED_OWNED
+  [PASS] Post-split: base page SW=OWNED (unchanged)
+  [PASS] Post-split: target S2AP=RO
+  [PASS] Post-split: base S2AP=RW (unchanged)
+  Results: 9 passed, 0 failed
+[TEST REGISTRY] END:   page_ownership
+[TEST REGISTRY] START: pl031
+
+=== Test: PL031 RTC Emulation ===
+  [PASS] RTCDR readable
+  [PASS] RTCLR write + RTCDR readback
+  [PASS] PeriphID/PrimeCellID correct
+  [PASS] Unknown offset returns 0
+  Results: 4 passed, 0 failed
+[TEST REGISTRY] END:   pl031
+[TEST REGISTRY] START: ffa
+
+=== Test: FF-A Proxy ===
+  [PASS] FFA_VERSION returns 0x00010001
+  [PASS] FFA_ID_GET returns partition ID 1
+  [PASS] FFA_FEATURES(FFA_VERSION) = supported
+  [PASS] FFA_FEATURES(unknown) = NOT_SUPPORTED
+  [PASS] FFA_MEM_DONATE blocked
+  [PASS] FFA_RXTX_MAP success
+  [PASS] FFA_RXTX_MAP duplicate denied
+  [PASS] FFA_RXTX_UNMAP success
+  [PASS] FFA_MSG_SEND_DIRECT_REQ echo
+  [PASS] Direct req to invalid SP rejected
+  [PASS] FFA_MEM_SHARE returns handle
+  [PASS] FFA_MEM_RECLAIM success
+  [PASS] FFA_MEM_RECLAIM invalid handle rejected
+  [PASS] Parse valid FfaMemRegion
+  [PASS] Parse multi-range descriptor
+  [PASS] Parse undersized -> INVALID_PARAMS
+  [PASS] SMC forward PSCI_VERSION returns 0x0000000000000002
+  [PASS] Unknown FFA -> NOT_SUPPORTED
+  [PASS] is_valid_receiver accepts VMs and SPs
+  [PASS] MEM_SHARE to VM1 returns handle
+  [PASS] MEM_LEND returns handle
+  [PASS] MEM_RETRIEVE_REQ by VM1 succeeds
+  [PASS] Double RETRIEVE denied
+  [PASS] MEM_RELINQUISH by VM1 succeeds
+  [PASS] MEM_RECLAIM after RELINQUISH succeeds
+  [PASS] RECLAIM while retrieved denied
+  [PASS] RETRIEVE by wrong VM denied
+  [PASS] FEATURES: RETRIEVE/RELINQUISH supported
+  [PASS] FFA_SPM_ID_GET returns 0x8000
+  [PASS] FFA_RUN returns NOT_SUPPORTED
+  [PASS] FEATURES(SPM_ID_GET) supported
+  [PASS] BITMAP_CREATE for VM0
+  [PASS] NOTIFICATION_BIND SP1->VM0
+  [PASS] NOTIFICATION_SET SP1->VM0
+  [PASS] NOTIFICATION_GET returns 0x1
+  [PASS] NOTIFICATION_GET cleared
+  [PASS] NOTIFICATION_UNBIND
+  [PASS] SET after UNBIND denied
+  [PASS] FEATURES(NOTIFICATION_BIND)
+  [PASS] MSG_SEND2 no mailbox denied
+  [PASS] MSG_WAIT no msg -> NO_DATA
+  [PASS] MSG_SEND2 RX busy
+  [PASS] FEATURES(MSG_SEND2)
+  [PASS] MEM_FRAG_TX wrong handle rejected
+  [PASS] FEATURES(MEM_FRAG_TX)
+  [FAIL] RETRIEVE_RESP descriptor: x0=0x84000060 x1=10
+  [PASS] MEM_FRAG_RX no active state rejected
+  [PASS] FEATURES(MEM_FRAG_RX)
+Hi  [PASS] CONSOLE_LOG_32 success
+  [PASS] CONSOLE_LOG count=0 rejected
+  [PASS] FEATURES(CONSOLE_LOG_32)
+  Results: 50 passed, 1 failed
+
+!!! PANIC !!!
+  at src/../tests/test_ffa.rs:1239
+  FF-A proxy tests failed

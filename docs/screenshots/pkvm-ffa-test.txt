@@ -1,0 +1,594 @@
+NOTICE:  Booting Trusted Firmware
+NOTICE:  BL1: v2.12.0(debug):
+NOTICE:  BL1: Built : 15:16:55, Apr  3 2026
+INFO:    BL1: RAM 0xe0ee000 - 0xe0f6000
+INFO:    BL1: Loading BL2
+INFO:    Loading image id=1 at address 0xe05b000
+INFO:    Image id=1 loaded: 0xe05b000 - 0xe064b69
+NOTICE:  BL1: Booting BL2
+INFO:    Entry point address = 0xe05b000
+INFO:    SPSR = 0x3c5
+NOTICE:  BL2: v2.12.0(debug):
+NOTICE:  BL2: Built : 15:16:56, Apr  3 2026
+INFO:    BL2: Doing platform setup
+WARNING: PSCI Device Tree node already exists!
+INFO:    BL2: Loading image id 3
+INFO:    Loading image id=3 at address 0xe090000
+INFO:    Image id=3 loaded: 0xe090000 - 0xe0a20d4
+INFO:    BL2: Loading image id 4
+INFO:    Loading image id=4 at address 0xe100000
+INFO:    Image id=4 loaded: 0xe100000 - 0xe147a20
+INFO:    Handoff to BL32
+INFO:    Using default arguments
+INFO:    BL2: Skip loading image id 21
+INFO:    BL2: Skip loading image id 22
+INFO:    BL2: Loading image id 26
+INFO:    Loading image id=26 at address 0xe002000
+INFO:    Image id=26 loaded: 0xe002000 - 0xe002189
+INFO:    BL2: Loading image id 24
+INFO:    Loading image id=24 at address 0xe001000
+INFO:    Image id=24 loaded: 0xe001000 - 0xe0011c7
+INFO:    BL2: Loading image id 41
+INFO:    Loading image id=41 at address 0xe300000
+INFO:    Image id=41 loaded: 0xe300000 - 0xe305111
+INFO:    BL2: Loading image id 42
+INFO:    Loading image id=42 at address 0xe400000
+INFO:    Image id=42 loaded: 0xe400000 - 0xe405088
+INFO:    BL2: Loading image id 43
+INFO:    Loading image id=43 at address 0xe500000
+INFO:    Image id=43 loaded: 0xe500000 - 0xe5041ec
+INFO:    BL2: Skip loading image id 44
+INFO:    BL2: Skip loading image id 45
+INFO:    BL2: Skip loading image id 46
+INFO:    BL2: Skip loading image id 47
+INFO:    BL2: Skip loading image id 48
+INFO:    BL2: Skip loading image id 5
+NOTICE:  BL1: Booting BL31
+INFO:    Entry point address = 0xe090000
+INFO:    SPSR = 0x3cd
+NOTICE:  BL31: v2.12.0(debug):
+NOTICE:  BL31: Built : 15:16:56, Apr  3 2026
+INFO:    GICv3 without legacy support detected.
+INFO:    ARM GICv3 driver initialized in EL3
+INFO:    Maximum SPI INTID supported: 255
+INFO:    BL31: Initializing runtime services
+INFO:    SPM Core setup done.
+INFO:    BL31: Initializing BL32
+========================================
+  ARM64 SPMC - S-EL2
+========================================
+
+[SPMC] Running at EL2
+[SPMC] Manifest at 0x000000000e002000
+[SPMC] spmc_id=0x8000 version=1.1
+[SPMC] HW config at 0x0000000000000000
+[SPMC] No HW config DTB, using QEMU virt defaults
+[SPMC] S-EL2 Stage-1 MMU enabled (NS DRAM mapped)
+[GIC] Checking GICv3/v4 availability...
+[GIC] Initializing GICv3/v4 (system register interface)...
+[GIC] ICC_SRE_EL2 configured (Enable=1, SRE=1)
+[GIC] VGIC capabilities:
+  - List Registers: 4
+  - Priority bits: 5
+[GIC] ICC_CTLR_EL1.EOImode=1 (split priority drop/deactivation)
+[GIC] GICv3 initialization complete
+[SPMC] GIC initialized
+[SPMC] Initializing secure heap
+[SPMC] Building Secure Stage-2 for SP1
+[SPMC] SP1 package at 0x000000000e300000, img_offset=0x0000000000004000, entry=0x000000000e304000
+[SP] Hello from S-EL1!
+[SPMC] SP1 booted, now Idle (FFA_MSG_WAIT received)
+[SPMC] SP2 package found at 0x000000000e400000
+[SPMC] SP2 entry=0x000000000e404000
+[SP2] Hello from S-EL1!
+[SPMC] SP2 booted, now Idle (FFA_MSG_WAIT received)
+[SPMC] SP3 package found at 0x000000000e500000
+[SPMC] SP3 entry=0x000000000e504000
+[SP3] Hello from S-EL1 (sp_relay)
+[SPMC] SP3 booted, now Idle (FFA_MSG_WAIT received)
+[SPMC] Registering secondary EP at 0x000000000e10005c
+WARNING: SPMD(0) from-secure: fid=0xc4000087 x1=0xe10005c x3=0x0
+[SPMC] Secondary EP registered with SPMD
+[SPMC] Init complete, signaling SPMD via FFA_MSG_WAIT
+WARNING: SPMD(0) from-secure: fid=0x8400006b x1=0x0 x3=0x0
+INFO:    BL31: Preparing for EL3 exit to normal world
+INFO:    Entry point address = 0x40200000
+INFO:    SPSR = 0x3c9
+[    0.000000][    T0] Booting Linux on physical CPU 0x0000000000 [0x000f0510]
+[    0.000000][    T0] Linux version 6.12.69-4k-gf8e2ea1b4bbd (root@934c4c193625) (Debian clang version 14.0.6, Debian LLD 14.0.6) #1 SMP PREEMPT Sun Mar  8 04:31:25 UTC 2026
+[    0.000000][    T0] KASLR disabled on command line
+[    0.000000][    T0] Machine model: linux,dummy-virt
+[    0.000000][    T0] earlycon: pl11 at MMIO 0x0000000009000000 (options '')
+[    0.000000][    T0] printk: legacy bootconsole [pl11] enabled
+[    0.000000][    T0] efi: UEFI not found.
+[    0.000000][    T0] OF: reserved mem: Reserved memory: No reserved-memory node in the DT
+[    0.000000][    T0] kvm [0]: Reserved 18 MiB at 0xbe800000
+[    0.000000][    T0] Zone ranges:
+[    0.000000][    T0]   DMA32    [mem 0x0000000040000000-0x00000000bfffffff]
+[    0.000000][    T0]   Normal   empty
+[    0.000000][    T0] Movable zone start for each node
+[    0.000000][    T0] Early memory node ranges
+[    0.000000][    T0]   node   0: [mem 0x0000000040000000-0x00000000bfffffff]
+[    0.000000][    T0] Initmem setup node 0 [mem 0x0000000040000000-0x00000000bfffffff]
+[    0.000000][    T0] cma: Reserved 16 MiB at 0x00000000bb800000 on node -1
+[    0.000000][    T0] psci: probing for conduit method from DT.
+[    0.000000][    T0] psci: PSCIv1.1 detected in firmware.
+[    0.000000][    T0] psci: Using standard PSCI v0.2 function IDs
+[    0.000000][    T0] psci: MIGRATE_INFO_TYPE not supported.
+[    0.000000][    T0] psci: SMC Calling Convention v1.5
+[    0.000000][    T0] 'bootconfig' found on command line, but no bootconfig found
+[    0.000000][    T0] percpu: Embedded 81 pages/cpu s169560 r131072 d31144 u331776
+[    0.000000][    T0] pcpu-alloc: s169560 r131072 d31144 u331776 alloc=81*4096
+[    0.000000][    T0] pcpu-alloc: [0] 0 [0] 1 [0] 2 [0] 3 
+[    0.000000][    T0] Detected PIPT I-cache on CPU0
+[    0.000000][    T0] CPU features: detected: Address authentication (IMP DEF algorithm)
+[    0.000000][    T0] CPU features: detected: GIC system register CPU interface
+[    0.000000][    T0] CPU features: detected: Spectre-v4
+[    0.000000][    T0] CPU features: detected: Spectre-BHB
+[    0.000000][    T0] CPU features: detected: Kernel page table isolation (KPTI)
+[    0.000000][    T0] alternatives: applying boot alternatives
+[    0.000000][    T0] Kernel command line: console=ttynull stack_depot_disable=on cgroup_disable=pressure kasan.stacktrace=off kvm-arm.mode=protected bootconfig earlycon=pl011,0x09000000 console=ttyAMA0 earlyprintk loglevel=8 nokaslr rdinit=/init kvm-arm.mode=protected
+[    0.000000][    T0] cgroup: Disabling pressure control group feature
+[    0.000000][    T0] random: crng init done
+[    0.000000][    T0] printk: log buffer data + meta data: 131072 + 458752 = 589824 bytes
+[    0.000000][    T0] Dentry cache hash table entries: 262144 (order: 9, 2097152 bytes, linear)
+[    0.000000][    T0] Inode-cache hash table entries: 131072 (order: 8, 1048576 bytes, linear)
+[    0.000000][    T0] Built 1 zonelists, mobility grouping on.  Total pages: 524288
+[    0.000000][    T0] mem auto-init: stack:all(zero), heap alloc:on, heap free:off
+[    0.000000][    T0] stackdepot: disabled
+[    0.000000][    T0] software IO TLB: SWIOTLB bounce buffer size adjusted to 2MB
+[    0.000000][    T0] software IO TLB: area num 4.
+[    0.000000][    T0] software IO TLB: mapped [mem 0x00000000bb300000-0x00000000bb500000] (2MB)
+[    0.000000][    T0] SLUB: HWalign=64, Order=0-3, MinObjects=0, CPUs=4, Nodes=1
+[    0.000000][    T0] rcu: Preemptible hierarchical RCU implementation.
+[    0.000000][    T0] rcu: 	RCU event tracing is enabled.
+[    0.000000][    T0] rcu: 	RCU restricting CPUs from NR_CPUS=32 to nr_cpu_ids=4.
+[    0.000000][    T0] rcu: 	RCU priority boosting: priority 1 delay 500 ms.
+[    0.000000][    T0] 	Trampoline variant of Tasks RCU enabled.
+[    0.000000][    T0] 	Tracing variant of Tasks RCU enabled.
+[    0.000000][    T0] rcu: RCU calculated value of scheduler-enlistment delay is 25 jiffies.
+[    0.000000][    T0] rcu: Adjusting geometry for rcu_fanout_leaf=16, nr_cpu_ids=4
+[    0.000000][    T0] RCU Tasks: Setting shift to 2 and lim to 1 rcu_task_cb_adjust=1 rcu_task_cpu_ids=4.
+[    0.000000][    T0] RCU Tasks Trace: Setting shift to 2 and lim to 1 rcu_task_cb_adjust=1 rcu_task_cpu_ids=4.
+[    0.000000][    T0] NR_IRQS: 64, nr_irqs: 64, preallocated irqs: 0
+[    0.000000][    T0] GICv3: GIC: Using split EOI/Deactivate mode
+[    0.000000][    T0] GICv3: 224 SPIs implemented
+[    0.000000][    T0] GICv3: 0 Extended SPIs implemented
+[    0.000000][    T0] Root IRQ handler: gic_handle_irq
+[    0.000000][    T0] GICv3: GICv3 features: 16 PPIs
+[    0.000000][    T0] GICv3: GICD_CTRL.DS=0, SCR_EL3.FIQ=1
+[    0.000000][    T0] GICv3: CPU0: found redistributor 0 region 0:0x00000000080a0000
+[    0.000000][    T0] ITS: No ITS available, not enabling LPIs
+[    0.000000][    T0] rcu: 	Offload RCU callbacks from CPUs: 0-3.
+[    0.000000][    T0] rcu: srcu_init: Setting srcu_struct sizes based on contention.
+[    0.000000][    T0] arch_timer: cp15 timer(s) running at 62.50MHz (phys).
+[    0.000000][    T0] clocksource: arch_sys_counter: mask: 0x1ffffffffffffff max_cycles: 0x1cd42e208c, max_idle_ns: 881590405314 ns
+[    0.000086][    T0] sched_clock: 57 bits at 63MHz, resolution 16ns, wraps every 4398046511096ns
+[    0.005712][    T0] kfence: initialized - using 524288 bytes for 63 objects at 0x(____ptrval____)-0x(____ptrval____)
+[    0.030633][    T0] Calibrating delay loop (skipped), value calculated using timer frequency.. 125.00 BogoMIPS (lpj=250000)
+[    0.037284][    T0] pid_max: default: 32768 minimum: 301
+[    0.041996][    T0] LSM: initializing lsm=capability,landlock,safesetid,selinux,bpf
+[    0.045895][    T0] landlock: Up and running.
+[    0.046305][    T0] SELinux:  Initializing.
+[    0.058335][    T0] LSM support for eBPF active
+[    0.063348][    T0] Mount-cache hash table entries: 4096 (order: 3, 32768 bytes, linear)
+[    0.063843][    T0] Mountpoint-cache hash table entries: 4096 (order: 3, 32768 bytes, linear)
+[    0.125630][    T1] cacheinfo: Unable to detect cache hierarchy for CPU 0
+[    0.152050][    T1] rcu: Hierarchical SRCU implementation.
+[    0.152371][    T1] rcu: 	Max phase no-delay instances is 1000.
+[    0.167553][    T1] Timer migration: 1 hierarchy levels; 8 children per group; 1 crossnode level
+[    0.173747][    T1] dyndbg: Ignore empty _ddebug table in a CONFIG_DYNAMIC_DEBUG_CORE build
+[    0.175907][    T1] EFI services will not be available.
+[    0.181519][    T1] smp: Bringing up secondary CPUs ...
+[SPMC] Secondary CPU 1 warm-boot, signaling FFA_MSG_WAIT
+WARNING: SPMD(1) from-secure: fid=0x8400006b x1=0x0 x3=0x0
+[SPMC] Secondary CPU 2 warm-boot, signaling FFA_MSG_WAIT
+WARNING: SPMD(2) from-secure: fid=0x8400006b x1=0x0 x3=0x0
+[SPMC] Secondary CPU 3 warm-boot, signaling FFA_MSG_WAIT
+WARNING: SPMD(3) from-secure: fid=0x8400006b x1=0x0 x3=0x0
+[    0.197478][    T0] Detected PIPT I-cache on CPU1
+[    0.199145][    T0] GICv3: CPU1: found redistributor 1 region 0:0x00000000080c0000
+[    0.202823][    T0] CPU1: Booted secondary processor 0x0000000001 [0x000f0510]
+[    0.216024][    T0] Detected PIPT I-cache on CPU2
+[    0.216269][    T0] GICv3: CPU2: found redistributor 2 region 0:0x00000000080e0000
+[    0.216487][    T0] CPU2: Booted secondary processor 0x0000000002 [0x000f0510]
+[    0.221852][    T0] Detected PIPT I-cache on CPU3
+[    0.222106][    T0] GICv3: CPU3: found redistributor 3 region 0:0x0000000008100000
+[    0.222321][    T0] CPU3: Booted secondary processor 0x0000000003 [0x000f0510]
+[    0.223910][    T1] smp: Brought up 1 node, 4 CPUs
+[    0.226405][    T1] SMP: Total of 4 processors activated.
+[    0.226679][    T1] CPU: All CPU(s) started at EL2
+[    0.227581][    T1] CPU features: detected: Branch Target Identification
+[    0.227889][    T1] CPU features: detected: 32-bit EL0 Support
+[    0.228128][    T1] CPU features: detected: 32-bit EL1 Support
+[    0.228399][    T1] CPU features: detected: Common not Private translations
+[    0.228642][    T1] CPU features: detected: CRC32 instructions
+[    0.228850][    T1] CPU features: detected: Data cache clean to Point of Deep Persistence
+[    0.229194][    T1] CPU features: detected: Data cache clean to Point of Persistence
+[    0.229539][    T1] CPU features: detected: Data independent timing control (DIT)
+[    0.229919][    T1] CPU features: detected: Generic authentication (IMP DEF algorithm)
+[    0.230447][    T1] CPU features: detected: RCpc load-acquire (LDAPR)
+[    0.230814][    T1] CPU features: detected: LSE atomic instructions
+[    0.231132][    T1] CPU features: detected: Privileged Access Never
+[    0.231371][    T1] CPU features: detected: Random Number Generator
+[    0.231594][    T1] CPU features: detected: Speculation barrier (SB)
+[    0.231829][    T1] CPU features: detected: TLB range maintenance instructions
+[    0.232104][    T1] CPU features: detected: VHE for hypervisor only
+[    0.232347][    T1] CPU features: detected: Protected KVM
+[    0.232621][    T1] CPU features: detected: Speculative Store Bypassing Safe (SSBS)
+[    0.251673][    T1] alternatives: applying system-wide alternatives
+[    0.331567][    T1] Memory: 1980728K/2097152K available (18496K kernel code, 2374K rwdata, 7520K rodata, 1408K init, 654K bss, 95156K reserved, 16384K cma-reserved)
+[    0.466902][    T1] clocksource: jiffies: mask: 0xffffffff max_cycles: 0xffffffff, max_idle_ns: 7645041785100000 ns
+[    0.472271][    T1] futex hash table entries: 1024 (order: 4, 65536 bytes, linear)
+[    0.484206][    T1] 25104 pages in range for non-PLT usage
+[    0.484462][    T1] 516624 pages in range for PLT usage
+[    0.506884][    T1] pinctrl core: initialized pinctrl subsystem
+[    0.673307][    T1] NET: Registered PF_NETLINK/PF_ROUTE protocol family
+[    0.713841][    T1] DMA: preallocated 256 KiB GFP_KERNEL pool for atomic allocations
+[    0.717291][    T1] DMA: preallocated 256 KiB GFP_KERNEL|GFP_DMA32 pool for atomic allocations
+[    0.721134][    T1] audit: initializing netlink subsys (disabled)
+[    0.767791][   T50] audit: type=2000 audit(0.656:1): state=initialized audit_enabled=0 res=1
+[    0.782523][    T1] thermal_sys: Registered thermal governor 'bang_bang'
+[    0.782884][    T1] thermal_sys: Registered thermal governor 'step_wise'
+[    0.783451][    T1] thermal_sys: Registered thermal governor 'user_space'
+[    0.783932][    T1] thermal_sys: Registered thermal governor 'power_allocator'
+[    0.785649][    T1] cpuidle: using governor menu
+[    0.792029][    T1] hw-breakpoint: found 6 breakpoint and 4 watchpoint registers.
+[    0.797358][    T1] ASID allocator initialised with 32768 entries
+[    0.802896][    T1] Serial: AMBA PL011 UART driver
+[    0.852990][    T1] 9000000.pl011: ttyAMA0 at MMIO 0x9000000 (irq = 13, base_baud = 0) is a PL011 rev1
+[    0.856172][    T1] printk: legacy console [ttyAMA0] enabled
+[    0.856172][    T1] printk: legacy console [ttyAMA0] enabled
+[    0.857358][    T1] printk: legacy bootconsole [pl11] disabled
+[    0.857358][    T1] printk: legacy bootconsole [pl11] disabled
+[    1.010566][    T1] iommu: Default domain type: Translated
+[    1.013035][    T1] iommu: DMA domain TLB invalidation policy: strict mode
+[    1.036373][    T1] SCSI subsystem initialized
+[    1.039994][    T1] usbcore: registered new interface driver usbfs
+[    1.041408][    T1] usbcore: registered new interface driver hub
+[    1.042437][    T1] usbcore: registered new device driver usb
+[    1.045388][    T1] mc: Linux media interface: v0.10
+[    1.046410][    T1] videodev: Linux video capture interface: v2.00
+[    1.048698][    T1] EDAC MC: Ver: 3.0.0
+[    1.055118][    T1] scmi_core: SCMI protocol bus registered
+[    1.064976][    T1] Advanced Linux Sound Architecture Driver Initialized.
+[    1.103207][    T1] clocksource: Switched to clocksource arch_sys_counter
+[    1.115178][    T1] VFS: Disk quotas dquot_6.6.0
+[    1.115767][    T1] VFS: Dquot-cache hash table entries: 512 (order 0, 4096 bytes)
+[    1.132132][    T1] NET: Registered PF_INET protocol family
+[    1.135483][    T1] IP idents hash table entries: 32768 (order: 6, 262144 bytes, linear)
+[    1.150322][    T1] tcp_listen_portaddr_hash hash table entries: 1024 (order: 2, 16384 bytes, linear)
+[    1.151516][    T1] Table-perturb hash table entries: 65536 (order: 6, 262144 bytes, linear)
+[    1.152290][    T1] TCP established hash table entries: 16384 (order: 5, 131072 bytes, linear)
+[    1.153451][    T1] TCP bind hash table entries: 16384 (order: 7, 524288 bytes, linear)
+[    1.154229][    T1] TCP: Hash tables configured (established 16384 bind 16384)
+[    1.156802][    T1] UDP hash table entries: 1024 (order: 3, 32768 bytes, linear)
+[    1.158193][    T1] UDP-Lite hash table entries: 1024 (order: 3, 32768 bytes, linear)
+[    1.160674][    T1] NET: Registered PF_UNIX/PF_LOCAL protocol family
+[    1.161643][    T1] NET: Registered PF_XDP protocol family
+[    1.162079][    T1] PCI: CLS 0 bytes, default 64
+WARNING: SPMD(1) from-secure: fid=0x84000070 x1=0x8000ffff x3=0x10001
+WARNING: SPMD DIRECT_RESP: sec=1 x1=0x8000ffff spmc_msg=1 lp=0
+WARNING: SPMD: sync_exit path
+[    1.165015][    T1] ARM FF-A: Driver version 1.2
+[    1.165251][    T1] ARM FF-A: Firmware version 1.1 found
+WARNING: SPMD(1) from-secure: fid=0x84000061 x1=0x0 x3=0x0
+[SPMC] RXTX_MAP: tx=0x43401000 rx=0x43400000 pages=1
+WARNING: SPMD(1) from-secure: fid=0x84000061 x1=0x0 x3=0x0
+WARNING: SPMD(1) from-secure: fid=0x84000060 x1=0x0 x3=0x0
+WARNING: SPMD(1) from-secure: fid=0x84000060 x1=0x0 x3=0x0
+WARNING: SPMD(1) from-secure: fid=0x84000060 x1=0x0 x3=0x0
+WARNING: SPMD(1) from-secure: fid=0x84000060 x1=0x0 x3=0x0
+WARNING: SPMD(1) from-secure: fid=0x84000061 x1=0x0 x3=0x0
+WARNING: SPMD(1) from-secure: fid=0x84000061 x1=0x0 x3=0x0
+WARNING: SPMD(1) from-secure: fid=0x84000061 x1=0x0 x3=0x0
+WARNING: SPMD(1) from-secure: fid=0x84000061 x1=0x0 x3=0x0
+WARNING: SPMD(1) from-secure: fid=0x84000060 x1=0x0 x3=0x0
+WARNING: SPMD(1) from-secure: fid=0x84000061 x1=0x0 x3=0x18
+WARNING: SPMD(1) from-secure: fid=0x84000061 x1=0x0 x3=0x18
+WARNING: SPMD(1) from-secure: fid=0x84000061 x1=0x0 x3=0x0
+[    1.211469][    T1] kvm [1]: nv: 554 coarse grained trap handlers
+[    1.213452][    T1] kvm [1]: IPA Size Limit: 48 bits
+[    1.227403][   T14] Trying to unpack rootfs image as initramfs...
+WARNING: SPMD(1) from-secure: fid=0x84000070 x1=0x8000ffff x3=0x10001
+WARNING: SPMD DIRECT_RESP: sec=1 x1=0x8000ffff spmc_msg=1 lp=0
+WARNING: SPMD: sync_exit path
+[    1.587242][    T1] kvm [1]: Protected hVHE mode initialized successfully
+[    1.614498][    T1] Initialise system trusted keyrings
+[    1.624027][    T1] workingset: timestamp_bits=46 max_order=19 bucket_order=0
+[    1.647889][    T1] fuse: init (API version 7.41)
+[    1.731630][   T14] Freeing initrd memory: 2048K
+[    1.765843][    T1] Key type asymmetric registered
+[    1.766207][    T1] Asymmetric key parser 'x509' registered
+[    1.767536][    T1] Block layer SCSI generic (bsg) driver version 0.4 loaded (major 241)
+[    1.769301][    T1] io scheduler mq-deadline registered
+[    1.769576][    T1] io scheduler kyber registered
+[    1.770137][    T1] io scheduler bfq registered
+[    1.790327][    T1] printk: legacy console [ttynull0] enabled
+[    1.913759][    T1] brd: module loaded
+[    2.004312][    T1] loop: module loaded
+[    2.030813][    T1] wireguard: WireGuard 1.0.0 loaded. See www.wireguard.com for information.
+[    2.031202][    T1] wireguard: Copyright (C) 2015-2019 Jason A. Donenfeld <Jason@zx2c4.com>. All Rights Reserved.
+[    2.039997][    T1] tun: Universal TUN/TAP device driver, 1.6
+[    2.044490][    T1] VFIO - User Level meta-driver version: 0.3
+[    2.049446][    T1] usbcore: registered new interface driver uas
+[    2.050026][    T1] usbcore: registered new interface driver usb-storage
+[    2.054588][    T1] usbcore: registered new interface driver xpad
+[    2.055762][    T1] gspca_main: v2.14.0 registered
+[    2.056355][    T1] usbcore: registered new interface driver uvcvideo
+[    2.057488][    T1] device-mapper: uevent: version 1.0.3
+[    2.058864][    T1] device-mapper: ioctl: 4.48.0-ioctl (2023-03-01) initialised: dm-devel@lists.linux.dev
+[    2.065229][    T1] sdhci: Secure Digital Host Controller Interface driver
+[    2.065505][    T1] sdhci: Copyright(c) Pierre Ossman
+[    2.065700][    T1] sdhci-pltfm: SDHCI platform and OF driver helper
+[    2.068157][    T1] SMCCC: SOC_ID: ARCH_SOC_ID not implemented, skipping ....
+[    2.068893][    T1] hid: raw HID events driver (C) Jiri Kosina
+[    2.078477][    T1] usbcore: registered new interface driver usbhid
+[    2.078850][    T1] usbhid: USB HID core driver
+[    2.079988][    T1] ashmem: initialized
+[    2.082306][   T38] watchdog: NMI not fully supported
+[    2.082502][   T38] watchdog: Hard watchdog permanently disabled
+[    2.088157][    T1] usbcore: registered new interface driver snd-usb-audio
+[    2.091852][    T1] GACT probability on
+[    2.092274][    T1] Mirror/redirect action on
+[    2.093009][    T1] netem: version 1.3
+[    2.093365][    T1] u32 classifier
+[    2.093502][    T1]     input device check on
+[    2.093645][    T1]     Actions configured
+[    2.108510][    T1] xt_time: kernel timezone is -0000
+[    2.109344][    T1] ipip: IPv4 and MPLS over IPv4 tunneling driver
+[    2.113722][    T1] gre: GRE over IPv4 demultiplexor driver
+[    2.113991][    T1] ip_gre: GRE over IPv4 tunneling driver
+[    2.120190][    T1] IPv4 over IPsec tunneling driver
+[    2.125201][    T1] Initializing XFRM netlink socket
+[    2.125674][    T1] IPsec XFRM device driver
+[    2.127108][    T1] NET: Registered PF_INET6 protocol family
+[    2.145886][    T1] Segment Routing with IPv6
+[    2.146414][    T1] In-situ OAM (IOAM) with IPv6
+[    2.147814][    T1] mip6: Mobile IPv6
+[    2.152422][    T1] sit: IPv6, IPv4 and MPLS over IPv4 tunneling driver
+[    2.157785][    T1] ip6_gre: GRE over IPv6 tunneling driver
+[    2.161022][    T1] NET: Registered PF_PACKET protocol family
+[    2.161405][    T1] NET: Registered PF_KEY protocol family
+[    2.162605][    T1] NET: Registered PF_VSOCK protocol family
+[    2.163428][    T1] kvm [1]: pKVM enabled without an IOMMU driver, do not run confidential workloads in virtual machines
+[    2.163763][    T1] Failed to init KVM IOMMU driver: -19
+[    2.164153][    T1] kvm [1]: Found 0 assignable devices
+[    2.225256][    T1] registered taskstats version 1
+[    2.230002][    T1] Loading compiled-in X.509 certificates
+[    2.285428][    T1] Loaded X.509 cert 'Build time autogenerated kernel key: 5f009a941332fe8d150609842d8867f8fbfec9d8'
+[    2.411385][    T1] page_owner is disabled
+[    2.412961][    T1] Key type .fscrypt registered
+[    2.413203][    T1] Key type fscrypt-provisioning registered
+[    2.425144][    T1] clk: Disabling unused clocks
+[    2.425746][    T1] PM: genpd: Disabling unused power domains
+[    2.426117][    T1] ALSA device list:
+[    2.426374][    T1]   No soundcards found.
+[    2.493405][    T1] Freeing unused kernel memory: 1408K
+[    2.502959][    T1] Run /init as init process
+[    2.503201][    T1]   with arguments:
+[    2.503341][    T1]     /init
+[    2.503458][    T1]   with environment:
+[    2.503590][    T1]     HOME=/
+[    2.503706][    T1]     TERM=linux
+[    2.993356][   T83] request_module fs-devtmpfs succeeded, but still no fs?
+============================================
+  pKVM FF-A End-to-End Test
+============================================
+
+Kernel: Linux version 6.12.69-4k-gf8e2ea1b4bbd (root@934c4c193625) (Debian clang version 14.0.6, Debian LLD 14.0.6) #1 SMP PREEMPT Sun Mar  8 04:31:25 UTC 2026
+CPUs:   4
+
+=== FF-A Bus Devices ===
+--- arm-ffa-1 ---
+  modalias = arm_ffa:8001:78563412-7856-3412-7856-341278563412
+  partition_id = 0x8001
+  uevent = MODALIAS=arm_ffa:8001:78563412-7856-3412-7856-341278563412
+  uuid = 78563412-7856-3412-7856-341278563412
+--- arm-ffa-2 ---
+  modalias = arm_ffa:8002:ddccbbaa-ddcc-bbaa-ddcc-bbaaddccbbaa
+  partition_id = 0x8002
+  uevent = MODALIAS=arm_ffa:8002:ddccbbaa-ddcc-bbaa-ddcc-bbaaddccbbaa
+  uuid = ddccbbaa-ddcc-bbaa-ddcc-bbaaddccbbaa
+--- arm-ffa-3 ---
+  modalias = arm_ffa:8003:00112233-0011-2233-0011-223300112233
+  partition_id = 0x8003
+  uevent = MODALIAS=arm_ffa:8003:00112233-0011-2233-0011-223300112233
+  uuid = 00112233-0011-2233-0011-223300112233
+
+=== Partition Discovery ===
+  Discovered partitions: 3
+  PASS: Both SP1 and SP2 discovered
+
+=== pKVM Status ===
+[    0.232347][    T1] CPU features: detected: Protected KVM
+[    1.587242][    T1] kvm [1]: Protected hVHE mode initialized successfully
+
+=== FF-A Kernel Messages ===
+[    1.165015][    T1] ARM FF-A: Driver version 1.2
+[    1.165251][    T1] ARM FF-A: Firmware version 1.1 found
+
+=== FF-A DIRECT_REQ Test (kernel module) ===
+  Loading ffa_test.ko...
+[    6.417270][  T118] ffa_test: no symbol version for module_layout
+[    6.433330][  T118] ffa_test: loading out-of-tree module taints kernel.
+[    6.435076][  T118] ffa_test: module verification failed: signature and/or required key missing - tainting kernel
+[    6.476663][  T118] ffa_test: ============================================
+[    6.477620][  T118] ffa_test:   FF-A DIRECT_REQ End-to-End Test
+[    6.478258][  T118] ffa_test: ============================================
+WARNING: SPMD(1) from-secure: fid=0x84000061 x1=0x0 x3=0x0
+[    6.481680][  T118] ffa_test: pKVM VERSION prime: 0x10001
+[    6.484216][  T118] ffa_test: About to call RXTX_MAP tx=0x44830000 rx=0x4482f000...
+[SPMC] RXTX_MAP: tx=0xbf823000 rx=0xbf824000 pages=1
+WARNING: SPMD(1) from-secure: fid=0x84000061 x1=0x0 x3=0x0
+WARNING: SPMD(1) from-secure: fid=0x84000061 x1=0x0 x3=0x18
+WARNING: SPMD(1) from-secure: fid=0x84000061 x1=0x0 x3=0x0
+[    6.493328][  T118] ffa_test: RXTX_MAP returned: a0=0x84000061 a2=0x0 tx_pa=0x44830000 rx_pa=0x4482f000
+[    6.496166][  T118] ffa_test: ---- Probing SP 0x8001 ----
+[    6.496887][  T118] ffa_test: Sending DIRECT_REQ to SP 0x8001...
+WARNING: SPMD(1) from-secure: fid=0xc4000070 x1=0x80010000 x3=0xaaaa
+WARNING: SPMD DIRECT_RESP: sec=1 x1=0x80010000 spmc_msg=0 lp=0
+WARNING: SPMD: forward to NWd path
+[    6.503113][  T118] ffa_test: DIRECT_REQ to SP 0x8001: ret=0
+[    6.503849][  T118] ffa_test:   x3=0xaaaa x4=0xcbbb x5=0xcccc x6=0xdddd x7=0xeeee
+[    6.504543][  T118] ffa_test: [PASS] DIRECT_REQ to SP 0x8001 returns success
+[    6.505195][  T118] ffa_test: [PASS] SP 0x8001 x3 echoes 0xAAAA
+[    6.505766][  T118] ffa_test: [PASS] SP 0x8001 x4 = 0xBBBB + 0x1000
+[    6.506324][  T118] ffa_test: [PASS] SP 0x8001 x5 echoes 0xCCCC
+[    6.507238][  T118] ffa_test: ---- MEM_SHARE E2E Test (SP 0x8001) ----
+[    6.507973][  T118] ffa_test: Allocated page: pa=0x4482e000
+[    6.508575][  T118] ffa_test: Built descriptor: 96 bytes, receiver=0x8001
+WARNING: SPMD(1) from-secure: fid=0x84000061 x1=0x0 x3=0x0
+[    6.514551][  T118] ffa_test: MEM_SHARE: a0=0x84000061 a1=0x0 a2=0x1 a3=0x0
+[    6.515473][  T118] ffa_test: [PASS] MEM_SHARE returns success
+[    6.515990][  T118] ffa_test: [PASS] MEM_SHARE handle != 0
+[    6.516420][  T118] ffa_test: MEM_SHARE handle=0x1
+[    6.516803][  T118] ffa_test: Sending MEM_TEST DIRECT_REQ...
+WARNING: SPMD(1) from-secure: fid=0xc4000070 x1=0x80010000 x3=0xabcd0001
+WARNING: SPMD DIRECT_RESP: sec=1 x1=0x80010000 spmc_msg=0 lp=0
+WARNING: SPMD: forward to NWd path
+[    6.524055][  T118] ffa_test: [PASS] MEM_TEST DIRECT_REQ returns success
+[    6.524800][  T118] ffa_test: [PASS] SP x4 = handle_lo + 0x4000 (mem test proof)
+[    6.525339][  T118] ffa_test: SP resp: x4=0x4001 (expect 0x4001)
+[    6.525833][  T118] ffa_test: [PASS] Shared page == 0xCAFEFACE (SP wrote it)
+[    6.526346][  T118] ffa_test: Page[0] = 0xcafeface (expect 0xCAFEFACE)
+WARNING: SPMD(1) from-secure: fid=0x84000075 x1=0x60 x3=0x0
+WARNING: SPMD(1) from-secure: fid=0x84000061 x1=0x0 x3=0x0
+WARNING: SPMD(1) from-secure: fid=0x84000061 x1=0x0 x3=0x0
+[    6.529950][  T118] ffa_test: [PASS] MEM_RECLAIM returns success
+[    6.530541][  T118] ffa_test: MEM_RECLAIM: a0=0x84000061
+[    6.531668][  T118] ffa_test: ---- MEM_SHARE E2E Test done ----
+[    6.532229][  T118] ffa_test: ---- SP 0x8001 done (10/10) ----
+[    6.533900][  T118] ffa_test: ---- Probing SP 0x8002 ----
+[    6.534403][  T118] ffa_test: Sending DIRECT_REQ to SP 0x8002...
+WARNING: SPMD(1) from-secure: fid=0xc4000070 x1=0x80020000 x3=0xaaaa
+WARNING: SPMD DIRECT_RESP: sec=1 x1=0x80020000 spmc_msg=0 lp=0
+WARNING: SPMD: forward to NWd path
+[    6.536184][  T118] ffa_test: DIRECT_REQ to SP 0x8002: ret=0
+[    6.536720][  T118] ffa_test:   x3=0xaaaa x4=0xcbbb x5=0xcccc x6=0xdddd x7=0xeeee
+[    6.537257][  T118] ffa_test: [PASS] DIRECT_REQ to SP 0x8002 returns success
+[    6.537752][  T118] ffa_test: [PASS] SP 0x8002 x3 echoes 0xAAAA
+[    6.538159][  T118] ffa_test: [PASS] SP 0x8002 x4 = 0xBBBB + 0x1000
+[    6.538581][  T118] ffa_test: [PASS] SP 0x8002 x5 echoes 0xCCCC
+[    6.539461][  T118] ffa_test: ---- MEM_SHARE E2E Test (SP 0x8002) ----
+[    6.540019][  T118] ffa_test: Allocated page: pa=0x4482e000
+[    6.540421][  T118] ffa_test: Built descriptor: 96 bytes, receiver=0x8002
+WARNING: SPMD(1) from-secure: fid=0x84000061 x1=0x0 x3=0x0
+[    6.541346][  T118] ffa_test: MEM_SHARE: a0=0x84000061 a1=0x0 a2=0x2 a3=0x0
+[    6.541953][  T118] ffa_test: [PASS] MEM_SHARE returns success
+[    6.542366][  T118] ffa_test: [PASS] MEM_SHARE handle != 0
+[    6.543170][  T118] ffa_test: MEM_SHARE handle=0x2
+[    6.543511][  T118] ffa_test: Sending MEM_TEST DIRECT_REQ...
+WARNING: SPMD(1) from-secure: fid=0xc4000070 x1=0x80020000 x3=0xabcd0001
+WARNING: SPMD DIRECT_RESP: sec=1 x1=0x80020000 spmc_msg=0 lp=0
+WARNING: SPMD: forward to NWd path
+[    6.544845][  T118] ffa_test: [PASS] MEM_TEST DIRECT_REQ returns success
+[    6.545384][  T118] ffa_test: [PASS] SP x4 = handle_lo + 0x4000 (mem test proof)
+[    6.545802][  T118] ffa_test: SP resp: x4=0x4002 (expect 0x4002)
+[    6.546163][  T118] ffa_test: [PASS] Shared page == 0xCAFEFACE (SP wrote it)
+[    6.546559][  T118] ffa_test: Page[0] = 0xcafeface (expect 0xCAFEFACE)
+WARNING: SPMD(1) from-secure: fid=0x84000075 x1=0x60 x3=0x0
+WARNING: SPMD(1) from-secure: fid=0x84000061 x1=0x0 x3=0x0
+WARNING: SPMD(1) from-secure: fid=0x84000061 x1=0x0 x3=0x0
+[    6.548353][  T118] ffa_test: [PASS] MEM_RECLAIM returns success
+[    6.548848][  T118] ffa_test: MEM_RECLAIM: a0=0x84000061
+[    6.549219][  T118] ffa_test: ---- MEM_SHARE E2E Test done ----
+[    6.549563][  T118] ffa_test: ---- SP 0x8002 done (20/20) ----
+[    6.551108][  T118] ffa_test: ---- Probing SP 0x8003 ----
+WARNING: SPMD(1) from-secure: fid=0xc4000070 x1=0x80030000 x3=0xaaaa
+WARNING: SPMD DIRECT_RESP: sec=1 x1=0x80030000 spmc_msg=0 lp=0
+WARNING: SPMD: forward to NWd path
+[    6.552454][  T118] ffa_test: [PASS] DIRECT_REQ to SP3 returns success
+[    6.553017][  T118] ffa_test: [PASS] SP3 x3 echoes 0xAAAA
+[    6.553388][  T118] ffa_test: [PASS] SP3 x4 = 0xBBBB + 0x2000
+[    6.553724][  T118] ffa_test: ---- SP3 Relay Test (SP3 → SP1) ----
+WARNING: SPMD(1) from-secure: fid=0xc4000070 x1=0x80030000 x3=0x0
+WARNING: SPMD DIRECT_RESP: sec=1 x1=0x80030000 spmc_msg=0 lp=0
+WARNING: SPMD: forward to NWd path
+[    6.557204][  T118] ffa_test: SP3 relay: ret=0 x4=0xcbbb x5=0xcccc x6=0xdddd
+[    6.557770][  T118] ffa_test: [PASS] SP3 relay DIRECT_REQ returns success
+[    6.558196][  T118] ffa_test: [PASS] SP3 relay: x4 = 0xBBBB + 0x1000 (SP1 proof)
+[    6.558770][  T118] ffa_test: [PASS] SP3 relay: x5 echoes 0xCCCC
+[    6.559180][  T118] ffa_test: ---- SP3 Relay Test done ----
+[    6.559506][  T118] ffa_test: ---- SP 0x8003 done (26/26) ----
+[    6.560847][  T118] ffa_test: Driver registered — probe called per matched SP
+[    6.561342][  T118] ffa_test: ---- SP-to-SP MEM_SHARE Test ----
+WARNING: SPMD(1) from-secure: fid=0xc4000070 x1=0x80010000 x3=0xabcd0002
+WARNING: SPMD DIRECT_RESP: sec=1 x1=0x80010000 spmc_msg=0 lp=0
+WARNING: SPMD: forward to NWd path
+[    6.563055][  T118] ffa_test: SP1 share: ret=0 x3=0xabcd0002 x4=0x3 x5=0x0 x6=0xe3f0000
+[    6.563620][  T118] ffa_test: [PASS] SP1 share command returns success
+[    6.564023][  T118] ffa_test: [PASS] SP1 echoes SP_TO_SP_SHARE_MAGIC
+[    6.564387][  T118] ffa_test: [PASS] SP1 share handle != 0
+[    6.564677][  T118] ffa_test: SP1 shared: handle=0x0:3 ipa=0xe3f0000
+WARNING: SPMD(1) from-secure: fid=0xc4000070 x1=0x80020000 x3=0xabcd0003
+WARNING: SPMD DIRECT_RESP: sec=1 x1=0x80020000 spmc_msg=0 lp=0
+WARNING: SPMD: forward to NWd path
+[    6.565906][  T118] ffa_test: SP2 retrieve: ret=0 x4=0x5003 x5=0xface0001
+[    6.566430][  T118] ffa_test: [PASS] SP2 retrieve command returns success
+[    6.567237][  T118] ffa_test: [PASS] SP2 x4 = handle_lo + 0x5000 (retrieve proof)
+[    6.567692][  T118] ffa_test: [PASS] SP2 read SP1's data (0xFACE0001)
+WARNING: SPMD(1) from-secure: fid=0xc4000070 x1=0x80010000 x3=0xabcd0004
+WARNING: SPMD DIRECT_RESP: sec=1 x1=0x80010000 spmc_msg=0 lp=0
+WARNING: SPMD: forward to NWd path
+[    6.568936][  T118] ffa_test: SP1 reclaim: ret=0 x3=0xabcd0004 x4=0x3 x5=0x84000061
+[    6.569490][  T118] ffa_test: [PASS] SP1 reclaim command returns success
+[    6.569867][  T118] ffa_test: [PASS] SP1 echoes SP_TO_SP_RECLAIM_MAGIC
+[    6.570244][  T118] ffa_test: [PASS] SP1 RECLAIM returns FFA_SUCCESS
+[    6.570643][  T118] ffa_test: ---- SP-to-SP MEM_SHARE + RECLAIM Test done ----
+[    6.571440][  T118] ffa_test: ============================================
+[    6.571801][  T118] ffa_test:   Results: 35/35 PASS
+[    6.572076][  T118] ffa_test: ============================================
+  insmod exit code: 0
+
+  --- dmesg ffa_test output ---
+[    6.551108][  T118] ffa_test: ---- Probing SP 0x8003 ----
+[    6.552454][  T118] ffa_test: [PASS] DIRECT_REQ to SP3 returns success
+[    6.553017][  T118] ffa_test: [PASS] SP3 x3 echoes 0xAAAA
+[    6.553388][  T118] ffa_test: [PASS] SP3 x4 = 0xBBBB + 0x2000
+[    6.553724][  T118] ffa_test: ---- SP3 Relay Test (SP3 → SP1) ----
+[    6.557204][  T118] ffa_test: SP3 relay: ret=0 x4=0xcbbb x5=0xcccc x6=0xdddd
+[    6.557770][  T118] ffa_test: [PASS] SP3 relay DIRECT_REQ returns success
+[    6.558196][  T118] ffa_test: [PASS] SP3 relay: x4 = 0xBBBB + 0x1000 (SP1 proof)
+[    6.558770][  T118] ffa_test: [PASS] SP3 relay: x5 echoes 0xCCCC
+[    6.559180][  T118] ffa_test: ---- SP3 Relay Test done ----
+[    6.559506][  T118] ffa_test: ---- SP 0x8003 done (26/26) ----
+[    6.560847][  T118] ffa_test: Driver registered — probe called per matched SP
+[    6.561342][  T118] ffa_test: ---- SP-to-SP MEM_SHARE Test ----
+[    6.563055][  T118] ffa_test: SP1 share: ret=0 x3=0xabcd0002 x4=0x3 x5=0x0 x6=0xe3f0000
+[    6.563620][  T118] ffa_test: [PASS] SP1 share command returns success
+[    6.564023][  T118] ffa_test: [PASS] SP1 echoes SP_TO_SP_SHARE_MAGIC
+[    6.564387][  T118] ffa_test: [PASS] SP1 share handle != 0
+[    6.564677][  T118] ffa_test: SP1 shared: handle=0x0:3 ipa=0xe3f0000
+[    6.565906][  T118] ffa_test: SP2 retrieve: ret=0 x4=0x5003 x5=0xface0001
+[    6.566430][  T118] ffa_test: [PASS] SP2 retrieve command returns success
+[    6.567237][  T118] ffa_test: [PASS] SP2 x4 = handle_lo + 0x5000 (retrieve proof)
+[    6.567692][  T118] ffa_test: [PASS] SP2 read SP1's data (0xFACE0001)
+[    6.568936][  T118] ffa_test: SP1 reclaim: ret=0 x3=0xabcd0004 x4=0x3 x5=0x84000061
+[    6.569490][  T118] ffa_test: [PASS] SP1 reclaim command returns success
+[    6.569867][  T118] ffa_test: [PASS] SP1 echoes SP_TO_SP_RECLAIM_MAGIC
+[    6.570244][  T118] ffa_test: [PASS] SP1 RECLAIM returns FFA_SUCCESS
+[    6.570643][  T118] ffa_test: ---- SP-to-SP MEM_SHARE + RECLAIM Test done ----
+[    6.571440][  T118] ffa_test: ============================================
+[    6.571801][  T118] ffa_test:   Results: 35/35 PASS
+[    6.572076][  T118] ffa_test: ============================================
+  --- end ---
+WARNING: SPMD(3) from-secure: fid=0x84000061 x1=0x0 x3=0x0
+[    7.844846][  T122] ffa_test: Removing SP 0x8003 binding
+[    7.847422][  T122] ffa_test: Removing SP 0x8002 binding
+[    7.848197][  T122] ffa_test: Removing SP 0x8001 binding
+[    7.849065][  T122] ffa_test: Driver unregistered
+
+  --- post-rmmod dmesg ---
+[    6.572076][  T118] ffa_test: ============================================
+[    7.844846][  T122] ffa_test: Removing SP 0x8003 binding
+[    7.847422][  T122] ffa_test: Removing SP 0x8002 binding
+[    7.848197][  T122] ffa_test: Removing SP 0x8001 binding
+[    7.849065][  T122] ffa_test: Driver unregistered
+  --- end ---
+
+============================================
+  FF-A Test Complete
+============================================
+/bin/sh: can't access tty; job control turned off
+~ # 

@@ -67,15 +67,26 @@ Making this work required solving problems that don't appear in a single-hypervi
 
 **Cross-CPU cache coherency.** pKVM writes a descriptor to its TX buffer on CPU 0, then issues an SMC. SPMD routes the call to S-EL2 on whichever CPU happens to be running — potentially CPU 2 with a stale L1 cache line. Even after adding `DSB SY` barriers, I had to copy the descriptor to a local stack buffer before parsing it. Reading directly from the cross-world buffer produced data aborts from corrupt pointer arithmetic.
 
-On `make run-pkvm-ffa-test`:
+On `make run-pkvm-ffa-test`, the full TF-A boot chain comes up, then pKVM initializes, and our kernel module exercises every FF-A path:
 
 ```
+[SPMC] SP1 booted, now Idle (FFA_MSG_WAIT received)
+[SPMC] SP2 booted, now Idle (FFA_MSG_WAIT received)
+[SPMC] SP3 booted, now Idle (FFA_MSG_WAIT received)
+[SPMC] Secondary EP registered with SPMD
+...
 Protected hVHE mode initialized successfully
 ...
-ffa_test: [PASS] DIRECT_REQ to SP1 returns success
-ffa_test: [PASS] SP1→SP3 relay chain
-ffa_test: [PASS] MEM_SHARE to SP1, SP writes 0xCAFEFACE
-ffa_test: [PASS] SP1→SP2 Secure DRAM share
+ffa_test: Sending DIRECT_REQ to SP 0x8001...
+ffa_test:   x3=0xaaaa x4=0xcbbb x5=0xcccc x6=0xdddd x7=0xeeee
+ffa_test: [PASS] DIRECT_REQ to SP 0x8001 returns success
+ffa_test: [PASS] SP 0x8001 x4 = 0xBBBB + 0x1000
+...
+ffa_test: [PASS] Shared page == 0xCAFEFACE (SP wrote it)
+ffa_test: [PASS] MEM_RECLAIM returns success
+...
+ffa_test: [PASS] SP1→SP3 relay chain returns success
+ffa_test: [PASS] SP1→SP2 Secure DRAM share verified
 ffa_test:   Results: 35/35 PASS
 ```
 
@@ -206,9 +217,25 @@ My initial code had secondary CPUs do `WFE` (wait for event) after basic init. T
 
 All tests run on bare metal. No test harness, no OS, no `#[test]`. The binary calls each test suite sequentially, printing `[PASS]` or `[FAIL]` to UART.
 
-For integration tests, the BL33 binary is a 500-line assembly program that sends 20 FF-A calls and validates each response. For pKVM E2E tests, `ffa_test.ko` is a Linux kernel module that does the same through pKVM's FF-A proxy.
+For integration tests, the BL33 binary is a 500-line assembly program that sends 20 FF-A calls through real TF-A firmware and validates each response:
 
-No mocking. The BL33 tests go through real TF-A firmware at EL3. The pKVM tests traverse pKVM at NS-EL2, SPMD at EL3, our SPMC at S-EL2, and SPs at S-EL1. If any layer is broken, the test fails.
+```
+  Test 1: FFA_VERSION .............. PASS
+  Test 2: FFA_ID_GET ............... PASS
+  ...
+  Test 13: MEM_SHARE lifecycle E2E . PASS
+  Test 14: Alternating SP1/SP2 ..... PASS
+  Test 17: SP->SP relay chain ...... PASS
+  Test 18: Cycle detection ......... PASS
+  Test 19: SP-to-SP MEM_SHARE ...... PASS
+  Test 20: SP-to-SP MEM_RECLAIM .... PASS
+
+  All tests complete.
+```
+
+For pKVM E2E tests, `ffa_test.ko` is a Linux kernel module that does the same through pKVM's FF-A proxy.
+
+No mocking. The BL33 tests go through real TF-A at EL3. The pKVM tests traverse pKVM at NS-EL2, SPMD at EL3, our SPMC at S-EL2, and SPs at S-EL1. If any layer is broken, the test fails.
 
 ## Numbers
 

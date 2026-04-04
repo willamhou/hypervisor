@@ -1,0 +1,122 @@
+NOTICE:  Booting Trusted Firmware
+NOTICE:  BL1: v2.12.0(debug):
+NOTICE:  BL1: Built : 00:21:07, Mar 30 2026
+INFO:    BL1: RAM 0xe0ee000 - 0xe0f6000
+INFO:    BL1: Loading BL2
+INFO:    Loading image id=1 at address 0xe05b000
+INFO:    Image id=1 loaded: 0xe05b000 - 0xe064b69
+NOTICE:  BL1: Booting BL2
+INFO:    Entry point address = 0xe05b000
+INFO:    SPSR = 0x3c5
+NOTICE:  BL2: v2.12.0(debug):
+NOTICE:  BL2: Built : 00:21:07, Mar 30 2026
+INFO:    BL2: Doing platform setup
+INFO:    BL2: Loading image id 3
+INFO:    Loading image id=3 at address 0xe090000
+INFO:    Image id=3 loaded: 0xe090000 - 0xe0a20d4
+INFO:    BL2: Loading image id 4
+INFO:    Loading image id=4 at address 0xe100000
+INFO:    Image id=4 loaded: 0xe100000 - 0xe139688
+INFO:    Handoff to BL32
+INFO:    Using default arguments
+INFO:    BL2: Skip loading image id 21
+INFO:    BL2: Skip loading image id 22
+INFO:    BL2: Loading image id 26
+INFO:    Loading image id=26 at address 0xe002000
+INFO:    Image id=26 loaded: 0xe002000 - 0xe002189
+INFO:    BL2: Loading image id 24
+INFO:    Loading image id=24 at address 0xe001000
+INFO:    Image id=24 loaded: 0xe001000 - 0xe0011c7
+INFO:    BL2: Loading image id 41
+INFO:    Loading image id=41 at address 0xe300000
+INFO:    Image id=41 loaded: 0xe300000 - 0xe305111
+INFO:    BL2: Loading image id 42
+INFO:    Loading image id=42 at address 0xe400000
+INFO:    Image id=42 loaded: 0xe400000 - 0xe405088
+INFO:    BL2: Loading image id 43
+INFO:    Loading image id=43 at address 0xe500000
+INFO:    Image id=43 loaded: 0xe500000 - 0xe5041ec
+INFO:    BL2: Skip loading image id 44
+INFO:    BL2: Skip loading image id 45
+INFO:    BL2: Skip loading image id 46
+INFO:    BL2: Skip loading image id 47
+INFO:    BL2: Skip loading image id 48
+INFO:    BL2: Loading image id 5
+INFO:    Loading image id=5 at address 0x60000000
+INFO:    Image id=5 loaded: 0x60000000 - 0x60001064
+NOTICE:  BL1: Booting BL31
+INFO:    Entry point address = 0xe090000
+INFO:    SPSR = 0x3cd
+NOTICE:  BL31: v2.12.0(debug):
+NOTICE:  BL31: Built : 00:21:07, Mar 30 2026
+INFO:    GICv3 without legacy support detected.
+INFO:    ARM GICv3 driver initialized in EL3
+INFO:    Maximum SPI INTID supported: 255
+INFO:    BL31: Initializing runtime services
+INFO:    SPM Core setup done.
+INFO:    BL31: Initializing BL32
+========================================
+  ARM64 SPMC - S-EL2
+========================================
+
+[SPMC] Running at EL2
+[SPMC] Manifest at 0x000000000e002000
+[SPMC] spmc_id=0x8000 version=1.1
+[SPMC] HW config at 0x0000000000000000
+[SPMC] No HW config DTB, using QEMU virt defaults
+[SPMC] S-EL2 Stage-1 MMU enabled (NS DRAM mapped)
+[GIC] Checking GICv3/v4 availability...
+[GIC] Initializing GICv3/v4 (system register interface)...
+[GIC] ICC_SRE_EL2 configured (Enable=1, SRE=1)
+[GIC] VGIC capabilities:
+  - List Registers: 4
+  - Priority bits: 5
+[GIC] ICC_CTLR_EL1.EOImode=1 (split priority drop/deactivation)
+[GIC] GICv3 initialization complete
+[SPMC] GIC initialized
+[SPMC] Initializing secure heap
+[SPMC] Building Secure Stage-2 for SP1
+[SPMC] SP1 package at 0x000000000e300000, img_offset=0x0000000000004000, entry=0x000000000e304000
+[SP] Hello from S-EL1!
+[SPMC] SP1 booted, now Idle (FFA_MSG_WAIT received)
+[SPMC] SP2 package found at 0x000000000e400000
+[SPMC] SP2 entry=0x000000000e404000
+[SP2] Hello from S-EL1!
+[SPMC] SP2 booted, now Idle (FFA_MSG_WAIT received)
+[SPMC] SP3 package found at 0x000000000e500000
+[SPMC] SP3 entry=0x000000000e504000
+[SP3] Hello from S-EL1 (sp_relay)
+[SPMC] SP3 booted, now Idle (FFA_MSG_WAIT received)
+[SPMC] Registering secondary EP at 0x000000000e10005c
+[SPMC] Secondary EP registered with SPMD
+[SPMC] Init complete, signaling SPMD via FFA_MSG_WAIT
+INFO:    BL31: Preparing for EL3 exit to normal world
+INFO:    Entry point address = 0x60000000
+INFO:    SPSR = 0x3c9
+
+========================================
+  BL33 FF-A Test Client (NS-EL2)
+========================================
+
+  Test 1: FFA_VERSION .............. PASS
+  Test 2: FFA_ID_GET ............... PASS
+  Test 3: FFA_FEATURES(VERSION) .... PASS
+  Test 4: FFA_FEATURES(0xDEAD) ..... PASS
+  Test 5: PARTITION_INFO_GET ........ PASS
+  Test 6: DIRECT_REQ echo .......... PASS
+  Test 7: DIRECT_REQ real SP ....... PASS
+  Test 8: RXTX + PARTITION_INFO .... PASS
+  Test 9: Preemption + FFA_RUN ..... PASS
+  Test 10: Multi-SP DIRECT_REQ ..... PASS
+  Test 11: Secure vIRQ injection ... PASS
+  Test 12: MEM_SHARE + RECLAIM ..... PASS
+  Test 13: MEM_SHARE lifecycle E2E . PASS
+  Test 14: Alternating SP1/SP2 ..... PASS
+  Test 15: MEM_SHARE E2E (SP2) ..... PASS
+  Test 16: MEM_LEND lifecycle E2E .. PASS
+  Test 17: SP->SP relay chain ...... PASS
+  Test 18: Cycle detection ......... PASS
+  Test 19: SP-to-SP MEM_SHARE ...... PASS
+  Test 20: SP-to-SP MEM_RECLAIM .... PASS
+
+  All tests complete.
