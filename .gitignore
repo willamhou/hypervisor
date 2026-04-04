@@ -43,6 +43,9 @@ tools/
 *.log
 ffa-output.txt
 
+# Launch plan (not for public)
+docs/launch-plan.md
+
 # TF-A build artifacts (source + intermediates)
 tfa/tfa-src/
 tfa/flash.bin
