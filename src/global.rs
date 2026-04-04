@@ -30,6 +30,12 @@ pub struct GlobalDeviceManager {
 unsafe impl Sync for GlobalDeviceManager {}
 
 #[cfg(not(feature = "multi_pcpu"))]
+impl Default for GlobalDeviceManager {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl GlobalDeviceManager {
     pub const fn new() -> Self {
         Self {
@@ -226,6 +232,12 @@ pub struct VmGlobalState {
     pub preemption_exit: AtomicBool,
 }
 
+impl Default for VmGlobalState {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl VmGlobalState {
     pub const fn new() -> Self {
         Self {
@@ -313,6 +325,12 @@ pub struct PendingCpuOn {
     pub target_cpu: AtomicU64,
     pub entry_point: AtomicU64,
     pub context_id: AtomicU64,
+}
+
+impl Default for PendingCpuOn {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl PendingCpuOn {
@@ -425,7 +443,7 @@ pub static PER_VM_VTTBR: [AtomicU64; MAX_VMS] = [AtomicU64::new(0), AtomicU64::n
 ///
 /// Only supports INTIDs 32-63 (first 32 SPIs).
 pub fn inject_spi(intid: u32) {
-    if intid < 32 || intid > 63 {
+    if !(32..=63).contains(&intid) {
         return;
     }
     let bit = intid - 32;
@@ -484,6 +502,12 @@ pub struct UartRxRing {
 }
 
 unsafe impl Sync for UartRxRing {}
+
+impl Default for UartRxRing {
+    fn default() -> Self {
+        Self::new()
+    }
+}
 
 impl UartRxRing {
     pub const fn new() -> Self {

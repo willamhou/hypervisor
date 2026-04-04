@@ -7,6 +7,11 @@ use crate::sync::SpinLock;
 static HEAP: SpinLock<Option<BumpAllocator>> = SpinLock::new(None);
 
 /// Initialize the global heap. Must be called before any allocation.
+///
+/// # Safety
+///
+/// Must be called exactly once before any allocation; `HEAP_START`/`HEAP_SIZE`
+/// must describe a valid, exclusively-owned memory region.
 pub unsafe fn init() {
     let alloc = BumpAllocator::new(platform::HEAP_START, platform::HEAP_SIZE);
     *HEAP.lock() = Some(alloc);
@@ -14,6 +19,11 @@ pub unsafe fn init() {
 
 /// Initialize the global heap at a specific address and size.
 /// Used by S-EL2 SPMC for secure DRAM heap.
+///
+/// # Safety
+///
+/// Must be called exactly once before any allocation; `[start, start + size)`
+/// must be a valid, exclusively-owned memory region.
 pub unsafe fn init_at(start: u64, size: u64) {
     let alloc = super::BumpAllocator::new(start, size);
     *HEAP.lock() = Some(alloc);
@@ -42,7 +52,9 @@ pub fn alloc(size: u64) -> Option<u64> {
 /// Caller must ensure `addr` was previously allocated via `alloc_page()`,
 /// is 4KB-aligned, and is no longer in use.
 pub unsafe fn free_page(addr: u64) {
-    HEAP.lock().as_mut().map(|a| a.free_page(addr));
+    if let Some(a) = HEAP.lock().as_mut() {
+        a.free_page(addr)
+    }
 }
 
 /// Get remaining heap space

@@ -44,6 +44,12 @@ pub struct NetRxRing {
 // single consumer (run loop). Atomic indices provide ordering.
 unsafe impl Sync for NetRxRing {}
 
+impl Default for NetRxRing {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl NetRxRing {
     pub const fn new() -> Self {
         Self {
@@ -250,9 +256,9 @@ impl VSwitch {
     }
 
     fn flood(&self, src_port: usize, frame: &[u8]) {
-        for port in 0..MAX_PORTS {
+        for (port, rx) in PORT_RX.iter().enumerate() {
             if port != src_port {
-                PORT_RX[port].store(frame);
+                rx.store(frame);
             }
         }
     }

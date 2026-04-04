@@ -412,7 +412,7 @@ impl GicV3VirtualInterface {
     pub fn inject_interrupt(intid: u32, priority: u8) -> Result<(), &'static str> {
         // Find a free list register
         let vtr = Self::read_vtr();
-        let num_lrs = ((vtr & VTR_LISTREGS_MASK) + 1) as u32;
+        let num_lrs = (vtr & VTR_LISTREGS_MASK) + 1;
 
         for i in 0..num_lrs {
             let lr = Self::read_lr(i);
@@ -439,7 +439,7 @@ impl GicV3VirtualInterface {
     /// physical interrupt identified by `pintid`.
     pub fn inject_hw_interrupt(intid: u32, pintid: u32, priority: u8) -> Result<(), &'static str> {
         let vtr = Self::read_vtr();
-        let num_lrs = ((vtr & VTR_LISTREGS_MASK) + 1) as u32;
+        let num_lrs = (vtr & VTR_LISTREGS_MASK) + 1;
 
         // First, clean up any stale Active LR for this intid
         for i in 0..num_lrs {
@@ -475,7 +475,7 @@ impl GicV3VirtualInterface {
     /// Clear a virtual interrupt from list registers
     pub fn clear_interrupt(intid: u32) {
         let vtr = Self::read_vtr();
-        let num_lrs = ((vtr & VTR_LISTREGS_MASK) + 1) as u32;
+        let num_lrs = (vtr & VTR_LISTREGS_MASK) + 1;
 
         for i in 0..num_lrs {
             let lr = Self::read_lr(i);
@@ -500,13 +500,13 @@ impl GicV3VirtualInterface {
         // Configure ICH_VMCR_EL2 for guest virtual CPU interface
         // Bits [31:24]: VPMR = 0xFF (allow all priorities)
         // Bit 1: VENG1 = 1 (enable Group 1 interrupts for guest)
-        let vmcr: u32 = ((ICC_PMR_ALLOW_ALL as u32) << 24) // VPMR
+        let vmcr: u32 = (ICC_PMR_ALLOW_ALL << 24) // VPMR
                         | (1 << 1); // VENG1
         Self::write_vmcr(vmcr);
 
         // Clear all list registers
         let vtr = Self::read_vtr();
-        let num_lrs = ((vtr & VTR_LISTREGS_MASK) + 1) as u32;
+        let num_lrs = (vtr & VTR_LISTREGS_MASK) + 1;
 
         for i in 0..num_lrs {
             Self::write_lr(i, 0);
@@ -521,7 +521,7 @@ impl GicV3VirtualInterface {
     /// Get number of available list registers
     pub fn num_list_registers() -> u32 {
         let vtr = Self::read_vtr();
-        ((vtr & VTR_LISTREGS_MASK) + 1) as u32
+        (vtr & VTR_LISTREGS_MASK) + 1
     }
 
     /// Build a List Register value
@@ -640,7 +640,7 @@ pub fn init() {
 
     // Read VGIC type to report capabilities
     let vtr = GicV3VirtualInterface::read_vtr();
-    let num_lrs = ((vtr & VTR_LISTREGS_MASK) + 1) as u32;
+    let num_lrs = (vtr & VTR_LISTREGS_MASK) + 1;
     let num_priority_bits = ((vtr >> 29) & 0x7) + 1;
 
     crate::log_info!(

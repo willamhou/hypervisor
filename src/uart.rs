@@ -6,7 +6,7 @@ use core::fmt;
 
 /// PL011 UART registers
 const UART_BASE: usize = 0x0900_0000;
-const UART_DR: usize = UART_BASE + 0x00; // Data Register
+const UART_DR: usize = UART_BASE; // Data Register
 const UART_FR: usize = UART_BASE + 0x18; // Flag Register
 
 /// Flag Register bits

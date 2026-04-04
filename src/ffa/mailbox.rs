@@ -21,6 +21,12 @@ pub struct FfaMailbox {
     pub msg_sender_id: u16,
 }
 
+impl Default for FfaMailbox {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl FfaMailbox {
     pub const fn new() -> Self {
         Self {

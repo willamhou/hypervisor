@@ -79,6 +79,12 @@ pub struct VirtualUart {
     rx_tail: usize, // next write position
 }
 
+impl Default for VirtualUart {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl VirtualUart {
     pub fn new() -> Self {
         Self {

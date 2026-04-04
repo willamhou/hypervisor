@@ -85,8 +85,7 @@ impl VirtioBlk {
 
                 // Process data descriptors (all between header and status)
                 let mut disk_off = byte_offset;
-                for i in 1..count - 1 {
-                    let desc = &descs[i];
+                for desc in descs.iter().take(count - 1).skip(1) {
                     let len = desc.len as u64;
 
                     if disk_off + len > self.disk_size {
@@ -113,8 +112,7 @@ impl VirtioBlk {
                 let byte_offset = header.sector * 512;
 
                 let mut disk_off = byte_offset;
-                for i in 1..count - 1 {
-                    let desc = &descs[i];
+                for desc in descs.iter().take(count - 1).skip(1) {
                     let len = desc.len as u64;
 
                     if disk_off + len > self.disk_size {

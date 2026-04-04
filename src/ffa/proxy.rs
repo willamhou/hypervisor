@@ -1468,7 +1468,7 @@ fn handle_notification_bind(context: &mut VcpuContext) -> bool {
     let sender = ((context.gp_regs.x1 >> 16) & 0xFFFF) as u16;
     let receiver = (context.gp_regs.x1 & 0xFFFF) as u16;
     let flags = context.gp_regs.x2 as u32;
-    let bitmap = (context.gp_regs.x3 as u64) | ((context.gp_regs.x4 as u64) << 32);
+    let bitmap = context.gp_regs.x3 | (context.gp_regs.x4 << 32);
     match notifications::bind(sender, receiver, flags, bitmap) {
         Ok(()) => context.gp_regs.x0 = FFA_SUCCESS_32,
         Err(code) => ffa_error(context, code),
@@ -1482,7 +1482,7 @@ fn handle_notification_bind(context: &mut VcpuContext) -> bool {
 fn handle_notification_unbind(context: &mut VcpuContext) -> bool {
     let sender = ((context.gp_regs.x1 >> 16) & 0xFFFF) as u16;
     let receiver = (context.gp_regs.x1 & 0xFFFF) as u16;
-    let bitmap = (context.gp_regs.x3 as u64) | ((context.gp_regs.x4 as u64) << 32);
+    let bitmap = context.gp_regs.x3 | (context.gp_regs.x4 << 32);
     match notifications::unbind(sender, receiver, bitmap) {
         Ok(()) => context.gp_regs.x0 = FFA_SUCCESS_32,
         Err(code) => ffa_error(context, code),
@@ -1497,7 +1497,7 @@ fn handle_notification_set(context: &mut VcpuContext) -> bool {
     let sender = ((context.gp_regs.x1 >> 16) & 0xFFFF) as u16;
     let receiver = (context.gp_regs.x1 & 0xFFFF) as u16;
     let _flags = context.gp_regs.x2 as u32;
-    let bitmap = (context.gp_regs.x3 as u64) | ((context.gp_regs.x4 as u64) << 32);
+    let bitmap = context.gp_regs.x3 | (context.gp_regs.x4 << 32);
     match notifications::set(sender, receiver, bitmap) {
         Ok(()) => context.gp_regs.x0 = FFA_SUCCESS_32,
         Err(code) => ffa_error(context, code),
@@ -1516,7 +1516,7 @@ fn handle_notification_get(context: &mut VcpuContext) -> bool {
             context.gp_regs.x0 = FFA_SUCCESS_32;
             // SP pending in x2/x3, VM pending in x4/x5
             // For simplicity, return all pending in x2/x3 (SP position)
-            context.gp_regs.x2 = pending as u64;
+            context.gp_regs.x2 = pending;
             context.gp_regs.x3 = 0;
             context.gp_regs.x4 = 0;
             context.gp_regs.x5 = 0;
@@ -1538,8 +1538,8 @@ fn handle_notification_info_get(context: &mut VcpuContext) -> bool {
         // Pack: count in x2[6:0], partition IDs in x3 (16-bit each, up to 4)
         context.gp_regs.x2 = count as u64;
         let mut packed: u64 = 0;
-        for i in 0..core::cmp::min(count, 4) {
-            packed |= (ids[i] as u64) << (i * 16);
+        for (i, id) in ids.iter().enumerate().take(core::cmp::min(count, 4)) {
+            packed |= (*id as u64) << (i * 16);
         }
         context.gp_regs.x3 = packed;
     }

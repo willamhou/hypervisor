@@ -93,6 +93,12 @@ pub struct VirtualPl031 {
     ris: u32,
 }
 
+impl Default for VirtualPl031 {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl VirtualPl031 {
     pub fn new() -> Self {
         Self {

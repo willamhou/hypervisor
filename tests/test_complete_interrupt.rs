@@ -1,6 +1,6 @@
-///! Complete interrupt injection test with guest exception vector table
-///!
-///! This test demonstrates full interrupt handling with GICv3 List Registers
+//! Complete interrupt injection test with guest exception vector table
+//!
+//! This test demonstrates full interrupt handling with GICv3 List Registers
 
 /// Simple test that verifies interrupt injection works
 pub fn run_complete_interrupt_test() {

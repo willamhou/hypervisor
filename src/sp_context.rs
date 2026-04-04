@@ -39,6 +39,12 @@ pub struct SpEl1State {
     pub mdscr_el1: u64,
 }
 
+impl Default for SpEl1State {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl SpEl1State {
     pub const fn new() -> Self {
         Self {
@@ -232,11 +238,17 @@ pub struct SpContext {
 impl SpContext {
     /// Create a new SP context in Reset state.
     pub fn new(sp_id: u16, entry_point: u64, stack_top: u64, uuid: [u32; 4]) -> Self {
-        let mut ctx = VcpuContext::default();
-        ctx.pc = entry_point;
-        ctx.sp = stack_top;
-        ctx.sys_regs.sp_el1 = stack_top;
-        ctx.spsr_el2 = SPSR_EL1H_DAIF_MASKED;
+        use crate::arch::aarch64::regs::SystemRegs;
+        let ctx = VcpuContext {
+            pc: entry_point,
+            sp: stack_top,
+            spsr_el2: SPSR_EL1H_DAIF_MASKED,
+            sys_regs: SystemRegs {
+                sp_el1: stack_top,
+                ..SystemRegs::default()
+            },
+            ..VcpuContext::default()
+        };
 
         Self {
             ctx,
@@ -247,6 +259,7 @@ impl SpContext {
             vsttbr: 0,
             uuid,
             pending_irqs: {
+                #[allow(clippy::declare_interior_mutable_const)]
                 const EMPTY: AtomicU32 = AtomicU32::new(NO_PENDING_IRQ);
                 [EMPTY; PENDING_IRQ_SLOTS]
             },
@@ -604,11 +617,9 @@ pub fn state_of(sp_id: u16) -> Option<SpState> {
     // SAFETY: protected by `SP_STORE_LOCK` for read-only slot scan.
     unsafe {
         let contexts = &*SP_STORE.contexts.get();
-        for slot in contexts.iter() {
-            if let Some(ref sp) = slot {
-                if sp.sp_id() == sp_id {
-                    return Some(sp.state());
-                }
+        for sp in contexts.iter().flatten() {
+            if sp.sp_id() == sp_id {
+                return Some(sp.state());
             }
         }
         None
@@ -621,12 +632,10 @@ pub fn set_pending_irq_for(sp_id: u16, intid: u32) -> bool {
     // SAFETY: protected by `SP_STORE_LOCK`; only atomic IRQ slots are mutated.
     unsafe {
         let contexts = &*SP_STORE.contexts.get();
-        for slot in contexts.iter() {
-            if let Some(ref sp) = slot {
-                if sp.sp_id() == sp_id {
-                    sp.set_pending_irq(intid);
-                    return true;
-                }
+        for sp in contexts.iter().flatten() {
+            if sp.sp_id() == sp_id {
+                sp.set_pending_irq(intid);
+                return true;
             }
         }
         false
@@ -639,11 +648,9 @@ pub fn take_pending_irq_for(sp_id: u16) -> Option<u32> {
     // SAFETY: protected by `SP_STORE_LOCK` for slot traversal.
     unsafe {
         let contexts = &*SP_STORE.contexts.get();
-        for slot in contexts.iter() {
-            if let Some(ref sp) = slot {
-                if sp.sp_id() == sp_id {
-                    return sp.take_pending_irq();
-                }
+        for sp in contexts.iter().flatten() {
+            if sp.sp_id() == sp_id {
+                return sp.take_pending_irq();
             }
         }
         None
@@ -656,11 +663,9 @@ pub fn is_registered_sp(sp_id: u16) -> bool {
     // SAFETY: protected by `SP_STORE_LOCK` for read-only slot scan.
     unsafe {
         let contexts = &*SP_STORE.contexts.get();
-        for slot in contexts.iter() {
-            if let Some(ref sp) = slot {
-                if sp.sp_id() == sp_id {
-                    return true;
-                }
+        for sp in contexts.iter().flatten() {
+            if sp.sp_id() == sp_id {
+                return true;
             }
         }
         false
@@ -677,10 +682,8 @@ pub fn for_each_sp<F: FnMut(&SpContext)>(mut f: F) {
     // SAFETY: protected by `SP_STORE_LOCK`; callback receives shared refs only.
     unsafe {
         let contexts = &*SP_STORE.contexts.get();
-        for slot in contexts.iter() {
-            if let Some(ref sp) = slot {
-                f(sp);
-            }
+        for sp in contexts.iter().flatten() {
+            f(sp);
         }
     }
 }
@@ -692,11 +695,9 @@ pub fn first_owned_intid_for(sp_id: u16) -> Option<u32> {
     // SAFETY: protected by `SP_STORE_LOCK` for read-only slot scan.
     unsafe {
         let contexts = &*SP_STORE.contexts.get();
-        for slot in contexts.iter() {
-            if let Some(ref sp) = slot {
-                if sp.sp_id() == sp_id {
-                    return sp.first_owned_intid();
-                }
+        for sp in contexts.iter().flatten() {
+            if sp.sp_id() == sp_id {
+                return sp.first_owned_intid();
             }
         }
         None
@@ -710,11 +711,9 @@ pub fn find_sp_for_intid(intid: u32) -> Option<u16> {
     // SAFETY: protected by `SP_STORE_LOCK` for read-only slot scan.
     unsafe {
         let contexts = &*SP_STORE.contexts.get();
-        for slot in contexts.iter() {
-            if let Some(ref sp) = slot {
-                if sp.owns_intid(intid) {
-                    return Some(sp.sp_id());
-                }
+        for sp in contexts.iter().flatten() {
+            if sp.owns_intid(intid) {
+                return Some(sp.sp_id());
             }
         }
         None
@@ -727,11 +726,9 @@ pub fn find_sp_with_pending_irq() -> Option<u16> {
     // SAFETY: protected by `SP_STORE_LOCK` for read-only slot scan.
     unsafe {
         let contexts = &*SP_STORE.contexts.get();
-        for slot in contexts.iter() {
-            if let Some(ref sp) = slot {
-                if sp.has_pending_irq() {
-                    return Some(sp.sp_id());
-                }
+        for sp in contexts.iter().flatten() {
+            if sp.has_pending_irq() {
+                return Some(sp.sp_id());
             }
         }
         None

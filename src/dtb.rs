@@ -97,7 +97,7 @@ fn validate_dtb_address(addr: usize) -> bool {
         return false;
     }
     // QEMU virt RAM range
-    if addr < 0x4000_0000 || addr >= 0x8000_0000 {
+    if !(0x4000_0000..0x8000_0000).contains(&addr) {
         return false;
     }
     // Check FDT magic (0xD00DFEED big-endian)

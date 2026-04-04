@@ -15,7 +15,7 @@ use core::fmt;
 /// - x30: Link Register (LR)
 /// - SP: Stack Pointer (separate from x31)
 #[repr(C)]
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, Default)]
 pub struct GeneralPurposeRegs {
     pub x0: u64,
     pub x1: u64,
@@ -48,44 +48,6 @@ pub struct GeneralPurposeRegs {
     pub x28: u64,
     pub x29: u64, // FP
     pub x30: u64, // LR
-}
-
-impl Default for GeneralPurposeRegs {
-    fn default() -> Self {
-        Self {
-            x0: 0,
-            x1: 0,
-            x2: 0,
-            x3: 0,
-            x4: 0,
-            x5: 0,
-            x6: 0,
-            x7: 0,
-            x8: 0,
-            x9: 0,
-            x10: 0,
-            x11: 0,
-            x12: 0,
-            x13: 0,
-            x14: 0,
-            x15: 0,
-            x16: 0,
-            x17: 0,
-            x18: 0,
-            x19: 0,
-            x20: 0,
-            x21: 0,
-            x22: 0,
-            x23: 0,
-            x24: 0,
-            x25: 0,
-            x26: 0,
-            x27: 0,
-            x28: 0,
-            x29: 0,
-            x30: 0,
-        }
-    }
 }
 
 impl GeneralPurposeRegs {
@@ -178,7 +140,7 @@ impl GeneralPurposeRegs {
 /// These are the key system registers that need to be managed when
 /// running a guest VM. They control the VM's execution state.
 #[repr(C)]
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, Default)]
 pub struct SystemRegs {
     /// Stack Pointer (EL1)
     pub sp_el1: u64,
@@ -226,30 +188,6 @@ pub struct SystemRegs {
 
     /// Counter-timer Virtual Offset
     pub cntvoff_el2: u64,
-}
-
-impl Default for SystemRegs {
-    fn default() -> Self {
-        Self {
-            sp_el1: 0,
-            elr_el1: 0,
-            spsr_el1: 0,
-            sctlr_el1: 0,
-            ttbr0_el1: 0,
-            ttbr1_el1: 0,
-            tcr_el1: 0,
-            mair_el1: 0,
-            vbar_el1: 0,
-            contextidr_el1: 0,
-            tpidr_el1: 0,
-            tpidrro_el0: 0,
-            tpidr_el0: 0,
-            esr_el2: 0,
-            far_el2: 0,
-            hcr_el2: 0,
-            cntvoff_el2: 0,
-        }
-    }
 }
 
 /// Complete vCPU Register Context
@@ -307,20 +245,22 @@ impl Default for VcpuContext {
 impl VcpuContext {
     /// Create a new vCPU context with specified entry point
     pub fn new(entry_point: u64, stack_pointer: u64) -> Self {
-        let mut ctx = Self::default();
-        ctx.pc = entry_point;
-        ctx.sp = stack_pointer;
-        ctx.sys_regs.sp_el1 = stack_pointer;
-
         // Set SPSR to EL1h (EL1 with SP_EL1)
         // Bits [3:0] = 0b0101 (EL1h)
         // Bit [6] = 0 (FIQ not masked)
         // Bit [7] = 0 (IRQ not masked)
         // Bit [8] = 0 (SError not masked)
         // Bit [9] = 0 (Debug exceptions not masked)
-        ctx.sys_regs.spsr_el1 = SPSR_EL1H;
-
-        ctx
+        Self {
+            pc: entry_point,
+            sp: stack_pointer,
+            sys_regs: SystemRegs {
+                sp_el1: stack_pointer,
+                spsr_el1: SPSR_EL1H,
+                ..SystemRegs::default()
+            },
+            ..Self::default()
+        }
     }
 
     /// Get a general purpose register value

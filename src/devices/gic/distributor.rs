@@ -104,7 +104,7 @@ impl VirtualGicd {
     /// Returns the Aff0 field (bits [7:0]) which we use as vCPU ID.
     /// Returns 0 for SGIs/PPIs (INTIDs < 32) or out-of-range INTIDs.
     pub fn route_spi(&self, intid: u32) -> usize {
-        if intid < 32 || intid >= 1020 {
+        if !(32..1020).contains(&intid) {
             return 0;
         }
         let idx = (intid - 32) as usize;

@@ -1118,11 +1118,11 @@ pub fn run_tests() {
         pass += 1; // overflow rejected
 
         // Clean up: reclaim all 13
-        for i in 0..13 {
+        for handle in handles.iter().take(13) {
             let req = SmcResult8 {
                 x0: ffa::FFA_MEM_RECLAIM,
-                x1: handles[i] & 0xFFFF_FFFF,
-                x2: handles[i] >> 32,
+                x1: handle & 0xFFFF_FFFF,
+                x2: handle >> 32,
                 x3: 0,
                 x4: 0,
                 x5: 0,
@@ -1879,7 +1879,7 @@ pub fn run_tests() {
         req.x1 = ((0x8001u16 as u64) << 16) | (0x8001u16 as u64);
         let resp = dispatch_ffa_as_sp(&req, 0x8001u16, 0);
         assert_eq!(resp.x0, ffa::FFA_ERROR);
-        assert_eq!(resp.x2 as i32, ffa::FFA_INVALID_PARAMETERS as i32);
+        assert_eq!(resp.x2 as i32, ffa::FFA_INVALID_PARAMETERS);
         pass += 1;
     }
 
@@ -1890,7 +1890,7 @@ pub fn run_tests() {
         req.x1 = ((0x8002u16 as u64) << 16) | (0x8001u16 as u64);
         let resp = dispatch_ffa_as_sp(&req, 0x8001u16, 0);
         assert_eq!(resp.x0, ffa::FFA_ERROR);
-        assert_eq!(resp.x2 as i32, ffa::FFA_INVALID_PARAMETERS as i32);
+        assert_eq!(resp.x2 as i32, ffa::FFA_INVALID_PARAMETERS);
         pass += 1;
     }
 
@@ -1900,7 +1900,7 @@ pub fn run_tests() {
         req.x1 = ((0x8001u16 as u64) << 16) | 0x8099; // non-existent SP
         let resp = dispatch_ffa_as_sp(&req, 0x8001u16, 0);
         assert_eq!(resp.x0, ffa::FFA_ERROR);
-        assert_eq!(resp.x2 as i32, ffa::FFA_INVALID_PARAMETERS as i32);
+        assert_eq!(resp.x2 as i32, ffa::FFA_INVALID_PARAMETERS);
         pass += 1;
     }
 
@@ -1910,7 +1910,7 @@ pub fn run_tests() {
         req.x1 = ((0x8001u16 as u64) << 16) | (0x8001u16 as u64);
         let resp = dispatch_ffa_as_sp(&req, 0x8001u16, 0);
         assert_eq!(resp.x0, ffa::FFA_ERROR);
-        assert_eq!(resp.x2 as i32, ffa::FFA_INVALID_PARAMETERS as i32);
+        assert_eq!(resp.x2 as i32, ffa::FFA_INVALID_PARAMETERS);
         pass += 1;
     }
 
@@ -1925,7 +1925,7 @@ pub fn run_tests() {
         req.x1 = ((0x8001u16 as u64) << 16) | (0x8002u16 as u64);
         let resp = dispatch_ffa_as_sp(&req, 0x8001u16, 0);
         assert_eq!(resp.x0, ffa::FFA_ERROR);
-        assert_eq!(resp.x2 as i32, ffa::FFA_BUSY as i32);
+        assert_eq!(resp.x2 as i32, ffa::FFA_BUSY);
 
         // Clean up call stack
         {
@@ -2039,7 +2039,7 @@ pub fn run_tests() {
         req.x5 = 0x8001; // self
         let resp = dispatch_ffa_as_sp(&req, 0x8001, 0);
         assert_eq!(resp.x0, ffa::FFA_ERROR);
-        assert_eq!(resp.x2 as i32, ffa::FFA_INVALID_PARAMETERS as i32);
+        assert_eq!(resp.x2 as i32, ffa::FFA_INVALID_PARAMETERS);
         pass += 1;
     }
 
@@ -2052,7 +2052,7 @@ pub fn run_tests() {
         req.x5 = 0x8099;
         let resp = dispatch_ffa_as_sp(&req, 0x8001, 0);
         assert_eq!(resp.x0, ffa::FFA_ERROR);
-        assert_eq!(resp.x2 as i32, ffa::FFA_INVALID_PARAMETERS as i32);
+        assert_eq!(resp.x2 as i32, ffa::FFA_INVALID_PARAMETERS);
         pass += 1;
     }
 
@@ -2065,7 +2065,7 @@ pub fn run_tests() {
         req.x5 = 0x8001;
         let resp = dispatch_ffa_as_sp(&req, 0x8001, 0); // actually SP1
         assert_eq!(resp.x0, ffa::FFA_ERROR);
-        assert_eq!(resp.x2 as i32, ffa::FFA_INVALID_PARAMETERS as i32);
+        assert_eq!(resp.x2 as i32, ffa::FFA_INVALID_PARAMETERS);
         pass += 1;
     }
 
@@ -2087,7 +2087,7 @@ pub fn run_tests() {
         req2.x2 = h >> 32;
         let resp2 = dispatch_ffa_as_sp(&req2, 0x8002, 0);
         assert_eq!(resp2.x0, ffa::FFA_ERROR);
-        assert_eq!(resp2.x2 as i32, ffa::FFA_DENIED as i32);
+        assert_eq!(resp2.x2 as i32, ffa::FFA_DENIED);
         pass += 1;
 
         // SP1 reclaims — success
@@ -2125,7 +2125,7 @@ pub fn run_tests() {
         req3.x2 = h >> 32;
         let resp3 = dispatch_ffa_as_sp(&req3, 0x8001, 0);
         assert_eq!(resp3.x0, ffa::FFA_ERROR);
-        assert_eq!(resp3.x2 as i32, ffa::FFA_DENIED as i32);
+        assert_eq!(resp3.x2 as i32, ffa::FFA_DENIED);
         pass += 1;
 
         // SP2 relinquish
@@ -2154,7 +2154,7 @@ pub fn run_tests() {
         req.x5 = 0x8002;
         let resp = dispatch_ffa_as_sp(&req, 0x8001, 0);
         assert_eq!(resp.x0, ffa::FFA_ERROR);
-        assert_eq!(resp.x2 as i32, ffa::FFA_INVALID_PARAMETERS as i32);
+        assert_eq!(resp.x2 as i32, ffa::FFA_INVALID_PARAMETERS);
         pass += 1;
     }
 
@@ -2167,7 +2167,7 @@ pub fn run_tests() {
         req.x5 = 0x8002;
         let resp = dispatch_ffa_as_sp(&req, 0x8001, 0);
         assert_eq!(resp.x0, ffa::FFA_ERROR);
-        assert_eq!(resp.x2 as i32, ffa::FFA_INVALID_PARAMETERS as i32);
+        assert_eq!(resp.x2 as i32, ffa::FFA_INVALID_PARAMETERS);
         pass += 1;
     }
 
@@ -2180,7 +2180,7 @@ pub fn run_tests() {
         req.x5 = 0x8002;
         let resp = dispatch_ffa_as_sp(&req, 0x8001, 0);
         assert_eq!(resp.x0, ffa::FFA_ERROR);
-        assert_eq!(resp.x2 as i32, ffa::FFA_INVALID_PARAMETERS as i32);
+        assert_eq!(resp.x2 as i32, ffa::FFA_INVALID_PARAMETERS);
         pass += 1;
     }
 
@@ -2193,7 +2193,7 @@ pub fn run_tests() {
         req.x5 = 0x8002;
         let resp = dispatch_ffa_as_sp(&req, 0x8001, 0);
         assert_eq!(resp.x0, ffa::FFA_ERROR);
-        assert_eq!(resp.x2 as i32, ffa::FFA_INVALID_PARAMETERS as i32);
+        assert_eq!(resp.x2 as i32, ffa::FFA_INVALID_PARAMETERS);
         pass += 1;
     }
 

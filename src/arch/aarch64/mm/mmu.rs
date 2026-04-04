@@ -29,9 +29,8 @@ impl S2PageTableEntry {
 
     /// Create a block entry (Level 1 or 2)
     pub const fn block(addr: u64, attrs: MemoryAttributes) -> Self {
-        let entry = (addr & PTE_ADDR_MASK) // Address bits [47:12]
-            | PTE_VALID                      // Valid bit
-            | (0 << 1)                       // Block entry (not table)
+        let entry = ((addr & PTE_ADDR_MASK) // Address bits [47:12]
+            | PTE_VALID)                       // Block entry (not table)
             | (attrs.bits() << 2); // Attributes
         Self(entry)
     }
@@ -87,7 +86,7 @@ impl MemoryAttributes {
 
     /// Normal memory, write-back cacheable, read-write
     pub const NORMAL: Self = Self {
-        bits: (0b1111 << 0)  // MemAttr[3:0] = Normal, Write-back
+        bits: 0b1111  // MemAttr[3:0] = Normal, Write-back
             | (0b11 << 4)     // S2AP[1:0] = Read-Write
             | (0b11 << 6)     // SH[1:0] = Inner shareable
             | (1 << 8), // AF = 1
@@ -95,15 +94,13 @@ impl MemoryAttributes {
 
     /// Device memory (MMIO), read-write
     pub const DEVICE: Self = Self {
-        bits: (0b0000 << 0)  // MemAttr[3:0] = Device-nGnRnE
-            | (0b11 << 4)     // S2AP[1:0] = Read-Write
-            | (0b00 << 6)     // SH[1:0] = Non-shareable
+        bits: (0b11 << 4)     // SH[1:0] = Non-shareable
             | (1 << 8), // AF = 1
     };
 
     /// Read-only memory
     pub const READONLY: Self = Self {
-        bits: (0b1111 << 0)  // MemAttr[3:0] = Normal
+        bits: 0b1111  // MemAttr[3:0] = Normal
             | (0b01 << 4)     // S2AP[1:0] = Read-Only
             | (0b11 << 6)     // SH[1:0] = Inner shareable
             | (1 << 8), // AF = 1
@@ -244,7 +241,7 @@ impl IdentityMapper {
 
     /// Map a memory region with identity mapping
     pub fn map_region(&mut self, start: u64, size: u64, attrs: MemoryAttributes) {
-        let num_blocks = (size + BLOCK_SIZE_2MB - 1) / BLOCK_SIZE_2MB;
+        let num_blocks = size.div_ceil(BLOCK_SIZE_2MB);
 
         for i in 0..num_blocks {
             let addr = start + i * BLOCK_SIZE_2MB;
@@ -430,10 +427,8 @@ impl DynamicIdentityMapper {
     fn make_block_entry(&self, pa: u64, attr: MemoryAttribute) -> u64 {
         let attr_bits = match attr {
             MemoryAttribute::Normal => (0b1111 << 2) | (0b11 << 6) | (0b11 << 8) | (1 << 10),
-            MemoryAttribute::Device => (0b0000 << 2) | (0b11 << 6) | (0b00 << 8) | (1 << 10),
-            MemoryAttribute::DeviceReadOnly => {
-                (0b0000 << 2) | (0b01 << 6) | (0b00 << 8) | (1 << 10)
-            }
+            MemoryAttribute::Device => (0b11 << 6) | (1 << 10),
+            MemoryAttribute::DeviceReadOnly => (0b01 << 6) | (1 << 10),
             MemoryAttribute::ReadOnly => (0b1111 << 2) | (0b01 << 6) | (0b11 << 8) | (1 << 10),
         };
         (pa & !BLOCK_MASK_2MB) | attr_bits | PTE_VALID
@@ -558,10 +553,8 @@ impl DynamicIdentityMapper {
     fn make_page_entry(&self, pa: u64, attr: MemoryAttribute) -> u64 {
         let attr_bits = match attr {
             MemoryAttribute::Normal => (0b1111 << 2) | (0b11 << 6) | (0b11 << 8) | (1 << 10),
-            MemoryAttribute::Device => (0b0000 << 2) | (0b11 << 6) | (0b00 << 8) | (1 << 10),
-            MemoryAttribute::DeviceReadOnly => {
-                (0b0000 << 2) | (0b01 << 6) | (0b00 << 8) | (1 << 10)
-            }
+            MemoryAttribute::Device => (0b11 << 6) | (1 << 10),
+            MemoryAttribute::DeviceReadOnly => (0b01 << 6) | (1 << 10),
             MemoryAttribute::ReadOnly => (0b1111 << 2) | (0b01 << 6) | (0b11 << 8) | (1 << 10),
         };
         // L3 page: bit[1] = 1 (page), bit[0] = 1 (valid)

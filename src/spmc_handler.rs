@@ -47,6 +47,12 @@ pub struct CallStack {
     depth: usize,
 }
 
+impl Default for CallStack {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl CallStack {
     pub const fn new() -> Self {
         Self {
@@ -56,6 +62,7 @@ impl CallStack {
     }
 
     /// Push a new call frame. Returns Err if stack is full.
+    #[allow(clippy::result_unit_err)]
     pub fn push(&mut self, caller: u16, callee: u16) -> Result<(), ()> {
         if self.depth >= self.frames.len() {
             return Err(());
@@ -114,6 +121,7 @@ pub static CALL_STACK: SpinLock<CallStack> = SpinLock::new(CallStack::new());
 
 /// Internal sentinel: SP issued DIRECT_REQ targeting another SP.
 /// dispatch_to_sp() must handle the recursive dispatch.
+#[allow(dead_code)]
 const SP_TO_SP_PENDING: u64 = 0xFFFF_FFFF_FFFF_FFFE;
 
 /// Helper: read current CPU index (MPIDR_EL1.Aff0). Works at both NS-EL2 and S-EL2.
@@ -129,7 +137,9 @@ fn sel2_cpu_id() -> usize {
 /// Per-CPU flag set by the IRQ handler when a physical IRQ preempts SP execution.
 /// The SPMC event loop checks this after enter_guest() returns to decide
 /// whether to return FFA_INTERRUPT (preempted) or DIRECT_RESP (completed).
+#[allow(clippy::declare_interior_mutable_const)]
 static SP_IRQ_PREEMPTED: [AtomicBool; MAX_SMP_CPUS] = {
+    #[allow(clippy::declare_interior_mutable_const)]
     const INIT: AtomicBool = AtomicBool::new(false);
     [INIT; MAX_SMP_CPUS]
 };
@@ -137,6 +147,7 @@ static SP_IRQ_PREEMPTED: [AtomicBool; MAX_SMP_CPUS] = {
 /// Per-CPU debug counter: count FIQ preemptions to detect infinite loops.
 #[cfg(feature = "sel2")]
 static FIQ_PREEMPT_COUNT: [core::sync::atomic::AtomicU32; MAX_SMP_CPUS] = {
+    #[allow(clippy::declare_interior_mutable_const)]
     const INIT: core::sync::atomic::AtomicU32 = core::sync::atomic::AtomicU32::new(0);
     [INIT; MAX_SMP_CPUS]
 };
@@ -357,7 +368,7 @@ static SP_MAILBOXES: SpinLock<[SpMailbox; MAX_SP_MAILBOXES]> = SpinLock::new({
 
 /// Map SP partition ID to mailbox index. Returns None for unknown SPs.
 fn sp_mailbox_index(sp_id: u16) -> Option<usize> {
-    if sp_id >= ffa::FFA_SPMC_ID + 1 && sp_id < ffa::FFA_SPMC_ID + 1 + MAX_SP_MAILBOXES as u16 {
+    if sp_id > ffa::FFA_SPMC_ID && sp_id < ffa::FFA_SPMC_ID + 1 + MAX_SP_MAILBOXES as u16 {
         Some((sp_id - ffa::FFA_SPMC_ID - 1) as usize)
     } else {
         None
@@ -1853,8 +1864,8 @@ pub fn dispatch_ffa(req: &SmcResult8) -> SmcResult8 {
                 make_error(ffa::FFA_NO_DATA as u64)
             } else {
                 let mut packed: u64 = 0;
-                for i in 0..count.min(4) {
-                    packed |= (ids[i] as u64) << (i * 16);
+                for (i, id) in ids.iter().enumerate().take(count.min(4)) {
+                    packed |= (*id as u64) << (i * 16);
                 }
                 SmcResult8 {
                     x0: ffa::FFA_SUCCESS_32,
@@ -1975,9 +1986,9 @@ fn handle_spmc_msg_wait_nwd() -> SmcResult8 {
     make_error(ffa::FFA_NO_DATA as u64)
 }
 
-/// Handle FFA_RX_RELEASE from NWd — release NWd's RX buffer.
-/// (Separate from SP RX_RELEASE — NWd has its own RXTX state.)
-/// Already handled by existing handle_rx_release() for NWd RXTX.
+// Handle FFA_RX_RELEASE from NWd — release NWd's RX buffer.
+// (Separate from SP RX_RELEASE — NWd has its own RXTX state.)
+// Already handled by existing handle_rx_release() for NWd RXTX.
 
 /// Handle FFA_RXTX_MAP — store NWd's TX/RX buffer PAs.
 ///
@@ -2303,9 +2314,7 @@ fn handle_spmc_mem_frag_tx(req: &SmcResult8) -> SmcResult8 {
     for record in records.iter_mut() {
         if !record.active {
             let mut stored = [(0u64, 0u32); MAX_SHARE_RANGES];
-            for i in 0..count {
-                stored[i] = desc.ranges[i];
-            }
+            stored[..count].copy_from_slice(&desc.ranges[..count]);
             *record = SpmcShareRecord {
                 handle: frag_handle,
                 sender_id: desc.sender_id,
@@ -2429,9 +2438,7 @@ fn handle_spmc_mem_share(req: &SmcResult8, is_lend: bool, is_donate: bool) -> Sm
                         return make_error(ffa::FFA_INVALID_PARAMETERS as u64);
                     }
                     let count = desc.range_count;
-                    for i in 0..count {
-                        ranges[i] = desc.ranges[i];
-                    }
+                    ranges[..count].copy_from_slice(&desc.ranges[..count]);
                     range_count = count;
                 }
                 Err(_) => {
@@ -2472,8 +2479,7 @@ fn handle_spmc_mem_share(req: &SmcResult8, is_lend: bool, is_donate: bool) -> Sm
     }
 
     // Validate page counts and IPA alignment per range
-    for i in 0..range_count {
-        let (ipa, page_count) = ranges[i];
+    for &(ipa, page_count) in ranges.iter().take(range_count) {
         // IPA must be 4KB-aligned
         if ipa & 0xFFF != 0 {
             return make_error(ffa::FFA_INVALID_PARAMETERS as u64);
@@ -2586,8 +2592,7 @@ fn handle_spmc_mem_retrieve(req: &SmcResult8, _current_sp: Option<(u16, u64)>) -
                     let vsttbr = current_vsttbr;
                     let l0_addr = vsttbr & 0x0000_FFFF_FFFF_F000;
                     let walker = crate::ffa::stage2_walker::Stage2Walker::new(l0_addr);
-                    for i in 0..range_count {
-                        let (base_ipa, page_count) = ranges[i];
+                    for &(base_ipa, page_count) in ranges.iter().take(range_count) {
                         for p in 0..page_count as u64 {
                             let ipa = base_ipa + p * PAGE_SIZE_4KB;
                             walker.map_page(ipa, 0b11, 0b10); // S2AP_RW, SW=SHARED_BORROWED
@@ -2602,8 +2607,7 @@ fn handle_spmc_mem_retrieve(req: &SmcResult8, _current_sp: Option<(u16, u64)>) -
                     let vsttbr = sp.vsttbr();
                     let l0_addr = vsttbr & 0x0000_FFFF_FFFF_F000;
                     let walker = crate::ffa::stage2_walker::Stage2Walker::new(l0_addr);
-                    for i in 0..range_count {
-                        let (base_ipa, page_count) = ranges[i];
+                    for &(base_ipa, page_count) in ranges.iter().take(range_count) {
                         for p in 0..page_count as u64 {
                             let ipa = base_ipa + p * PAGE_SIZE_4KB;
                             walker.map_page(ipa, 0b11, 0b10); // S2AP_RW, SW=SHARED_BORROWED
@@ -2776,8 +2780,7 @@ fn handle_spmc_mem_relinquish(req: &SmcResult8, _current_sp: Option<(u16, u64)>)
                 let vsttbr = current_vsttbr;
                 let l0_addr = vsttbr & 0x0000_FFFF_FFFF_F000;
                 let walker = crate::ffa::stage2_walker::Stage2Walker::new(l0_addr);
-                for i in 0..range_count {
-                    let (base_ipa, page_count) = ranges[i];
+                for &(base_ipa, page_count) in ranges.iter().take(range_count) {
                     for p in 0..page_count as u64 {
                         let ipa = base_ipa + p * PAGE_SIZE_4KB;
                         walker.unmap_page(ipa);
@@ -2792,8 +2795,7 @@ fn handle_spmc_mem_relinquish(req: &SmcResult8, _current_sp: Option<(u16, u64)>)
                 let vsttbr = sp.vsttbr();
                 let l0_addr = vsttbr & 0x0000_FFFF_FFFF_F000;
                 let walker = crate::ffa::stage2_walker::Stage2Walker::new(l0_addr);
-                for i in 0..range_count {
-                    let (base_ipa, page_count) = ranges[i];
+                for &(base_ipa, page_count) in ranges.iter().take(range_count) {
                     for p in 0..page_count as u64 {
                         let ipa = base_ipa + p * PAGE_SIZE_4KB;
                         walker.unmap_page(ipa);

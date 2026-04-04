@@ -1,7 +1,7 @@
-/// ARM64 instruction decoder for MMIO emulation
-///
-/// This module decodes load/store instructions that cause data aborts
-/// when accessing MMIO regions.
+//! ARM64 instruction decoder for MMIO emulation
+//!
+//! This module decodes load/store instructions that cause data aborts
+//! when accessing MMIO regions.
 
 /// Decoded load/store instruction
 #[derive(Debug, Clone, Copy)]

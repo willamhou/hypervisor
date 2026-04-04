@@ -129,6 +129,7 @@ pub fn run_page_ownership_test() {
         }
 
         // Leak mapper to avoid double-free of page tables
+        #[allow(clippy::forget_non_drop)]
         core::mem::forget(mapper2);
     }
 

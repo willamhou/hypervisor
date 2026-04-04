@@ -72,6 +72,12 @@ pub struct Virtqueue {
     pub ready: bool,
 }
 
+impl Default for Virtqueue {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl Virtqueue {
     pub const fn new() -> Self {
         Self {

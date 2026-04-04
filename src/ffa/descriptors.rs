@@ -241,7 +241,7 @@ pub unsafe fn build_retrieve_resp_descriptor(
     let access_ptr = buf.add(recv_off as usize);
     core::ptr::write_unaligned(access_ptr as *mut u16, receiver_id);
     // permissions: RW (0x03)
-    core::ptr::write_unaligned(access_ptr.add(2) as *mut u8, 0x03);
+    core::ptr::write_unaligned(access_ptr.add(2), 0x03u8);
     // composite_offset at +4
     let comp_off: u32 = 48 + 16;
     core::ptr::write_unaligned(access_ptr.add(4) as *mut u32, comp_off);
@@ -252,10 +252,10 @@ pub unsafe fn build_retrieve_resp_descriptor(
     core::ptr::write_unaligned(comp_ptr.add(4) as *mut u32, range_count as u32);
 
     // FfaMemRegionAddrRange (16 bytes each) starting at offset 80
-    for i in 0..range_count {
+    for (i, range) in ranges.iter().enumerate().take(range_count) {
         let range_ptr = buf.add(80 + i * 16);
-        core::ptr::write_unaligned(range_ptr as *mut u64, ranges[i].0);
-        core::ptr::write_unaligned(range_ptr.add(8) as *mut u32, ranges[i].1);
+        core::ptr::write_unaligned(range_ptr as *mut u64, range.0);
+        core::ptr::write_unaligned(range_ptr.add(8) as *mut u32, range.1);
     }
 
     Ok(total_len as u32)

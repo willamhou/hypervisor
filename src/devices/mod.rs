@@ -186,17 +186,15 @@ impl DeviceManager {
 
     /// Handle MMIO access by scanning registered devices.
     pub fn handle_mmio(&mut self, addr: u64, value: u64, size: u8, is_write: bool) -> Option<u64> {
-        for slot in self.devices.iter_mut() {
-            if let Some(dev) = slot {
-                if dev.contains(addr) {
-                    let offset = addr - dev.base_address();
-                    return if is_write {
-                        dev.write(offset, value, size);
-                        None
-                    } else {
-                        dev.read(offset, size)
-                    };
-                }
+        for dev in self.devices.iter_mut().flatten() {
+            if dev.contains(addr) {
+                let offset = addr - dev.base_address();
+                return if is_write {
+                    dev.write(offset, value, size);
+                    None
+                } else {
+                    dev.read(offset, size)
+                };
             }
         }
         // Unknown device — return 0 for reads, ignore writes

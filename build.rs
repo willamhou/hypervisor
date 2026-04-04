@@ -38,7 +38,7 @@ fn main() {
 
             // Try gcc first, fall back to as
             let status = Command::new("aarch64-linux-gnu-gcc")
-                .args(&[
+                .args([
                     "-c",
                     asm_src,
                     "-o",
@@ -50,7 +50,7 @@ fn main() {
                 .or_else(|_| {
                     // Fallback to using assembler directly
                     Command::new("aarch64-linux-gnu-as")
-                        .args(&[asm_src, "-o", obj_path.to_str().unwrap()])
+                        .args([asm_src, "-o", obj_path.to_str().unwrap()])
                         .status()
                 })
                 .unwrap_or_else(|_| panic!("Failed to compile {}", asm_src));

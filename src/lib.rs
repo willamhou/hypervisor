@@ -1,4 +1,8 @@
 #![no_std]
+#![allow(clippy::too_many_arguments)]
+#![allow(clippy::type_complexity)]
+#![allow(clippy::new_without_default)]
+#![allow(clippy::large_enum_variant)]
 
 #[cfg(all(feature = "multi_pcpu", feature = "multi_vm"))]
 compile_error!("features `multi_pcpu` and `multi_vm` are mutually exclusive");
@@ -56,9 +60,9 @@ pub fn uart_put_hex(value: u64) {
     const HEX_CHARS: &[u8; 16] = b"0123456789abcdef";
     let mut buffer = [0u8; 16];
 
-    for i in 0..16 {
+    for (i, slot) in buffer.iter_mut().enumerate() {
         let nibble = ((value >> ((15 - i) * 4)) & 0xF) as usize;
-        buffer[i] = HEX_CHARS[nibble];
+        *slot = HEX_CHARS[nibble];
     }
 
     uart_puts(&buffer);

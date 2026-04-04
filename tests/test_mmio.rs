@@ -1,6 +1,6 @@
-///! Test MMIO device emulation
-///!
-///! This test creates a guest that directly accesses UART via MMIO
+//! Test MMIO device emulation
+//!
+//! This test creates a guest that directly accesses UART via MMIO
 use hypervisor::vm::Vm;
 
 /// Guest code that accesses UART via MMIO
@@ -57,14 +57,13 @@ pub fn run_mmio_test() {
     // Get guest code and stack addresses
     let guest_entry = &GUEST_CODE_MMIO.code as *const _ as u64;
     // SAFETY: Uses address of static aligned MMIO guest stack and computes top-of-stack pointer.
-    let guest_stack =
-        unsafe { (&raw const GUEST_STACK_MMIO.stack as *const [u8; 16384]) as u64 + 16384 };
+    let guest_stack = unsafe { (&raw const GUEST_STACK_MMIO.stack as u64) + 16384 };
 
     hypervisor::log_info!("[MMIO TEST] Guest entry: {:#018x}\n", guest_entry);
 
     // Initialize memory mapping
     let mem_start = guest_entry & !(2 * 1024 * 1024 - 1);
-    let mem_end = ((guest_stack + 2 * 1024 * 1024 - 1) / (2 * 1024 * 1024)) * (2 * 1024 * 1024);
+    let mem_end = guest_stack.div_ceil(2 * 1024 * 1024) * (2 * 1024 * 1024);
     let mem_size = mem_end - mem_start;
 
     vm.init_memory(mem_start, mem_size);

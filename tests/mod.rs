@@ -9,9 +9,9 @@ pub mod test_gicd;
 pub mod test_gicr;
 pub mod test_gicv3_virt;
 pub mod test_global;
-///! Test module for hypervisor
-///!
-///! This module contains various integration tests for the hypervisor.
+// Test module for hypervisor
+//
+// This module contains various integration tests for the hypervisor.
 pub mod test_guest;
 pub mod test_guest_interrupt;
 pub mod test_guest_irq;

@@ -10,6 +10,12 @@ pub struct BumpAllocator {
 }
 
 impl BumpAllocator {
+    /// Create a new bump allocator covering `[start, start + size)`.
+    ///
+    /// # Safety
+    ///
+    /// `start` must be a valid address and `[start, start + size)` must be
+    /// exclusively owned by the caller for the lifetime of this allocator.
     pub const unsafe fn new(start: u64, size: u64) -> Self {
         Self {
             next: start,
@@ -78,6 +84,11 @@ impl BumpAllocator {
         self.allocated
     }
 
+    /// Reset the allocator bump pointer to `start`, discarding all previous allocations.
+    ///
+    /// # Safety
+    ///
+    /// All memory previously allocated from this allocator must no longer be in use.
     pub unsafe fn reset(&mut self, start: u64) {
         self.next = start;
         self.allocated = 0;

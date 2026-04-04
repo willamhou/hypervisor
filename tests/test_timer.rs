@@ -1,8 +1,7 @@
 use hypervisor::arch::aarch64::peripherals::timer;
-///! Simple timer interrupt test at EL2
-///!
-///! This test demonstrates handling timer interrupts at EL2 (hypervisor level)
-
+// Simple timer interrupt test at EL2
+//
+// This test demonstrates handling timer interrupts at EL2 (hypervisor level)
 /// Run a simple timer interrupt test
 #[allow(dead_code)]
 pub fn run_timer_test() {

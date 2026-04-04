@@ -149,8 +149,7 @@ impl Vm {
 
         // Round to 2MB boundaries
         let start_aligned = guest_mem_start & !BLOCK_MASK_2MB;
-        let size_aligned =
-            ((guest_mem_size + BLOCK_SIZE_2MB - 1) / BLOCK_SIZE_2MB) * BLOCK_SIZE_2MB;
+        let size_aligned = guest_mem_size.div_ceil(BLOCK_SIZE_2MB) * BLOCK_SIZE_2MB;
 
         crate::log_info!(
             "[VM] Mapping region: {:#018x} - {:#018x}\n",
@@ -595,14 +594,15 @@ impl Vm {
                     self.scheduler.remove_vcpu(vcpu_id);
                 } else if vs.pending_cpu_on.requested.load(Ordering::Relaxed) {
                     self.scheduler.yield_current();
-                } else if vs
-                    .preemption_exit
-                    .compare_exchange(true, false, Ordering::Acquire, Ordering::Relaxed)
-                    .is_ok()
-                {
-                    self.scheduler.yield_current();
                 } else {
-                    // Normal exit to host (IRQ handler exit, MMIO handled) — yield
+                    // preemption_exit or normal exit (IRQ handler exit, MMIO handled) — yield
+                    // consume the flag if set; either way yield
+                    let _ = vs.preemption_exit.compare_exchange(
+                        true,
+                        false,
+                        Ordering::Acquire,
+                        Ordering::Relaxed,
+                    );
                     self.scheduler.yield_current();
                 }
             }
@@ -882,8 +882,8 @@ fn ensure_cnthp_enabled() {
 #[cfg(not(feature = "multi_pcpu"))]
 fn wake_pending_vcpus(scheduler: &mut Scheduler, vcpus: &[Option<Vcpu>; MAX_VCPUS], vm_id: usize) {
     let vs = crate::global::vm_state(vm_id);
-    for id in 0..MAX_VCPUS {
-        if vcpus[id].is_none() {
+    for (id, vcpu) in vcpus.iter().enumerate() {
+        if vcpu.is_none() {
             continue;
         }
         if vs.pending_sgis[id].load(Ordering::Relaxed) != 0

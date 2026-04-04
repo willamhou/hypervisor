@@ -60,8 +60,7 @@ pub fn run_test() {
     // Get guest code and stack addresses
     let guest_entry = &GUEST_CODE.code as *const _ as u64;
     // SAFETY: Uses address of static aligned guest stack object and computes top-of-stack pointer.
-    let guest_stack =
-        unsafe { (&raw const GUEST_STACK.stack as *const [u8; 16384]) as u64 + 16384 };
+    let guest_stack = unsafe { (&raw const GUEST_STACK.stack as u64) + 16384 };
 
     hypervisor::log_info!("[TEST] Guest entry point: {:#018x}\n", guest_entry);
     hypervisor::log_info!("[TEST] Guest stack: {:#018x}\n", guest_stack);
@@ -69,7 +68,7 @@ pub fn run_test() {
     // Initialize memory mapping
     // Map the region containing guest code and stack
     let mem_start = guest_entry & !(2 * 1024 * 1024 - 1); // Align to 2MB
-    let mem_end = ((guest_stack + 2 * 1024 * 1024 - 1) / (2 * 1024 * 1024)) * (2 * 1024 * 1024);
+    let mem_end = guest_stack.div_ceil(2 * 1024 * 1024) * (2 * 1024 * 1024);
     let mem_size = mem_end - mem_start;
 
     vm.init_memory(mem_start, mem_size);

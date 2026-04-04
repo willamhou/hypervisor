@@ -252,9 +252,9 @@ pub extern "C" fn handle_exception(context: &mut VcpuContext) -> bool {
 
             // HVC: Hypercall from guest
             // x0 contains the hypercall number
-            let should_continue = handle_hypercall(context);
+
             // Don't advance PC - ELR_EL2 already points to the next instruction
-            should_continue
+            handle_hypercall(context)
         }
 
         ExitReason::SmcCall => {
@@ -1480,7 +1480,7 @@ fn handle_wfi_with_timer_injection(context: &mut VcpuContext) -> bool {
     }
 
     // No interrupts pending - inject periodic tick to help guest make progress
-    if count % 100 == 0 {
+    if count.is_multiple_of(100) {
         let _ = GicV3VirtualInterface::inject_interrupt(VTIMER_IRQ, IRQ_DEFAULT_PRIORITY);
         // Don't modify SPSR_EL2 - respect guest's PSTATE.I
     }

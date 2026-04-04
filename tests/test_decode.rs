@@ -19,14 +19,14 @@ pub fn run_decode_test() {
     // Test 2: ISS-based decode — 1-byte load, register x10
     hypervisor::log_info!("[DECODE] Test 2: ISS load byte x10...\n");
     // ISV=1, SAS=00/byte, SRT=10, WNR=0
-    let iss_load_b10: u32 = (1 << 24) | (0 << 22) | (10 << 16) | (0 << 6);
+    let iss_load_b10: u32 = (1 << 24) | (10 << 16);
     let access = MmioAccess::decode(0, iss_load_b10).expect("decode failed");
     assert_load(&access, 10, 1, "ISS load byte x10");
 
     // Test 3: ISS-based decode — 8-byte load, register x0
     hypervisor::log_info!("[DECODE] Test 3: ISS load dword x0...\n");
     // ISV=1, SAS=11/dword, SRT=0, WNR=0
-    let iss_load_d0: u32 = (1 << 24) | (3 << 22) | (0 << 16) | (0 << 6);
+    let iss_load_d0: u32 = (1 << 24) | (3 << 22);
     let access = MmioAccess::decode(0, iss_load_d0).expect("decode failed");
     assert_load(&access, 0, 8, "ISS load dword x0");
 

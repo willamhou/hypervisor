@@ -42,7 +42,7 @@ pub fn run_dynamic_pt_test() {
         hypervisor::log_info!("[DYN PT] ERROR: VTTBR is zero\n");
         return;
     }
-    if final_vttbr % 4096 != 0 {
+    if !final_vttbr.is_multiple_of(4096) {
         hypervisor::log_info!("[DYN PT] ERROR: VTTBR not page-aligned\n");
         return;
     }
