@@ -7,7 +7,14 @@ export PATH := $(CARGO_HOME)/bin:$(PATH)
 
 # Target binary name
 TARGET := hypervisor
+# RELEASE=1 enables release mode (smaller binary, faster execution)
+ifdef RELEASE
+BUILD_DIR := target/aarch64-unknown-none/release
+CARGO_RELEASE := --release
+else
 BUILD_DIR := target/aarch64-unknown-none/debug
+CARGO_RELEASE :=
+endif
 BINARY := $(BUILD_DIR)/$(TARGET)
 BINARY_BIN := $(BUILD_DIR)/$(TARGET).bin
 
@@ -28,7 +35,7 @@ all: build
 
 build:
 	@echo "Building hypervisor..."
-	cargo build --target aarch64-unknown-none
+	cargo build --target aarch64-unknown-none $(CARGO_RELEASE)
 	@echo "Creating raw binary..."
 	aarch64-linux-gnu-objcopy -O binary $(BINARY) $(BINARY_BIN)
 
@@ -47,7 +54,7 @@ ifndef GUEST_ELF
 	$(error GUEST_ELF is not set. Usage: make run-guest GUEST_ELF=/path/to/zephyr.elf)
 endif
 	@echo "Building hypervisor with guest support..."
-	cargo build --target aarch64-unknown-none --features guest
+	cargo build --target aarch64-unknown-none $(CARGO_RELEASE) --features guest
 	@echo "Creating raw binary..."
 	aarch64-linux-gnu-objcopy -O binary $(BINARY) $(BINARY_BIN)
 	@echo "Starting QEMU with guest: $(GUEST_ELF)"
@@ -64,7 +71,7 @@ LINUX_DISK ?= guest/linux/disk.img
 # Run hypervisor with Linux kernel
 run-linux:
 	@echo "Building hypervisor with Linux guest support..."
-	cargo build --target aarch64-unknown-none --features linux_guest
+	cargo build --target aarch64-unknown-none $(CARGO_RELEASE) --features linux_guest
 	@echo "Creating raw binary..."
 	aarch64-linux-gnu-objcopy -O binary $(BINARY) $(BINARY_BIN)
 	@echo "Starting QEMU with Linux kernel..."
@@ -78,7 +85,7 @@ run-linux:
 # Run hypervisor with Linux kernel on multiple physical CPUs
 run-linux-smp:
 	@echo "Building hypervisor with multi-pCPU support..."
-	cargo build --target aarch64-unknown-none --features multi_pcpu
+	cargo build --target aarch64-unknown-none $(CARGO_RELEASE) --features multi_pcpu
 	@echo "Creating raw binary..."
 	aarch64-linux-gnu-objcopy -O binary $(BINARY) $(BINARY_BIN)
 	@echo "Starting QEMU with Linux kernel (multi-pCPU)..."
@@ -104,7 +111,7 @@ QEMU_FLAGS_MULTI_VM := -machine virt,virtualization=on,gic-version=3 \
 # Run hypervisor with two Linux VMs time-sliced on single pCPU
 run-multi-vm:
 	@echo "Building hypervisor with multi-VM support..."
-	cargo build --target aarch64-unknown-none --features multi_vm
+	cargo build --target aarch64-unknown-none $(CARGO_RELEASE) --features multi_vm
 	@echo "Creating raw binary..."
 	aarch64-linux-gnu-objcopy -O binary $(BINARY) $(BINARY_BIN)
 	@echo "Starting QEMU with 2 Linux VMs..."
@@ -136,7 +143,7 @@ QEMU_FLAGS_ANDROID := -machine virt,virtualization=on,gic-version=3 \
 # Run hypervisor with Android-configured kernel (Phase 2: minimal init)
 run-android:
 	@echo "Building hypervisor with Linux guest support..."
-	cargo build --target aarch64-unknown-none --features linux_guest
+	cargo build --target aarch64-unknown-none $(CARGO_RELEASE) --features linux_guest
 	@echo "Creating raw binary..."
 	aarch64-linux-gnu-objcopy -O binary $(BINARY) $(BINARY_BIN)
 	@echo "Starting QEMU with Android-configured kernel..."
@@ -237,7 +244,7 @@ build-tfa-bl33: build-bl32-bl33
 run-tfa-linux:
 	@test -f $(TFA_FLASH_BL33) || (echo "ERROR: $(TFA_FLASH_BL33) not found. Run 'make build-tfa-bl33' first." && exit 1)
 	@echo "Building hypervisor with TF-A boot support..."
-	cargo build --target aarch64-unknown-none --features tfa_boot
+	cargo build --target aarch64-unknown-none $(CARGO_RELEASE) --features tfa_boot
 	@echo "Creating raw binary..."
 	aarch64-linux-gnu-objcopy -O binary $(BINARY) $(BINARY_BIN)
 	@echo "Starting TF-A → hypervisor → Linux boot chain..."
@@ -260,7 +267,7 @@ SPMC_BIN := $(BUILD_DIR)/$(TARGET)_spmc.bin
 # Build hypervisor as S-EL2 SPMC (BL32)
 build-spmc:
 	@echo "Building SPMC (sel2 feature)..."
-	cargo build --target aarch64-unknown-none --features sel2
+	cargo build --target aarch64-unknown-none $(CARGO_RELEASE) --features sel2
 	aarch64-linux-gnu-objcopy -O binary $(BINARY) $(SPMC_BIN)
 	@echo "SPMC binary: $(SPMC_BIN)"
 
@@ -352,7 +359,7 @@ build-tfa-full: build-bl32-bl33 build-spmc build-sp-hello build-sp-irq build-sp-
 run-tfa-linux-ffa:
 	@test -f $(TFA_FLASH_FULL) || (echo "ERROR: $(TFA_FLASH_FULL) not found. Run 'make build-tfa-full' first." && exit 1)
 	@echo "Building hypervisor with TF-A boot support..."
-	cargo build --target aarch64-unknown-none --features tfa_boot
+	cargo build --target aarch64-unknown-none $(CARGO_RELEASE) --features tfa_boot
 	@echo "Creating raw binary..."
 	aarch64-linux-gnu-objcopy -O binary $(BINARY) $(BINARY_BIN)
 	@echo "Starting TF-A → SPMC → hypervisor → Linux boot chain..."

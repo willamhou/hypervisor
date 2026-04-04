@@ -213,9 +213,7 @@ pub fn handle_ffa_call(context: &mut VcpuContext) -> bool {
         FFA_MSG_WAIT => handle_msg_wait(context),
 
         // Console log
-        FFA_CONSOLE_LOG_32 | FFA_CONSOLE_LOG_64 => {
-            handle_proxy_console_log(context)
-        }
+        FFA_CONSOLE_LOG_32 | FFA_CONSOLE_LOG_64 => handle_proxy_console_log(context),
 
         // Unknown FF-A: forward to SPMC if present, else NOT_SUPPORTED
         _ => {
@@ -923,13 +921,10 @@ fn handle_mem_frag_tx(context: &mut VcpuContext) -> bool {
     let is_lend = frag.is_lend;
     let frag_handle = frag.handle;
     let mut local_buf = [0u8; 4096];
-    local_buf[..total_length as usize]
-        .copy_from_slice(&frag.accum_buf[..total_length as usize]);
+    local_buf[..total_length as usize].copy_from_slice(&frag.accum_buf[..total_length as usize]);
     frag.active = false;
 
-    let parsed = unsafe {
-        descriptors::parse_mem_region(local_buf.as_ptr(), total_length)
-    };
+    let parsed = unsafe { descriptors::parse_mem_region(local_buf.as_ptr(), total_length) };
     let parsed = match parsed {
         Ok(p) => p,
         Err(code) => {
@@ -1025,8 +1020,12 @@ fn handle_proxy_console_log(context: &mut VcpuContext) -> bool {
     }
 
     let regs = [
-        context.gp_regs.x2, context.gp_regs.x3, context.gp_regs.x4,
-        context.gp_regs.x5, context.gp_regs.x6, context.gp_regs.x7,
+        context.gp_regs.x2,
+        context.gp_regs.x3,
+        context.gp_regs.x4,
+        context.gp_regs.x5,
+        context.gp_regs.x6,
+        context.gp_regs.x7,
     ];
     let mut buf = [0u8; 48];
     let mut len = 0;
@@ -1093,7 +1092,11 @@ fn parse_share_descriptor(
         // Copy first fragment from TX buffer into accumulation buffer
         unsafe {
             let src = mbox.tx_ipa as *const u8;
-            core::ptr::copy_nonoverlapping(src, frag.accum_buf.as_mut_ptr(), fragment_length as usize);
+            core::ptr::copy_nonoverlapping(
+                src,
+                frag.accum_buf.as_mut_ptr(),
+                fragment_length as usize,
+            );
         }
         frag.total_length = total_length;
         frag.received = fragment_length;
@@ -1294,7 +1297,10 @@ fn handle_mem_retrieve_req(context: &mut VcpuContext) -> bool {
     let total_length = if mbox.mapped {
         let frag_rx = unsafe { &mut (*FRAG_RX_STATE.0.get())[vm_id] };
         // Build descriptor into frag_rx buffer (reuse as temp even if no fragmentation)
-        let total_pages: u32 = info.ranges[..info.range_count].iter().map(|(_, c)| *c).sum();
+        let total_pages: u32 = info.ranges[..info.range_count]
+            .iter()
+            .map(|(_, c)| *c)
+            .sum();
         match unsafe {
             descriptors::build_retrieve_resp_descriptor(
                 frag_rx.resp_buf.as_mut_ptr(),
@@ -1693,8 +1699,14 @@ fn is_guest_ram(vm_id: usize, ipa: u64, len: u64) -> bool {
 
     // Fallback for unit-test / early-init paths before Stage-2 is installed.
     let (ram_start, ram_size) = match vm_id {
-        0 => (crate::platform::GUEST_LOAD_ADDR, crate::platform::LINUX_MEM_SIZE),
-        1 => (crate::platform::VM1_GUEST_LOAD_ADDR, crate::platform::VM1_LINUX_MEM_SIZE),
+        0 => (
+            crate::platform::GUEST_LOAD_ADDR,
+            crate::platform::LINUX_MEM_SIZE,
+        ),
+        1 => (
+            crate::platform::VM1_GUEST_LOAD_ADDR,
+            crate::platform::VM1_LINUX_MEM_SIZE,
+        ),
         _ => return false,
     };
     ipa >= ram_start && len <= ram_size && ipa <= ram_start + ram_size - len

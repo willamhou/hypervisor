@@ -276,6 +276,15 @@ pub unsafe fn build_test_descriptor(
 ) -> u32 {
     let range_count = ranges.len();
     let total_pages: u32 = ranges.iter().map(|(_, c)| *c).sum();
-    build_retrieve_resp_descriptor(buf, 4096, sender_id, receiver_id, 0, ranges, range_count, total_pages)
-        .unwrap_or(0)
+    build_retrieve_resp_descriptor(
+        buf,
+        4096,
+        sender_id,
+        receiver_id,
+        0,
+        ranges,
+        range_count,
+        total_pages,
+    )
+    .unwrap_or(0)
 }

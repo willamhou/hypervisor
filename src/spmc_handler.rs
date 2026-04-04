@@ -404,7 +404,15 @@ pub fn record_spmc_share(
 /// Look up a share record by handle (immutable).
 fn lookup_spmc_share(
     handle: u64,
-) -> Option<(u16, u16, [(u64, u32); MAX_SHARE_RANGES], usize, bool, bool, bool)> {
+) -> Option<(
+    u16,
+    u16,
+    [(u64, u32); MAX_SHARE_RANGES],
+    usize,
+    bool,
+    bool,
+    bool,
+)> {
     let records = SPMC_SHARES.lock();
     for record in records.iter() {
         if record.active && record.handle == handle {
@@ -758,8 +766,14 @@ fn dispatch_to_sp(req: &SmcResult8, sp_id: u16) -> SmcResult8 {
         // Build callee request from caller's saved registers (the DIRECT_REQ args)
         let (cx0, cx1, cx2, cx3, cx4, cx5, cx6, cx7) = sp.get_args();
         let callee_req = SmcResult8 {
-            x0: cx0, x1: cx1, x2: cx2, x3: cx3,
-            x4: cx4, x5: cx5, x6: cx6, x7: cx7,
+            x0: cx0,
+            x1: cx1,
+            x2: cx2,
+            x3: cx3,
+            x4: cx4,
+            x5: cx5,
+            x6: cx6,
+            x7: cx7,
         };
 
         // Drop caller's dispatch lock before acquiring callee's
@@ -780,7 +794,10 @@ fn dispatch_to_sp(req: &SmcResult8, sp_id: u16) -> SmcResult8 {
 
         if callee_result.x0 == ffa::FFA_INTERRUPT {
             // Chain preemption: Blocked → Preempted, do NOT pop stack
-            if sp.transition_to(crate::sp_context::SpState::Preempted).is_err() {
+            if sp
+                .transition_to(crate::sp_context::SpState::Preempted)
+                .is_err()
+            {
                 CALL_STACK.lock().pop();
                 return make_error(ffa::FFA_DENIED as u64);
             }
@@ -791,22 +808,33 @@ fn dispatch_to_sp(req: &SmcResult8, sp_id: u16) -> SmcResult8 {
 
         // Normal completion: pop stack frame, Blocked → Running
         CALL_STACK.lock().pop();
-        if sp.transition_to(crate::sp_context::SpState::Running).is_err() {
+        if sp
+            .transition_to(crate::sp_context::SpState::Running)
+            .is_err()
+        {
             return make_error(ffa::FFA_DENIED as u64);
         }
 
         // Write callee's response to caller's registers
         sp.set_args(
-            callee_result.x0, callee_result.x1, callee_result.x2,
-            callee_result.x3, callee_result.x4, callee_result.x5,
-            callee_result.x6, callee_result.x7,
+            callee_result.x0,
+            callee_result.x1,
+            callee_result.x2,
+            callee_result.x3,
+            callee_result.x4,
+            callee_result.x5,
+            callee_result.x6,
+            callee_result.x7,
         );
 
         // Re-enter caller: restore S2, EL1, re-enter guest loop
         if sp.transition_to(crate::sp_context::SpState::Idle).is_err() {
             return make_error(ffa::FFA_DENIED as u64);
         }
-        if sp.transition_to(crate::sp_context::SpState::Running).is_err() {
+        if sp
+            .transition_to(crate::sp_context::SpState::Running)
+            .is_err()
+        {
             return make_error(ffa::FFA_DENIED as u64);
         }
 
@@ -822,7 +850,7 @@ fn dispatch_to_sp(req: &SmcResult8, sp_id: u16) -> SmcResult8 {
 
         let _exit = unsafe {
             crate::arch::aarch64::enter_guest(
-                sp.vcpu_ctx_mut() as *mut crate::arch::aarch64::regs::VcpuContext,
+                sp.vcpu_ctx_mut() as *mut crate::arch::aarch64::regs::VcpuContext
             )
         };
         post_enter_guest(re_cpu);
@@ -999,26 +1027,32 @@ fn handle_sp_exit(sp: &mut crate::sp_context::SpContext, sp_id: u16) -> SmcResul
                     result.x7,
                 );
             }
-            ffa::FFA_MEM_SHARE_32 | ffa::FFA_MEM_SHARE_64
-            | ffa::FFA_MEM_LEND_32 | ffa::FFA_MEM_LEND_64
-            | ffa::FFA_MEM_DONATE_32 | ffa::FFA_MEM_DONATE_64 => {
+            ffa::FFA_MEM_SHARE_32
+            | ffa::FFA_MEM_SHARE_64
+            | ffa::FFA_MEM_LEND_32
+            | ffa::FFA_MEM_LEND_64
+            | ffa::FFA_MEM_DONATE_32
+            | ffa::FFA_MEM_DONATE_64 => {
                 let is_lend = x0 == ffa::FFA_MEM_LEND_32 || x0 == ffa::FFA_MEM_LEND_64;
                 let is_donate = x0 == ffa::FFA_MEM_DONATE_32 || x0 == ffa::FFA_MEM_DONATE_64;
                 match validate_sp_share(sp_id, x1, x3, x4, x5, is_lend, is_donate) {
                     Ok(handle) => sp.set_args(
-                        ffa::FFA_SUCCESS_32, 0,
-                        handle & 0xFFFF_FFFF, handle >> 32,
-                        0, 0, 0, 0,
+                        ffa::FFA_SUCCESS_32,
+                        0,
+                        handle & 0xFFFF_FFFF,
+                        handle >> 32,
+                        0,
+                        0,
+                        0,
+                        0,
                     ),
                     Err(code) => sp.set_args(ffa::FFA_ERROR, 0, code, 0, 0, 0, 0, 0),
                 }
             }
-            ffa::FFA_MEM_RECLAIM => {
-                match validate_sp_reclaim(sp_id, x1, x2) {
-                    Ok(()) => sp.set_args(ffa::FFA_SUCCESS_32, 0, 0, 0, 0, 0, 0, 0),
-                    Err(code) => sp.set_args(ffa::FFA_ERROR, 0, code, 0, 0, 0, 0, 0),
-                }
-            }
+            ffa::FFA_MEM_RECLAIM => match validate_sp_reclaim(sp_id, x1, x2) {
+                Ok(()) => sp.set_args(ffa::FFA_SUCCESS_32, 0, 0, 0, 0, 0, 0, 0),
+                Err(code) => sp.set_args(ffa::FFA_ERROR, 0, code, 0, 0, 0, 0, 0),
+            },
             ffa::FFA_MEM_FRAG_RX => {
                 // SP-initiated FRAG_RX: deliver next chunk of RETRIEVE_RESP
                 let sp_req = SmcResult8 {
@@ -1078,7 +1112,14 @@ fn handle_sp_exit(sp: &mut crate::sp_context::SpContext, sp_id: u16) -> SmcResul
             ffa::FFA_CONSOLE_LOG_32 | ffa::FFA_CONSOLE_LOG_64 => {
                 // SP-initiated CONSOLE_LOG: extract chars and write to UART
                 let sp_req = SmcResult8 {
-                    x0, x1, x2, x3, x4, x5, x6, x7,
+                    x0,
+                    x1,
+                    x2,
+                    x3,
+                    x4,
+                    x5,
+                    x6,
+                    x7,
                 };
                 let result = handle_console_log(&sp_req);
                 sp.set_args(
@@ -1096,17 +1137,44 @@ fn handle_sp_exit(sp: &mut crate::sp_context::SpContext, sp_id: u16) -> SmcResul
 
                 // Validation 1: source must match current SP
                 if source_id != sp_id {
-                    sp.set_args(ffa::FFA_ERROR, 0, ffa::FFA_INVALID_PARAMETERS as u64, 0, 0, 0, 0, 0);
+                    sp.set_args(
+                        ffa::FFA_ERROR,
+                        0,
+                        ffa::FFA_INVALID_PARAMETERS as u64,
+                        0,
+                        0,
+                        0,
+                        0,
+                        0,
+                    );
                     valid = false;
                 }
                 // Validation 2: no self-calls
                 if valid && dest_id == sp_id {
-                    sp.set_args(ffa::FFA_ERROR, 0, ffa::FFA_INVALID_PARAMETERS as u64, 0, 0, 0, 0, 0);
+                    sp.set_args(
+                        ffa::FFA_ERROR,
+                        0,
+                        ffa::FFA_INVALID_PARAMETERS as u64,
+                        0,
+                        0,
+                        0,
+                        0,
+                        0,
+                    );
                     valid = false;
                 }
                 // Validation 3: destination must exist
                 if valid && !crate::sp_context::is_registered_sp(dest_id) {
-                    sp.set_args(ffa::FFA_ERROR, 0, ffa::FFA_INVALID_PARAMETERS as u64, 0, 0, 0, 0, 0);
+                    sp.set_args(
+                        ffa::FFA_ERROR,
+                        0,
+                        ffa::FFA_INVALID_PARAMETERS as u64,
+                        0,
+                        0,
+                        0,
+                        0,
+                        0,
+                    );
                     valid = false;
                 }
                 // Validation 4+5: cycle detection + push (atomic under CALL_STACK lock)
@@ -1122,7 +1190,10 @@ fn handle_sp_exit(sp: &mut crate::sp_context::SpContext, sp_id: u16) -> SmcResul
                 }
                 if valid {
                     // Transition caller: Running → Blocked
-                    if sp.transition_to(crate::sp_context::SpState::Blocked).is_err() {
+                    if sp
+                        .transition_to(crate::sp_context::SpState::Blocked)
+                        .is_err()
+                    {
                         CALL_STACK.lock().pop();
                         sp.set_args(ffa::FFA_ERROR, 0, ffa::FFA_DENIED as u64, 0, 0, 0, 0, 0);
                         // Fall through to re-enter SP with error
@@ -1131,7 +1202,12 @@ fn handle_sp_exit(sp: &mut crate::sp_context::SpContext, sp_id: u16) -> SmcResul
                         return SmcResult8 {
                             x0: SP_TO_SP_PENDING,
                             x1: dest_id as u64,
-                            x2: 0, x3: 0, x4: 0, x5: 0, x6: 0, x7: 0,
+                            x2: 0,
+                            x3: 0,
+                            x4: 0,
+                            x5: 0,
+                            x6: 0,
+                            x7: 0,
                         };
                     }
                 }
@@ -1321,16 +1397,21 @@ fn resume_preempted_sp(sp_id: u16) -> SmcResult8 {
 
         // Write callee's response to caller's registers
         caller_sp.set_args(
-            result.x0, result.x1, result.x2, result.x3,
-            result.x4, result.x5, result.x6, result.x7,
+            result.x0, result.x1, result.x2, result.x3, result.x4, result.x5, result.x6, result.x7,
         );
 
         // Chain-resume: re-enter caller SP
-        if caller_sp.transition_to(crate::sp_context::SpState::Idle).is_err() {
+        if caller_sp
+            .transition_to(crate::sp_context::SpState::Idle)
+            .is_err()
+        {
             clear_secure_stage2();
             return make_error(ffa::FFA_DENIED as u64);
         }
-        if caller_sp.transition_to(crate::sp_context::SpState::Running).is_err() {
+        if caller_sp
+            .transition_to(crate::sp_context::SpState::Running)
+            .is_err()
+        {
             clear_secure_stage2();
             return make_error(ffa::FFA_DENIED as u64);
         }
@@ -1346,7 +1427,7 @@ fn resume_preempted_sp(sp_id: u16) -> SmcResult8 {
 
         let _exit = unsafe {
             crate::arch::aarch64::enter_guest(
-                caller_sp.vcpu_ctx_mut() as *mut crate::arch::aarch64::regs::VcpuContext,
+                caller_sp.vcpu_ctx_mut() as *mut crate::arch::aarch64::regs::VcpuContext
             )
         };
         post_enter_guest(cpu);
@@ -1514,26 +1595,32 @@ pub fn dispatch_ffa_as_sp(req: &SmcResult8, sp_id: u16, vsttbr: u64) -> SmcResul
             // In unit tests, cannot actually dispatch — return DENIED
             make_error(ffa::FFA_DENIED as u64)
         }
-        ffa::FFA_MEM_SHARE_32 | ffa::FFA_MEM_SHARE_64
-        | ffa::FFA_MEM_LEND_32 | ffa::FFA_MEM_LEND_64
-        | ffa::FFA_MEM_DONATE_32 | ffa::FFA_MEM_DONATE_64 => {
+        ffa::FFA_MEM_SHARE_32
+        | ffa::FFA_MEM_SHARE_64
+        | ffa::FFA_MEM_LEND_32
+        | ffa::FFA_MEM_LEND_64
+        | ffa::FFA_MEM_DONATE_32
+        | ffa::FFA_MEM_DONATE_64 => {
             let is_lend = req.x0 == ffa::FFA_MEM_LEND_32 || req.x0 == ffa::FFA_MEM_LEND_64;
             let is_donate = req.x0 == ffa::FFA_MEM_DONATE_32 || req.x0 == ffa::FFA_MEM_DONATE_64;
             match validate_sp_share(sp_id, req.x1, req.x3, req.x4, req.x5, is_lend, is_donate) {
                 Ok(handle) => SmcResult8 {
-                    x0: ffa::FFA_SUCCESS_32, x1: 0,
-                    x2: handle & 0xFFFF_FFFF, x3: handle >> 32,
-                    x4: 0, x5: 0, x6: 0, x7: 0,
+                    x0: ffa::FFA_SUCCESS_32,
+                    x1: 0,
+                    x2: handle & 0xFFFF_FFFF,
+                    x3: handle >> 32,
+                    x4: 0,
+                    x5: 0,
+                    x6: 0,
+                    x7: 0,
                 },
                 Err(code) => make_error(code),
             }
         }
-        ffa::FFA_MEM_RECLAIM => {
-            match validate_sp_reclaim(sp_id, req.x1, req.x2) {
-                Ok(()) => make_success(),
-                Err(code) => make_error(code),
-            }
-        }
+        ffa::FFA_MEM_RECLAIM => match validate_sp_reclaim(sp_id, req.x1, req.x2) {
+            Ok(()) => make_success(),
+            Err(code) => make_error(code),
+        },
         _ => dispatch_ffa(req),
     }
 }
@@ -1592,7 +1679,10 @@ pub fn dispatch_ffa(req: &SmcResult8) -> SmcResult8 {
                     x1: 0,
                     x2: ffa::NPI_INTID as u64,
                     x3: 0,
-                    x4: 0, x5: 0, x6: 0, x7: 0,
+                    x4: 0,
+                    x5: 0,
+                    x6: 0,
+                    x7: 0,
                 };
             }
             if queried_fid == ffa::FFA_FEATURE_SRI {
@@ -1601,7 +1691,10 @@ pub fn dispatch_ffa(req: &SmcResult8) -> SmcResult8 {
                     x1: 0,
                     x2: ffa::SRI_INTID as u64,
                     x3: 0,
-                    x4: 0, x5: 0, x6: 0, x7: 0,
+                    x4: 0,
+                    x5: 0,
+                    x6: 0,
+                    x7: 0,
                 };
             }
 
@@ -1682,9 +1775,7 @@ pub fn dispatch_ffa(req: &SmcResult8) -> SmcResult8 {
         ffa::FFA_MSG_SEND2 => handle_spmc_msg_send2(req),
         ffa::FFA_MSG_WAIT => handle_spmc_msg_wait_nwd(),
 
-        ffa::FFA_MSG_SEND_DIRECT_REQ_32 | ffa::FFA_MSG_SEND_DIRECT_REQ_64 => {
-            handle_direct_req(req)
-        }
+        ffa::FFA_MSG_SEND_DIRECT_REQ_32 | ffa::FFA_MSG_SEND_DIRECT_REQ_64 => handle_direct_req(req),
 
         ffa::FFA_MEM_SHARE_32 | ffa::FFA_MEM_SHARE_64 => handle_spmc_mem_share(req, false, false),
         ffa::FFA_MEM_LEND_32 | ffa::FFA_MEM_LEND_64 => handle_spmc_mem_share(req, true, false),
@@ -1695,9 +1786,7 @@ pub fn dispatch_ffa(req: &SmcResult8) -> SmcResult8 {
         ffa::FFA_MEM_RECLAIM => handle_spmc_mem_reclaim(req),
         ffa::FFA_MEM_FRAG_TX => handle_spmc_mem_frag_tx(req),
         ffa::FFA_MEM_FRAG_RX => handle_spmc_mem_frag_rx(req),
-        ffa::FFA_MEM_DONATE_32 | ffa::FFA_MEM_DONATE_64 => {
-            handle_spmc_mem_share(req, false, true)
-        }
+        ffa::FFA_MEM_DONATE_32 | ffa::FFA_MEM_DONATE_64 => handle_spmc_mem_share(req, false, true),
 
         // ── Notifications ──────────────────────────────────────────────
         ffa::FFA_NOTIFICATION_BITMAP_CREATE => {
@@ -1873,11 +1962,7 @@ fn handle_spmc_msg_send2(_req: &SmcResult8) -> SmcResult8 {
     // Copy header + payload to SP's RX buffer
     let copy_len = core::cmp::min((8 + msg_size) as usize, 4096);
     unsafe {
-        core::ptr::copy_nonoverlapping(
-            tx_pa as *const u8,
-            mbox.rx_buf.as_mut_ptr(),
-            copy_len,
-        );
+        core::ptr::copy_nonoverlapping(tx_pa as *const u8, mbox.rx_buf.as_mut_ptr(), copy_len);
     }
 
     mbox.msg_pending = true;
@@ -1918,8 +2003,7 @@ fn handle_rxtx_map(req: &SmcResult8) -> SmcResult8 {
     // In sel2 mode, validate PAs are in S-EL2 Stage-1 accessible NS DRAM range.
     // Only accept addresses that S-EL2 can safely dereference.
     #[cfg(feature = "sel2")]
-    if tx_pa < 0x4000_0000 || tx_pa >= 0xC000_0000 || rx_pa < 0x4000_0000 || rx_pa >= 0xC000_0000
-    {
+    if tx_pa < 0x4000_0000 || tx_pa >= 0xC000_0000 || rx_pa < 0x4000_0000 || rx_pa >= 0xC000_0000 {
         crate::log_debug!(
             "[SPMC] RXTX_MAP: rejecting out-of-range tx={:#x} rx={:#x}\n",
             tx_pa,
@@ -2020,7 +2104,11 @@ fn handle_partition_info_get() -> SmcResult8 {
             let nwd = NWD_RXTX.lock();
             let m = nwd.mapped;
             let r = nwd.rx_pa;
-            let b = if m { nwd.page_count as usize * PAGE_SIZE_4KB as usize } else { 0 };
+            let b = if m {
+                nwd.page_count as usize * PAGE_SIZE_4KB as usize
+            } else {
+                0
+            };
             (m, r, b)
         };
 
@@ -2177,7 +2265,10 @@ fn handle_spmc_mem_frag_tx(req: &SmcResult8) -> SmcResult8 {
             x1: handle & 0xFFFF_FFFF,
             x2: handle >> 32,
             x3: frag.received as u64,
-            x4: 0, x5: 0, x6: 0, x7: 0,
+            x4: 0,
+            x5: 0,
+            x6: 0,
+            x7: 0,
         };
     }
 
@@ -2188,9 +2279,8 @@ fn handle_spmc_mem_frag_tx(req: &SmcResult8) -> SmcResult8 {
     let is_donate = frag.is_donate;
     let frag_handle = frag.handle;
 
-    let parsed = unsafe {
-        crate::ffa::descriptors::parse_mem_region(frag.accum_buf.as_ptr(), total_length)
-    };
+    let parsed =
+        unsafe { crate::ffa::descriptors::parse_mem_region(frag.accum_buf.as_ptr(), total_length) };
     frag.active = false;
     drop(frag); // Release NWD_FRAG lock before SPMC_SHARES lock
 
@@ -2232,7 +2322,10 @@ fn handle_spmc_mem_frag_tx(req: &SmcResult8) -> SmcResult8 {
                 x1: 0,
                 x2: frag_handle & 0xFFFF_FFFF,
                 x3: frag_handle >> 32,
-                x4: 0, x5: 0, x6: 0, x7: 0,
+                x4: 0,
+                x5: 0,
+                x6: 0,
+                x7: 0,
             };
         }
     }
@@ -2294,7 +2387,9 @@ fn handle_spmc_mem_share(req: &SmcResult8, is_lend: bool, is_donate: bool) -> Sm
                 frag.is_donate = is_donate;
                 // Extract sender_id from FfaMemRegion header (offset 2, u16)
                 frag.sender_id = if fragment_length >= 4 {
-                    unsafe { core::ptr::read_unaligned(frag.accum_buf.as_ptr().add(2) as *const u16) }
+                    unsafe {
+                        core::ptr::read_unaligned(frag.accum_buf.as_ptr().add(2) as *const u16)
+                    }
                 } else {
                     0
                 };
@@ -2305,7 +2400,10 @@ fn handle_spmc_mem_share(req: &SmcResult8, is_lend: bool, is_donate: bool) -> Sm
                     x1: h & 0xFFFF_FFFF,
                     x2: h >> 32,
                     x3: fragment_length as u64,
-                    x4: 0, x5: 0, x6: 0, x7: 0,
+                    x4: 0,
+                    x5: 0,
+                    x6: 0,
+                    x7: 0,
                 };
             }
 
@@ -2318,11 +2416,7 @@ fn handle_spmc_mem_share(req: &SmcResult8, is_lend: bool, is_donate: bool) -> Sm
             }
             let mut local_buf = [0u8; 4096];
             unsafe {
-                core::ptr::copy_nonoverlapping(
-                    tx_pa as *const u8,
-                    local_buf.as_mut_ptr(),
-                    tlen,
-                );
+                core::ptr::copy_nonoverlapping(tx_pa as *const u8, local_buf.as_mut_ptr(), tlen);
             }
             let parsed = unsafe {
                 crate::ffa::descriptors::parse_mem_region(local_buf.as_ptr(), total_length)
@@ -2397,7 +2491,13 @@ fn handle_spmc_mem_share(req: &SmcResult8, is_lend: bool, is_donate: bool) -> Sm
         }
     }
 
-    match record_spmc_share(sender_id, receiver_id, &ranges[..range_count], is_lend, is_donate) {
+    match record_spmc_share(
+        sender_id,
+        receiver_id,
+        &ranges[..range_count],
+        is_lend,
+        is_donate,
+    ) {
         Some(handle) => SmcResult8 {
             x0: ffa::FFA_SUCCESS_32,
             x1: 0,
@@ -2435,11 +2535,7 @@ fn handle_spmc_mem_retrieve(req: &SmcResult8, _current_sp: Option<(u16, u64)>) -
                 unsafe { core::arch::asm!("dsb sy", options(nostack, nomem)) }
                 let mut h_buf = [0u8; 8];
                 unsafe {
-                    core::ptr::copy_nonoverlapping(
-                        (tx_pa + 8) as *const u8,
-                        h_buf.as_mut_ptr(),
-                        8,
-                    );
+                    core::ptr::copy_nonoverlapping((tx_pa + 8) as *const u8, h_buf.as_mut_ptr(), 8);
                 }
                 handle = u64::from_le_bytes(h_buf);
             } else {
@@ -2623,7 +2719,10 @@ fn handle_spmc_mem_frag_rx(req: &SmcResult8) -> SmcResult8 {
             x1: handle & 0xFFFF_FFFF,
             x2: handle >> 32,
             x3: frag_rx.delivered as u64,
-            x4: 0, x5: 0, x6: 0, x7: 0,
+            x4: 0,
+            x5: 0,
+            x6: 0,
+            x7: 0,
         }
     } else {
         frag_rx.active = false;
@@ -2632,7 +2731,10 @@ fn handle_spmc_mem_frag_rx(req: &SmcResult8) -> SmcResult8 {
             x1: 0,
             x2: handle & 0xFFFF_FFFF,
             x3: handle >> 32,
-            x4: 0, x5: 0, x6: 0, x7: 0,
+            x4: 0,
+            x5: 0,
+            x6: 0,
+            x7: 0,
         }
     }
 }

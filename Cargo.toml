@@ -32,4 +32,6 @@ tfa_boot = ["linux_guest"]
 [profile.release]
 panic = "abort"
 lto = true
-opt-level = "z"  # 优化大小
+opt-level = "s"           # Optimize for size (less aggressive than "z")
+codegen-units = 1         # Single codegen unit for better optimization
+strip = "symbols"         # Strip debug symbols from binary
