@@ -153,13 +153,9 @@ impl<D: VirtioDevice> MmioDevice for VirtioMmioTransport<D> {
                 }
             }
 
-            QUEUE_NUM_MAX => {
-                if self.current_queue().is_some() {
-                    self.device.max_queue_size() as u32
-                } else {
-                    0
-                }
-            }
+            QUEUE_NUM_MAX => self
+                .current_queue()
+                .map_or(0, |_| self.device.max_queue_size() as u32),
 
             QUEUE_READY => {
                 if let Some(idx) = self.current_queue() {
