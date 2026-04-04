@@ -1,33 +1,37 @@
 # ARM64 Hypervisor 开发计划
 
-**项目版本**: v0.29.0 (M4.6 Sprint S1/S2 + Backlog Complete — SPMC Memory/Messaging/Console/SRI)
+**项目版本**: v0.32.0 (Phase 5.1 Complete — SP-to-SP DIRECT_REQ + MEM_SHARE/RECLAIM/DONATE + pKVM E2E 35/35)
 **计划制定日期**: 2026-01-26
-**最后更新**: 2026-03-06
+**最后更新**: 2026-04-04
 **计划类型**: 敏捷迭代，灵活调整
 
 ---
 
 ## 📊 当前进度概览
 
-**整体完成度**: 🟢 **98%** (Milestone 0-2 + Options A-G + M3 Sprint 3.1/3.1b/3.1c/3.2 + M4 Sprint 4.1/4.2/4.3/4.4A/4.4B + Sprint 5.1/5.2 + Phase C/D + M4.5 + M4.6 S1/S2/S3/Backlog ✅)
+**整体完成度**: 🟢 **99%** (M0-2 + Options A-G + M3 + M4 + M4→5 Bridge + M4.5 pKVM + M4.6 SPMC补全 + Phase 4.6 pKVM E2E + Phase 4.7 Security + Phase 5.1 SP-to-SP + Phase 5.1 pKVM E2E ✅)
 
 ```
 M0: 项目启动          ████████████████████ 100% ✅
 M1: MVP基础虚拟化     ████████████████████ 100% ✅
 M2: 增强功能          ████████████████████ 100% ✅
-M3: FF-A              ██████████████████░░  90% 🔧 (Sprint 3.2 ✅, Sprint 3.3 推迟到 M4)
+M3: FF-A              ██████████████████░░  90% ✅ (Sprint 3.2 ✅, Sprint 3.3 合并到 M4)
 M4: S-EL2 SPMC        ████████████████████ 100% ✅ (Sprint 4.1/4.2/4.3/4.4A/4.4B ✅)
 M4→5 Bridge           ████████████████████ 100% ✅ (Sprint 5.1/5.2 ✅, Phase C/D ✅)
-M4.5: pKVM 集成       ████████████████████ 100% ✅ (pKVM boot ✅, FF-A nVHE ✅, FF-A protected ✅)
-M4.6: SPMC 功能补全   ██████████████████░░  90% ✅ (S1 内存管理 ✅, S2 E2E共享 ✅, 通知 ✅, S3 间接消息 ✅, 碎片化 ✅, CONSOLE_LOG ✅, SRI/NPI ✅)
+M4.5: pKVM 集成       ████████████████████ 100% ✅ (boot ✅, FF-A protected ✅, 35/35 ffa_test.ko ✅)
+M4.6: SPMC 功能补全   ████████████████████ 100% ✅ (内存 ✅, 通知 ✅, 间接消息 ✅, 碎片化 ✅, CONSOLE_LOG ✅, SRI/NPI ✅)
+Phase 4.7: 安全加固   ████████████████████ 100% ✅ (cross-SP隔离, IPA验证, 压力测试)
+Phase 5.1: SP-to-SP   ████████████████████ 100% ✅ (DIRECT_REQ + MEM_SHARE + RECLAIM + DONATE)
 M5: RME & CCA         ░░░░░░░░░░░░░░░░░░░░   0% ⏸️
 Android Boot          ██████████░░░░░░░░░░  50% ✅ (Phase 2 完成)
 ```
 
-**测试覆盖**: ~400 assertions / 34 test suites (100% pass)
-**代码量**: ~19000 行
+**测试覆盖**: ~457 assertions / 34 test suites (100% pass)
+**E2E 测试**: 20/20 BL33 SPMC 测试, 35/35 pKVM ffa_test.ko
+**代码量**: ~30000 行 (26K Rust + 3.4K ASM/Linker)
 **Linux启动**: 4 vCPU, BusyBox shell, virtio-blk, virtio-net, multi-VM, FF-A proxy
 **Android启动**: 4 vCPU, PL031 RTC, Binder IPC, minimal init, 1GB RAM
+**构建模式**: Debug (default) + Release (`RELEASE=1`, binary -15~20% smaller)
 **编译警告**: 最小化
 
 ---
@@ -425,7 +429,7 @@ Android Boot          ██████████░░░░░░░░░�
 
 ---
 
-### Milestone 3: 安全扩展 - FF-A（Week 19-28）🔧 **进行中**
+### Milestone 3: 安全扩展 - FF-A（Week 19-28）✅ **核心完成**
 **目标**: 实现FF-A Hypervisor角色，支持内存共享
 
 根据你的偏好，**先实现FF-A**（因为它是TEE和Realm的通信基础）。
@@ -614,11 +618,11 @@ Android Boot          ██████████░░░░░░░░░�
 - [x] FFA_SPM_ID_GET + FFA_RUN ✅
 
 **预估总时间**: 10周（Week 19-28）
-**状态**: 🔧 进行中 (Sprint 3.1/3.1b/3.1c/3.2 ✅, Sprint 3.3 推迟到 M4, ~90%)
+**状态**: ✅ 核心完成 (Sprint 3.1/3.1b/3.1c/3.2 ✅, Sprint 3.3 合并到 M4)
 
 ---
 
-### Milestone 4: QEMU secure=on + S-EL2 SPMC（Week 29-36）🔧 **进行中**
+### Milestone 4: QEMU secure=on + S-EL2 SPMC（Week 29-36）✅ **已完成**
 **目标**: 将我们的 hypervisor 适配为 S-EL2 SPMC（替代 Hafnium），通过 TF-A boot chain 启动
 
 **架构目标**:
@@ -744,7 +748,7 @@ NS-EL1: Linux guest (当前 hypervisor 功能降级为 SPMC)
 
 ---
 
-#### Sprint 4.4: SPMC Handler + SP Loading（Week 35-38）🔧 **Phase A 已完成**
+#### Sprint 4.4: SPMC Handler + SP Loading（Week 35-38）✅ **已完成**
 
 ##### Phase A: SPMC Event Loop + FF-A Dispatch ✅ **已完成**
 
@@ -830,11 +834,11 @@ NS-EL1: Linux guest (当前 hypervisor 功能降级为 SPMC)
 - [ ] 为 pKVM 集成做好准备（NS-EL2 空闲，可被 pKVM 占据）
 
 **预估总时间**: 6-8 周（Week 29-36）
-**状态**: 🔧 进行中 (Sprint 4.1/4.2/4.3 ✅, Sprint 4.4 Phase A/B ✅, Phase C ✅ — NS interrupt preemption + FFA_RUN, Phase D ✅ — multi-SP + secure vIRQ injection, 11/11 BL33 tests)
+**状态**: ✅ 已完成 (Sprint 4.1/4.2/4.3 ✅, Sprint 4.4 Phase A/B ✅, Phase C ✅, Phase D ✅, 20/20 BL33 tests)
 
 ---
 
-### Milestone 4.5: pKVM 集成（Week 37-42）🔧 **部分完成**
+### Milestone 4.5: pKVM 集成（Week 37-42）✅ **已完成**
 **目标**: 在 NS-EL2 运行 pKVM，我们的 hypervisor 在 S-EL2 作为 SPMC，验证完整 FF-A 端到端路径
 
 **架构目标**:
@@ -871,7 +875,7 @@ NS-EL1: Linux/Android guest
 
 ---
 
-#### Sprint 4.5.2: FF-A 端到端集成（Week 39-42）🔧 **部分完成**
+#### Sprint 4.5.2: FF-A 端到端集成（Week 39-42）✅ **已完成**
 
 **实现任务**:
 1. **pKVM FF-A Proxy ↔ 我们的 SPMC**:
@@ -1048,10 +1052,15 @@ FFA_MEM_RECLAIM → handle_mem_reclaim()
 - [x] MEM_FRAG_TX/RX 碎片化支持 ✅ ME-5
 - [x] FFA_CONSOLE_LOG SP 调试日志 ✅
 - [x] SRI/NPI feature IDs (消除 pKVM `-95`) ✅ ME-7
-- [x] 所有新增单元测试通过 ✅ (~370 assertions / 33 suites)
-- [ ] pKVM + 真实 SP 端到端内存共享验证（stretch goal）
+- [x] 所有新增单元测试通过 ✅ (~457 assertions / 34 suites)
+- [x] pKVM + 真实 SP 端到端内存共享验证 ✅ ffa_test.ko 35/35 PASS
+- [x] SP-to-SP DIRECT_REQ (CallStack, cycle detection, SP3 relay) ✅ Phase 5.1
+- [x] SP-to-SP MEM_SHARE/RECLAIM/DONATE ✅ Phase 5.1
+- [x] 安全加固 (cross-SP 隔离, IPA 验证, 压力测试) ✅ Phase 4.7
+- [x] pKVM 稳定性修复 (stack overflow + heap race + DSB SY) ✅
+- [x] Release mode build (`RELEASE=1`) ✅
 
-**状态**: ✅ 核心完成 (stretch goal 待验证)
+**状态**: ✅ 全部完成
 
 ---
 
@@ -1394,14 +1403,16 @@ GitHub Actions配置：
 | M2 | 增强功能 | 8周 | 18周 | ✅ 已完成 |
 | M3 | FF-A 实现 + NS-EL2 完善 | 10周 | 28周 | ✅ 核心完成 (Sprint 3.1/3.1b/3.1c/3.2 ✅, ~90%) |
 | Android | Android Boot (4 phases) | 4-8周 | — | ✅ Phase 2 完成 (PL031 RTC + Init) |
-| M4 | S-EL2 SPMC (QEMU secure=on + TF-A) | 6-8周 | 36周 | 🔧 Sprint 4.1/4.2/4.3 ✅ (75%) |
-| M4.5 | pKVM 集成 (NS-EL2=pKVM, S-EL2=us) | 4-6周 | 42周 | ✅ 已完成 (boot ✅, FF-A protected ✅) |
-| M4.6 | SPMC 功能补全 (内存管理+通知+间接消息+碎片化+CONSOLE_LOG+SRI/NPI) | 4-7周 | 49周 | ✅ 核心完成 |
-| M5 | RME & CCA | 16-20周 | 65-69周 | ⏸️ 未开始 |
+| M4 | S-EL2 SPMC (QEMU secure=on + TF-A) | 6-8周 | 36周 | ✅ 已完成 (Sprint 4.1-4.4 + Phase A/B) |
+| M4.5 | pKVM 集成 (NS-EL2=pKVM, S-EL2=us) | 4-6周 | 42周 | ✅ 已完成 (boot ✅, FF-A protected ✅, 35/35 ffa_test.ko) |
+| M4.6 | SPMC 功能补全 | 4-7周 | 49周 | ✅ 已完成 (内存+通知+消息+碎片化+CONSOLE_LOG+SRI/NPI) |
+| Phase 4.7 | 安全加固 | 1周 | 50周 | ✅ 已完成 (cross-SP隔离, IPA验证, 压力测试) |
+| Phase 5.1 | SP-to-SP | 2周 | 52周 | ✅ 已完成 (DIRECT_REQ + MEM_SHARE/RECLAIM/DONATE + pKVM 35/35) |
+| M5 | RME & CCA | 16-20周 | 68-72周 | ⏸️ 未开始 |
 
 **总计**: 约14-16个月（灵活调整）
-**当前进度**: 20周 / 59-63周 = **约33%** (按预估周数)
-**实际开发时长**: ~4周 (2026-01-25 至 2026-02-24)
+**当前进度**: 52周 / 68-72周 = **约74%** (按预估周数)
+**实际开发时长**: ~10周 (2026-01-25 至 2026-04-04)
 
 ---
 
@@ -1414,9 +1425,11 @@ GitHub Actions配置：
 - [x] **M3 FF-A**: VM 与 SP 内存共享 + 2MB block 拆分 + notifications ✅ **核心完成 2026-02-20** (proxy + stub SPMC + VM-to-VM + 2MB split + notifications + indirect messaging)
 - [x] **Android Phase 1**: Linux 6.6.126 + Android config boots to BusyBox shell ✅ **已完成 2026-02-19**
 - [x] **Android Phase 2**: PL031 RTC + Android init + 1GB RAM + binderfs ✅ **已完成 2026-02-19**
-- [x] **M4 S-EL2**: 我们的 hypervisor 作为 SPMC 在 S-EL2 运行 (TF-A boot chain) ✅ **Sprint 4.1/4.2/4.3/4.4 + 5.1 完成** (SPMC + SP + DIRECT_REQ E2E, 7/7 BL33 tests)
-- [x] **M4.5 pKVM**: pKVM boot ✅ (`Protected hVHE mode initialized`), SPMC FF-A responses ✅, FF-A nVHE ✅, FF-A protected ✅ (`Driver version 1.2`, `Firmware version 1.1`) ✅ **已完成 2026-02-24**
-- [x] **M4.6 SPMC 补全**: SPMC 侧内存管理 + 通知 + 间接消息 + 碎片化 + CONSOLE_LOG + SRI/NPI ✅ **核心完成 2026-03-06**
+- [x] **M4 S-EL2**: 我们的 hypervisor 作为 SPMC 在 S-EL2 运行 (TF-A boot chain) ✅ **Sprint 4.1-4.4 完成** (SPMC + SP + DIRECT_REQ E2E)
+- [x] **M4.5 pKVM**: pKVM boot + FF-A protected + 35/35 ffa_test.ko ✅ **已完成 2026-04-03**
+- [x] **M4.6 SPMC 补全**: 内存管理 + 通知 + 间接消息 + 碎片化 + CONSOLE_LOG + SRI/NPI ✅ **已完成 2026-03-06**
+- [x] **Phase 4.7 安全加固**: cross-SP 隔离 + IPA 验证 + 压力测试 ✅ **已完成 2026-03-20**
+- [x] **Phase 5.1 SP-to-SP**: DIRECT_REQ (CallStack + 循环检测) + MEM_SHARE/RECLAIM/DONATE + pKVM 35/35 ✅ **已完成 2026-04-03**
 - [ ] **M5 CCA**: Realm VM 启动 Guest OS ⏸️ **未开始**
 
 ### 8.2 工程成功标准
@@ -1437,7 +1450,7 @@ GitHub Actions配置：
 
 ## 9. 下一步行动
 
-### 🎯 当前位置：M4.6 ✅ → Phase 5 (RME & CCA)
+### 🎯 当前位置：Phase 5.1 ✅ → Phase 5 (RME & CCA)
 **可行性研究**: `docs/research/2026-02-20-phase4-feasibility.md` — FEASIBLE with moderate effort
 **Sprint 4.1/4.2/4.3/4.4A/4.4B 完成**: TF-A boot chain + hypervisor as BL33 (NS-EL2) + hypervisor as SPMC (S-EL2) + SPMC event loop + FF-A dispatch + SP boot at S-EL1
 **Sprint 5.1 完成**: DIRECT_REQ end-to-end (NS proxy → SPMD → SPMC → SP1), `tfa_boot` feature flag, 8-register SMC forwarding, SP1 x4+=0x1000 proof, 7/7 BL33 tests PASS
@@ -1445,9 +1458,13 @@ GitHub Actions配置：
 **Phase C 完成**: NS interrupt preemption — FFA_INTERRUPT + FFA_RUN resume, CNTHP timer, SP_IRQ_PREEMPTED flag, Preempted state, 9/9 BL33 tests PASS
 **Phase D 完成**: Multi-SP + secure vIRQ injection — SP2 (sp_irq), per-SP INTID ownership, HCR_EL2.VI + HF_INTERRUPT_GET paravirt (Hafnium-compatible), CNTHP poll timer, cross-SP preemption, 11/11 BL33 tests PASS, 42 SPMC handler + 28 SP context assertions
 **Phase 4.5 完成**: pKVM boot ✅ (`Protected hVHE mode initialized successfully`), SPMC FF-A responses ✅, FF-A nVHE mode ✅ (driver v1.1), FF-A protected mode ✅ (driver v1.2, firmware v1.1, AOSP android16-6.12 已修复之前的 kernel bug), secondary CPU warm-boot ✅ (FFA_SECONDARY_EP_REGISTER + per-CPU stacks + MMU install)
-**M4.6 SPMC 补全**: ✅ 核心完成 — Sprint S1 内存管理 ✅, Sprint S2 E2E共享 ✅, 通知 ✅, Sprint S3 间接消息 (ME-3) ✅, MEM_FRAG_TX/RX (ME-5) ✅, CONSOLE_LOG ✅, SRI/NPI (ME-7) ✅
+**M4.6 SPMC 补全**: ✅ 已完成 — Sprint S1 内存管理 ✅, Sprint S2 E2E共享 ✅, 通知 ✅, Sprint S3 间接消息 (ME-3) ✅, MEM_FRAG_TX/RX (ME-5) ✅, CONSOLE_LOG ✅, SRI/NPI (ME-7) ✅
 **Phase 4.6 完成**: pKVM E2E validation — FfaMemRegion struct fix, RETRIEVE_RESP x2=fragment_length, NWd vs SP RETRIEVE_REQ distinction, SP2 DIRECT_REQ_64. ffa_test.ko 20/20 PASS, 15/15 BL33 PASS
-**Phase 4.7 完成**: Security hardening — cross-SP memory isolation (`dispatch_ffa_as_sp()`), IPA alignment + page count validation, fragment sender tracking, stress tests (16-slot exhaustion, interleaved lifecycle, double RETRIEVE, RELINQUISH-without-RETRIEVE). ~400 assertions / 34 suites
+**Phase 4.7 完成**: Security hardening — cross-SP memory isolation (`dispatch_ffa_as_sp()`), IPA alignment + page count validation, fragment sender tracking, stress tests (16-slot exhaustion, interleaved lifecycle, double RETRIEVE, RELINQUISH-without-RETRIEVE). ~415 assertions / 34 suites
+**Phase 5.1 完成**: SP-to-SP DIRECT_REQ (CallStack cycle detection, recursive dispatch_to_sp, chain preemption, SP3 sp_relay) + SP-to-SP MEM_SHARE/RECLAIM (BL33 Tests 19-20) + MEM_DONATE (irrevocable transfer, RECLAIM/RELINQUISH denied). 20/20 BL33 tests, ~457 assertions
+**Phase 5.1 pKVM 完成**: SP3 added to pKVM flash, SP-to-SP MEM_SHARE/RECLAIM through real SPMD chain. ffa_test.ko 35/35 PASS
+**pKVM 稳定性修复**: (1) 32KB secondary stacks + SpinLock heap + STAGE2_LOCK (crash fix), (2) DSB SY barriers + local buffer copy for NWd TX reads (Data Abort fix). 0% crash rate (was ~30%)
+**Release mode**: `RELEASE=1 make ...` — opt-level="s", LTO, codegen-units=1, strip. Binary -15~20% smaller. All tests pass in both debug and release
 
 **Phase 8+ 候选方向** (选择一个):
 
@@ -1596,6 +1613,20 @@ GitHub Actions配置：
 - Phase 20: Sprint 4.3 S-EL2 SPMC ✅ **已完成** — `sel2` feature, `boot_sel2.S`/`linker_sel2.ld` (0x0e100000), manifest FDT parsing, FFA_MSG_WAIT handshake, CTX_INCLUDE_FPREGS=1 fix, diagnostic fault handler, `make run-spmc`
 - Phase 21: Sprint 4.4 Phase A SPMC Handler ✅ **已完成** — SmcResult8/forward_smc8, dispatch_ffa() event loop, VERSION/ID_GET/SPM_ID_GET/FEATURES/PARTITION_INFO/DIRECT_REQ echo, SPMD framework messages (FFA_FWK_MSG_BIT, x1 endpoint IDs), BL33 FF-A test client (6/6 PASS), 24 unit test assertions
 - Phase 22: Sprint 4.4 Phase B SP Boot ✅ **已完成** — SpContext (state machine), SecureStage2Config (VSTTBR_EL2/VSTCR_EL2), sp_hello SP binary (S-EL1), ERET to SP, dispatch_request/dispatch_to_sp for DIRECT_REQ→SP, exception handler sel2 gating, secure DRAM heap (init_at), PARTITION_INFO_GET count=1, 33 test suites / ~248 assertions
+- Phase 23: Sprint 5.1 DIRECT_REQ E2E ✅ **已完成** — `tfa_boot` feature, NS proxy → SPMD → SPMC → SP1 (x4 += 0x1000 proof), 8-register SMC forwarding, 7/7 BL33 tests
+- Phase 24: Sprint 5.2 RXTX + PARTITION_INFO forwarding ✅ **已完成** — SPMC NWd RXTX management, Linux FF-A discovery, 8/8 BL33 tests
+- Phase 25: Phase C NS Interrupt Preemption ✅ **已完成** — FFA_INTERRUPT + FFA_RUN resume, CNTHP timer, SP_IRQ_PREEMPTED, Preempted state, 9/9 BL33
+- Phase 26: Phase D Multi-SP + Secure vIRQ ✅ **已完成** — SP2 (sp_irq), INTID ownership, HCR_EL2.VI, HF_INTERRUPT_GET, cross-SP preemption, 11/11 BL33
+- Phase 27: M4.5 pKVM Integration ✅ **已完成 2026-02-24** — pKVM protected hVHE boot, S-EL2 Stage-1 MMU (NS=1), secondary warm-boot (FFA_SECONDARY_EP_REGISTER), per-CPU event loops, SVE workaround
+- Phase 28: M4.6 SPMC Sprint S1 Memory ✅ **已完成** — MEM_SHARE/LEND/RETRIEVE/RELINQUISH/RECLAIM, SpmcShareRecord, dynamic Secure Stage-2 mapping, BL33 Test 13
+- Phase 29: M4.6 Sprint S2 E2E Sharing ✅ **已完成** — SP-initiated FF-A calls via handle_sp_exit(), SP Hello memory test, BL33 Test 14 full lifecycle, 14/14 BL33
+- Phase 30: M4.6 Backlog ✅ **已完成 2026-03-06** — PSCI v1.0, SpinLock SPMC globals, MEM_SHARE forwarding, FRAG_TX/RX, MSG_SEND2/MSG_WAIT, CONSOLE_LOG, SRI/NPI. ~370 assertions / 33 suites
+- Phase 31: Phase 4.6 pKVM E2E ✅ **已完成** — FfaMemRegion struct fix, RETRIEVE_RESP x2=fragment_length, SP2 DIRECT_REQ_64, ffa_test.ko 20/20, 15/15 BL33
+- Phase 32: Phase 4.7 Security Hardening ✅ **已完成 2026-03-20** — cross-SP isolation (dispatch_ffa_as_sp), IPA validation, fragment sender tracking, stress tests, ~415 assertions / 34 suites
+- Phase 33: Phase 5.1 SP-to-SP ✅ **已完成 2026-04-03** — DIRECT_REQ (CallStack cycle detection, SP3 relay, chain preemption), SP-to-SP MEM_SHARE/RECLAIM (BL33 19-20), MEM_DONATE (irrevocable). 20/20 BL33, ~457 assertions
+- Phase 34: Phase 5.1 pKVM E2E ✅ **已完成 2026-04-03** — SP3 in pKVM flash, SP-to-SP MEM_SHARE/RECLAIM through real SPMD. ffa_test.ko 35/35 PASS
+- Phase 35: pKVM Stability Fixes ✅ **已完成 2026-04-03** — 32KB stacks + SpinLock heap + STAGE2_LOCK (crash fix), DSB SY + local buffer copy (Data Abort fix). 0% crash rate
+- Phase 36: Release Mode Build ✅ **已完成 2026-04-04** — `RELEASE=1` flag, opt-level="s", LTO, strip. Binary -15~20%
 
 ---
 
