@@ -1,12 +1,64 @@
 # hypervisor
 
-A bare-metal Type-1 hypervisor for ARM64, written in Rust (`no_std`). Boots Linux on QEMU, manages Secure Partitions at S-EL2, and integrates with Android pKVM.
+**A bare-metal ARM64 hypervisor in Rust that replaces Google's Hafnium SPMC and runs alongside Android pKVM on the same chip.**
 
-Built from scratch — no Hafnium, no KVM, no runtime dependencies.
+No Hafnium. No KVM. No runtime. One dependency. 457 assertions pass.
 
+[![CI](https://github.com/willamhou/hypervisor/actions/workflows/ci.yml/badge.svg)](https://github.com/willamhou/hypervisor/actions/workflows/ci.yml)
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
+[![Rust](https://img.shields.io/badge/rust-nightly-orange.svg)](https://www.rust-lang.org/)
+[![Platform](https://img.shields.io/badge/platform-ARM64%20QEMU-blue.svg)](https://www.qemu.org/)
+
+### `make run` — 34 test suites in 5 seconds
+
+```
+=== test_ffa ===
+  Test 1: FFA_VERSION returns 1.1 ... PASS
+  Test 2: FFA_ID_GET returns current VM ID ... PASS
+  ...
+  Test 55: CONSOLE_LOG_64 ... PASS
+=== test_spmc_handler ===
+  Test 1: FFA_VERSION returns 1.1 ... PASS
+  ...
+  Test 182: SP-to-SP MEM_SHARE lifecycle ... PASS
+
+============================
+  Test result: 457 passed, 0 failed
+============================
+```
+
+### `make run-pkvm-ffa-test` — 35/35 through real TF-A + pKVM
+
+```
+[ffa_test] SP1 DIRECT_REQ_32 echo: PASS
+[ffa_test] SP1 MEM_SHARE lifecycle: PASS
+[ffa_test] SP2 DIRECT_REQ_64 echo: PASS
+[ffa_test] SP3 relay SP1→SP3→SP1: PASS
+[ffa_test] SP-to-SP MEM_SHARE SP1→SP2: PASS
+...
+[ffa_test] Result: 35/35 PASS
+```
+
+---
+
+## Why Not Hafnium?
+
+[Hafnium](https://hafnium.googlesource.com/hafnium/) is the reference S-EL2 SPMC — 200K+ lines of C, maintained by Google and Arm. It works. So why rewrite it?
+
+1. **To learn ARM's Secure architecture by building it.** Reading the FF-A spec tells you *what*. Building the SPMC tells you *why*. Every design decision in this codebase came from a real bug at EL2.
+
+2. **Rust catches real bugs at compile time.** The SP state machine (Reset→Idle→Running→Blocked→Preempted) has ~15 valid transitions. When I added chain preemption, `match` caught two missing branches. In C, those would have been runtime crashes in production.
+
+3. **Single dependency, full auditability.** The entire FF-A protocol, GICv3 driver, page table walker, and SPMC event loop are hand-written. Every line is GDB-steppable. No hidden behavior from transitive dependencies.
+
+4. **It actually works.** 35/35 E2E tests pass through the full stack: Linux kernel module → pKVM → TF-A SPMD → our SPMC → Secure Partitions → back.
+
+---
 
 ## What It Does
+
+<details>
+<summary><b>Privilege model diagram</b></summary>
 
 ```
 EL3  │ TF-A BL31 + SPMD          SMC relay, world switch
@@ -17,6 +69,8 @@ S-EL1│ Secure Partitions          SP1 Hello, SP2 IRQ, SP3 Relay
 NS-EL2│ pKVM                      Protected VM management
 NS-EL1│ Linux / Android           Guest OS
 ```
+
+</details>
 
 - **S-EL2 SPMC**: Replaces Hafnium as Secure Partition Manager. Boots 3 SPs, handles FF-A messaging and memory sharing, manages Secure Stage-2 page tables
 - **pKVM integration**: Runs alongside Android pKVM — our SPMC at S-EL2, pKVM at NS-EL2, both on 4 physical CPUs
@@ -47,14 +101,20 @@ Add `RELEASE=1` for optimized builds (15-20% smaller binary).
 
 ## Features
 
-### Virtualization
+<details>
+<summary><b>Virtualization</b></summary>
+
 - Stage-2 MMU with dynamic 2MB/4KB pages, VMID-tagged TLBs
 - GICv3 full trap-and-emulate (GICD + GICR shadow state, List Register injection)
 - SMP: 4 vCPUs cooperative + preemptive scheduling (10ms CNTHP timer)
 - Multi-pCPU: 1:1 vCPU-to-pCPU affinity, PSCI boot, physical IPI
 - Multi-VM: 2 VMs time-sliced, per-VM Stage-2/devices, L2 virtual switch
 
-### FF-A v1.1 (Firmware Framework for Arm)
+</details>
+
+<details>
+<summary><b>FF-A v1.1 (Firmware Framework for Arm)</b></summary>
+
 - Direct messaging (DIRECT_REQ/RESP, 32-bit and 64-bit)
 - Indirect messaging (MSG_SEND2/MSG_WAIT, per-SP mailbox)
 - Memory sharing (MEM_SHARE/LEND/DONATE/RETRIEVE/RELINQUISH/RECLAIM)
@@ -66,7 +126,11 @@ Add `RELEASE=1` for optimized builds (15-20% smaller binary).
 - Page ownership via Stage-2 PTE software bits (pKVM-compatible)
 - CONSOLE_LOG, SRI/NPI feature IDs
 
-### S-EL2 SPMC
+</details>
+
+<details>
+<summary><b>S-EL2 SPMC</b></summary>
+
 - TF-A boot chain: BL1 → BL2 → BL31(SPMD) → BL32(SPMC) → BL33
 - 3 Secure Partitions: SP1 (Hello), SP2 (IRQ handler), SP3 (Relay)
 - Per-SP Secure Stage-2 isolation
@@ -76,13 +140,24 @@ Add `RELEASE=1` for optimized builds (15-20% smaller binary).
 - S-EL2 Stage-1 MMU: NS=1 for NWd DRAM access
 - NWd RXTX management, PARTITION_INFO_GET forwarding
 
-### Device Emulation
+</details>
+
+<details>
+<summary><b>Device Emulation</b></summary>
+
 - PL011 UART (TX + RX with ring buffer)
 - PL031 RTC (counter-based, PrimeCell ID)
 - Virtio-blk (in-memory disk, virtio-mmio transport)
 - Virtio-net + VSwitch (L2 switch, MAC learning, auto-IP)
 
+</details>
+
 ## Architecture
+
+~30,000 lines (26K Rust + 3.4K assembly). See [ARCHITECTURE.md](ARCHITECTURE.md) for the full overview.
+
+<details>
+<summary><b>Source tree</b></summary>
 
 ```
 src/
@@ -112,9 +187,12 @@ tfa/
 guest/linux/ffa-test/ffa_test.c   pKVM kernel test module (35 tests)
 ```
 
-~30,000 lines (26K Rust + 3.4K assembly).
+</details>
 
 ## Build Targets
+
+<details>
+<summary><b>All targets</b></summary>
 
 ```bash
 # Guest boot
@@ -139,6 +217,8 @@ make clippy             # Lint
 make fmt                # Format
 make debug              # QEMU + GDB on port 1234
 ```
+
+</details>
 
 ## How It Differs
 
