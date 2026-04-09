@@ -9,35 +9,11 @@ No Hafnium. No KVM. No runtime. One dependency. 457 assertions pass.
 [![Rust](https://img.shields.io/badge/rust-nightly-orange.svg)](https://www.rust-lang.org/)
 [![Platform](https://img.shields.io/badge/platform-ARM64%20QEMU-blue.svg)](https://www.qemu.org/)
 
-### `make run` — 34 test suites in 5 seconds
+### Demo: `make run` — 34 test suites, 457 assertions
 
-```
-=== test_ffa ===
-  Test 1: FFA_VERSION returns 1.1 ... PASS
-  Test 2: FFA_ID_GET returns current VM ID ... PASS
-  ...
-  Test 55: CONSOLE_LOG_64 ... PASS
-=== test_spmc_handler ===
-  Test 1: FFA_VERSION returns 1.1 ... PASS
-  ...
-  Test 182: SP-to-SP MEM_SHARE lifecycle ... PASS
-
-============================
-  Test result: 457 passed, 0 failed
-============================
-```
-
-### `make run-pkvm-ffa-test` — 35/35 through real TF-A + pKVM
-
-```
-[ffa_test] SP1 DIRECT_REQ_32 echo: PASS
-[ffa_test] SP1 MEM_SHARE lifecycle: PASS
-[ffa_test] SP2 DIRECT_REQ_64 echo: PASS
-[ffa_test] SP3 relay SP1→SP3→SP1: PASS
-[ffa_test] SP-to-SP MEM_SHARE SP1→SP2: PASS
-...
-[ffa_test] Result: 35/35 PASS
-```
+<p align="center">
+  <img src="docs/demo.svg" alt="make run demo" width="700">
+</p>
 
 ---
 
