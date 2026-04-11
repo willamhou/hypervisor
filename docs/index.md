@@ -8,6 +8,8 @@ description: "A bare-metal SPMC at S-EL2 that boots Linux, manages Secure Partit
 
 [View on GitHub](https://github.com/willamhou/hypervisor)
 
+**Also read:** [你的 Android 手机里藏着一个 Hypervisor：pKVM 完全解析](pkvm.md)
+
 ---
 
 I built an ARM64 hypervisor that runs *next to* Google's pKVM on the same chip. pKVM takes the Normal world at NS-EL2. My hypervisor takes the Secure world at S-EL2. They coordinate through ARM's FF-A protocol, relayed by EL3 firmware. 35 end-to-end tests pass through the full four-level stack: Linux kernel module → pKVM → TF-A → my SPMC → Secure Partitions → and back.

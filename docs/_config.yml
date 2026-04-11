@@ -17,3 +17,4 @@ exclude:
 
 include:
   - index.md
+  - pkvm.md
