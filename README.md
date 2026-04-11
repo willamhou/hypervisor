@@ -8,6 +8,7 @@ No Hafnium. No KVM. No runtime. One dependency. 457 assertions pass.
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 [![Rust](https://img.shields.io/badge/rust-nightly-orange.svg)](https://www.rust-lang.org/)
 [![Platform](https://img.shields.io/badge/platform-ARM64%20QEMU-blue.svg)](https://www.qemu.org/)
+[![Open in GitHub Codespaces](https://github.com/codespaces/badge.svg)](https://codespaces.new/willamhou/hypervisor?quickstart=1)
 
 ### Demo: `make run` — 34 test suites, 457 assertions
 

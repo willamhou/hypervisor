@@ -1,0 +1,20 @@
+{
+  "name": "ARM64 Hypervisor",
+  "build": {
+    "dockerfile": "Dockerfile"
+  },
+  "postCreateCommand": "rustc --version && qemu-system-aarch64 --version | head -1 && aarch64-linux-gnu-gcc --version | head -1",
+  "postAttachCommand": "echo '\n🚀 Ready! Run: make run\n'",
+  "customizations": {
+    "vscode": {
+      "extensions": [
+        "rust-lang.rust-analyzer",
+        "vadimcn.vscode-lldb"
+      ],
+      "settings": {
+        "rust-analyzer.cargo.target": "aarch64-unknown-none",
+        "rust-analyzer.check.allTargets": false
+      }
+    }
+  }
+}
