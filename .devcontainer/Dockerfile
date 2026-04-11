@@ -5,6 +5,8 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     gcc-aarch64-linux-gnu \
     binutils-aarch64-linux-gnu \
     qemu-system-arm \
+    qemu-efi-aarch64 \
+    ipxe-qemu \
     && rm -rf /var/lib/apt/lists/*
 
 # Install Rust nightly with aarch64 target
