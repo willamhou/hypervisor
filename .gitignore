@@ -54,3 +54,11 @@ tfa/flash-spmc.bin
 tfa/bl32.bin
 tfa/bl33.bin
 tfa/qemu_fw.bios
+
+# FVP downloads (70MB, EULA-bound)
+FVP_*.tar.gz
+FVP_*.tgz
+
+# AI tooling state
+.codex/
+.context/
