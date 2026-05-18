@@ -1,6 +1,6 @@
 # hypervisor
 
-**A bare-metal ARM64 hypervisor in Rust that replaces Google's Hafnium SPMC and runs alongside Android pKVM on the same chip.**
+**A bare-metal ARM64 hypervisor in Rust. It replaces Hafnium's SPMC, boots Linux, and runs alongside Android pKVM on the same chip.**
 
 No Hafnium. No KVM. No runtime. One dependency. 457 assertions pass.
 
@@ -10,6 +10,15 @@ No Hafnium. No KVM. No runtime. One dependency. 457 assertions pass.
 [![Platform](https://img.shields.io/badge/platform-ARM64%20QEMU-blue.svg)](https://www.qemu.org/)
 [![Open in GitHub Codespaces](https://github.com/codespaces/badge.svg)](https://codespaces.new/willamhou/hypervisor?quickstart=1)
 
+## Start Here
+
+- [Run the project in 2 minutes](#quick-start)
+- [Read the architecture overview](ARCHITECTURE.md)
+- [Read the flagship write-up](https://willamhou.github.io/hypervisor/)
+- [Read the bilingual book draft](docs/book/en/src/README.md) / [中文](docs/book/zh/src/README.md)
+
+If this repo is useful for your work, research, or curiosity, star it. That signal matters more than vanity metrics here.
+
 ### Demo: `make run` — 34 test suites, 457 assertions
 
 <p align="center">
@@ -17,6 +26,13 @@ No Hafnium. No KVM. No runtime. One dependency. 457 assertions pass.
 </p>
 
 ---
+
+This repo is designed to be skimmed in layers:
+
+- `README.md` for the project pitch and quick start
+- `ARCHITECTURE.md` for the system map
+- [`willamhou.github.io/hypervisor`](https://willamhou.github.io/hypervisor/) for the flagship narrative
+- `src/` when you want the actual implementation details
 
 ## Why Not Hafnium?
 
@@ -65,6 +81,18 @@ make run-pkvm-ffa-test # Boot pKVM + SPMC (35/35 E2E tests)
 ```
 
 Add `RELEASE=1` for optimized builds (15-20% smaller binary).
+
+## Track GitHub Traffic
+
+GitHub only exposes the last 14 days of traffic data, so archive it on a schedule if you care about launch and content attribution.
+
+```bash
+./scripts/archive-github-traffic.sh
+# or target another repo:
+./scripts/archive-github-traffic.sh owner/repo
+```
+
+By default snapshots are written to `metrics/github-traffic/<UTC timestamp>/` as raw JSON (`repo.json`, `views.json`, `clones.json`, `referrers.json`, `paths.json`). The directory is gitignored for local use.
 
 ## Test Results
 

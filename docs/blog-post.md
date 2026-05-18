@@ -1,6 +1,6 @@
 # Two Hypervisors, One SoC: Replacing Hafnium with 30K Lines of Rust
 
-*A bare-metal SPMC at S-EL2 that boots Linux, manages Secure Partitions, and runs alongside Android pKVM — from first ERET to 35/35 E2E tests in 10 weeks.*
+*Over about 10 weeks, I built a bare-metal SPMC at S-EL2 that boots Linux, manages Secure Partitions, and runs alongside Android pKVM on the same SoC.*
 
 ---
 
@@ -8,7 +8,7 @@ I built an ARM64 hypervisor that runs *next to* Google's pKVM on the same chip. 
 
 The Secure side already had an implementation: [Hafnium](https://hafnium.googlesource.com/hafnium/), Google's reference SPMC. It's 200K+ lines of C. I replaced it with 30,000 lines of `no_std` Rust — no runtime, no allocator crate, one dependency (a DTB parser). It boots Linux to a BusyBox shell, manages three Secure Partitions, and handles FF-A v1.1 messaging and memory sharing.
 
-This post covers the architecture, the parts that were hard, and four bugs that cost me the most sleep.
+I'll walk through the architecture, the parts that were genuinely hard, and the four bugs I spent the most time chasing.
 
 ## ARM's Split Personality
 
@@ -53,7 +53,7 @@ Linux (NS-EL1) → SMC → pKVM (NS-EL2) → SMC → SPMD (EL3)
 
 The proof: Linux sends `x4=0xBBBB` via FF-A DIRECT_REQ, SP1 adds `0x1000`, Linux reads back `0xCBBB`. One round trip, four privilege levels, two world switches.
 
-Making this work required solving problems that don't appear in a single-hypervisor setup:
+Making this work meant dealing with problems that mostly don't show up in a single-hypervisor setup:
 
 **SPMD is per-CPU.** TF-A's Secure Partition Manager Dispatcher maintains separate state for each physical CPU. When pKVM boots secondary CPUs via PSCI, each one enters S-EL2 on whichever physical core it lands on. My SPMC must register a secondary entry point (`FFA_SECONDARY_EP_REGISTER`), allocate per-CPU stacks (3 × 32KB), and run a full event loop on every core. If any CPU skips its `FFA_MSG_WAIT` handshake, SPMD blocks the entire PSCI boot sequence. This is documented nowhere except TF-A's source code.
 
@@ -86,13 +86,13 @@ ffa_test:   Results: 35/35 PASS
 
 ## Rust at Exception Level 2
 
-Secure Partition lifecycle is a state machine: Reset → Idle → Running → Blocked → Preempted. In C, this is an int and a prayer. In Rust:
+Secure Partition lifecycle is a state machine: Reset → Idle → Running → Blocked → Preempted. In C, this would probably be an integer plus a set of invariants everyone has to remember. In Rust:
 
 ```rust
 enum SpState { Reset, Idle, Running, Blocked, Preempted }
 ```
 
-When I added the Blocked → Preempted edge for chain preemption during SP-to-SP messaging, `match` forced me to handle every case. That caught two bugs at compile time.
+When I added the Blocked → Preempted edge for chain preemption during SP-to-SP messaging, the compiler forced me to revisit every transition. That flushed out two bugs before I ever ran the code.
 
 My `Cargo.toml` has one dependency: `fdt = "0.1.5"`. Everything else — page tables, GIC emulation, virtio drivers, the SPMC event loop — is hand-written. The `alloc` crate gives me `Box` and `Vec` backed by a bump allocator. Enum dispatch replaces trait objects for zero-cost MMIO routing.
 
@@ -155,11 +155,11 @@ The SP doesn't know its RETRIEVE_REQ is handled locally rather than going to ano
 
 Week 4. The SPMC boots fine in release mode but hangs on the first `read_volatile` in debug. No output, no fault, nothing.
 
-After hours with GDB: the CPU was stuck in an EL3 exception handler. ESR showed an FP/SIMD trap. But my code doesn't use floating point.
+After a few hours with GDB, I found the CPU stuck in an EL3 exception handler. ESR showed an FP/SIMD trap. But my code doesn't use floating point.
 
-Rust's debug-mode codegen emits NEON instructions for things you wouldn't expect. The alignment check inside `read_volatile` compiles to `cnt v0.8b, v0.8b` — a SIMD population count. TF-A's default `CPTR_EL3.TFP=1` traps ALL floating-point and SIMD from every exception level. EL3's handler wasn't prepared for this trap, so it looped forever.
+Rust's debug-mode codegen will happily emit NEON instructions for things that look unrelated. In my case, the alignment check inside `read_volatile` compiled to `cnt v0.8b, v0.8b` — a SIMD population count. TF-A's default `CPTR_EL3.TFP=1` traps all floating-point and SIMD from every exception level. EL3's handler wasn't prepared for that trap, so it looped forever.
 
-The fix: one build flag (`CTX_INCLUDE_FPREGS=1`). The lesson: when you run below the OS, your compiler's codegen becomes a hardware constraint.
+What fixed it was one build flag: `CTX_INCLUDE_FPREGS=1`. It was a good reminder that once you're running below an OS, your compiler's codegen is part of the hardware contract.
 
 ### The NS Bit and the Invisible Write
 
@@ -171,7 +171,7 @@ The write succeeded (no fault). The address was correct (verified in GDB). But t
 
 ARM has two physical address spaces. When S-EL2 runs with the MMU off, all memory accesses go through the Secure physical address space. pKVM's buffer is at `0x42a16000` in Non-Secure DRAM. The write hits `0x42a16000` Secure. pKVM reads from `0x42a16000` Non-Secure. Different memory.
 
-The fix: S-EL2 Stage-1 MMU with an identity map where all Normal world DRAM has the `NS=1` attribute bit. I've worked with ARM for years and never internalized that Secure/Non-Secure is a *physical address space split*, not just a permission model. In QEMU, there's literally twice the memory at the same addresses, selected by one bit.
+What fixed it was enabling an S-EL2 Stage-1 MMU with an identity map where all Normal world DRAM has the `NS=1` attribute bit. I've worked with ARM for years and still hadn't fully internalized that Secure/Non-Secure is a *physical address space split*, not just a permission model. In QEMU, there's literally twice the memory at the same addresses, selected by one bit.
 
 ### The Stale Cache and the Phantom Data Abort
 
@@ -181,9 +181,9 @@ Week 11. pKVM's MEM_SHARE works 70% of the time. The other 30%, the SPMC crashes
 
 The descriptor lived in pKVM's TX buffer — Normal world DRAM. pKVM writes it on CPU 0, issues an SMC, SPMD context-switches to S-EL2 on CPU 2. Even though ARM's memory model guarantees the SMC acts as a barrier for the issuing CPU, the *receiving* CPU might still have a stale L1 cache line.
 
-I added `DSB SY` (Data Synchronization Barrier, full system scope) before every cross-world buffer read. Still crashed. The barrier ensures visibility, but the buffer itself is in Non-Secure DRAM that the SPMC accesses through the NS=1 Stage-1 mapping. Between the barrier and the read, the data could still be inconsistent from the SPMC's perspective.
+I first added `DSB SY` (Data Synchronization Barrier, full system scope) before every cross-world buffer read. It still crashed. The barrier improves visibility, but the buffer itself is in Non-Secure DRAM that the SPMC accesses through the NS=1 Stage-1 mapping. From the SPMC's point of view, that was still not enough to make the parse reliable.
 
-The fix: copy the entire descriptor to a local stack buffer before parsing.
+What finally made it reliable was copying the entire descriptor to a local stack buffer before parsing it.
 
 ```rust
 unsafe { core::arch::asm!("dsb sy", options(nostack, nomem)); }
@@ -197,7 +197,7 @@ unsafe {
 let parsed = parse_mem_region(local_buf.as_ptr(), total_length);
 ```
 
-Now if the copy captures stale data, the bounds checks in `parse_mem_region` reject it cleanly instead of chasing wild pointers into Secure memory. Crash rate went from 30% to 0%.
+Now, if the copy still captures stale data, the bounds checks in `parse_mem_region` reject it cleanly instead of chasing a wild pointer into Secure memory. In practice that took the crash rate from about 30% to zero.
 
 ### SPMD Is Per-CPU (or: Read the Firmware Source)
 
@@ -205,7 +205,7 @@ Week 7. pKVM boots fine on CPU 0. Secondary CPUs hang.
 
 The FF-A spec describes SPMC init but says almost nothing about secondary CPUs. After reading TF-A's `spmd_cpu_on_finish_handler()`, I found it: SPMD maintains *entirely separate state* per physical CPU. Each secondary entering S-EL2 must call `FFA_MSG_WAIT` — a handshake that signals "this CPU's Secure world is ready." Without it, SPMD never completes the PSCI CPU_ON call, so the Normal world secondary never boots either.
 
-My initial code had secondary CPUs do `WFE` (wait for event) after basic init. That's the Normal world pattern. But SPMD needs its per-CPU handshake, per-CPU stacks (3 × 32KB in `.bss`), and a full event loop on each secondary. The fix was `FFA_SECONDARY_EP_REGISTER` during init, and this lesson: the FF-A spec tells you the *what*; TF-A's source code tells you the *how*.
+My initial code had secondary CPUs do `WFE` (wait for event) after basic init. That's the Normal world pattern. But SPMD needs its per-CPU handshake, per-CPU stacks (3 × 32KB in `.bss`), and a full event loop on each secondary. The eventual fix was registering `FFA_SECONDARY_EP_REGISTER` during init and giving each secondary its own stack and event loop. The FF-A spec tells you *what* has to happen; TF-A's source code is where I found *how* it actually has to be wired up.
 
 ## Testing Without an OS
 
@@ -229,7 +229,7 @@ For integration tests, the BL33 binary is a 500-line assembly program that sends
 
 For pKVM E2E tests, `ffa_test.ko` is a Linux kernel module that does the same through pKVM's FF-A proxy.
 
-No mocking. The BL33 tests go through real TF-A at EL3. The pKVM tests traverse pKVM at NS-EL2, SPMD at EL3, our SPMC at S-EL2, and SPs at S-EL1. If any layer is broken, the test fails.
+There's no mocking here. The BL33 tests go through real TF-A at EL3. The pKVM tests traverse pKVM at NS-EL2, SPMD at EL3, our SPMC at S-EL2, and SPs at S-EL1. If any layer is broken, the test fails.
 
 ## Numbers
 
@@ -263,4 +263,4 @@ For `make run-spmc` and `make run-pkvm-ffa-test`, you'll need TF-A and (for pKVM
 
 ---
 
-*Built with Rust nightly, QEMU 9.2, and the ARM Architecture Reference Manual open on a second monitor for 10 weeks straight.*
+*Built with Rust nightly, QEMU 9.2, and a lot of time spent cross-checking the ARM ARM.*

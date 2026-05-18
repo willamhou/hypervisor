@@ -1,22 +1,6 @@
----
-layout: default
-title: "Building a Rust ARM64 SPMC that Replaces Hafnium and Runs Beside pKVM"
-description: "A no_std Rust Secure Partition Manager Core at S-EL2 that boots Linux, manages Secure Partitions, and passes 35/35 end-to-end tests through TF-A and pKVM."
----
+# Building a Rust ARM64 SPMC that Replaces Hafnium and Runs Beside pKVM
 
 *A bare-metal Secure Partition Manager Core at S-EL2, written in `no_std` Rust, that boots Linux, manages Secure Partitions, and passes 35/35 end-to-end tests through real TF-A firmware.*
-
-[View on GitHub](https://github.com/willamhou/hypervisor)
-
-**Also read:** [你的 Android 手机里藏着一个 Hypervisor：pKVM 完全解析](pkvm.md)
-
-### `make run` — 34 test suites, 457 assertions
-
-<p align="center">
-  <img src="demo.svg" alt="make run demo" width="700">
-</p>
-
----
 
 I built an ARM64 hypervisor that runs next to Android pKVM on the same chip.
 
@@ -209,10 +193,6 @@ That runs the bare-metal test suites on QEMU in a few seconds.
 If you want the code and architecture next:
 
 - repo: <https://github.com/willamhou/hypervisor>
-- architecture overview: <https://github.com/willamhou/hypervisor/blob/main/ARCHITECTURE.md>
+- architecture overview: [ARCHITECTURE.md](../ARCHITECTURE.md)
 
 And if this is the kind of work you care about, the repo is set up to be read in layers: quick start first, architecture second, source code third.
-
----
-
-*Built with Rust nightly, QEMU 9.2, and the ARM Architecture Reference Manual open on a second monitor for 10 weeks straight.*

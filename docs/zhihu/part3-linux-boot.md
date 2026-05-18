@@ -8,7 +8,7 @@ Part 0a 说过一句话：核心循环只占 5% 的工作量。Part 2 就是那 
 
 让 Linux 6.12 启动到 BusyBox shell，需要正确模拟 GICv3 中断控制器（几十个寄存器、三种不同的 MMIO 区域、每个 CPU 独立的 redistributor）、实现 virtio-blk 磁盘设备、写一个能在 4 个 vCPU 之间切换的调度器、处理 PSCI 电源管理、让 guest 能通过 CPU_ON 唤醒 secondary CPU……
 
-每一个子系统单拎出来都不复杂。但它们必须同时正确地工作，Linux 才能启动。差任何一个，内核就挂在某个阶段——通常是沉默的挂起，没有任何错误信息。
+每一个子系统单拎出来都不复杂。但它们必须同时正确地工作，Linux 才能启动。差任何一个，内核就挂在某个阶段——通常是直接无声卡住，没有任何错误信息。
 
 时间线：从 2 月 7 日第一次启动 Linux 到 2 月 14 日完成 GIC 全虚拟化，大约一周。这一周是整个项目代码密度最高的阶段。
 
@@ -49,13 +49,13 @@ GICv3 是 ARM 平台的中断控制器。它有三个组件，每个的虚拟化
 
 | 组件 | 地址 | 作用 | 虚拟化策略 |
 |------|------|------|-----------|
-| GICD | 0x08000000 | 全局中断使能、路由 | 写穿（write-through）|
+| GICD | 0x08000000 | 全局中断使能、路由 | trap + shadow state + 写穿 |
 | GICR × N | 0x080A0000+ | 每 CPU 的中断配置 | 纯 trap-and-emulate |
 | ICC 系统寄存器 | MSR/MRS | 中断确认、EOI | 硬件虚拟接口 |
 
 **三种策略，三种理由。**
 
-### GICD：写穿
+### GICD：trap + shadow + 写穿
 
 GICD 管全局中断——哪些中断被使能、路由到哪个 CPU。Guest 写 GICD，我们需要两件事都做：更新自己的 shadow state（后面查询用），**同时写到真实的物理 GICD**。
 
@@ -92,7 +92,7 @@ fn write(&mut self, offset: u64, value: u64, size: u8) -> bool {
 }
 ```
 
-为什么可以写穿？因为在 single-VM 场景下，guest 要控制的物理中断就是真实的物理中断。GICD 是系统全局唯一的，没有"虚拟 GICD"——我们只需要拦截一下确保不越界，然后直接写硬件。
+为什么要走 shadow + 写穿而不是纯 trap？因为在 single-VM 场景下，guest 要控制的物理中断就是真实的物理中断。GICD 只有一套物理硬件，但 hypervisor 仍然维护一份 `VirtualGicd` shadow state——中断路由、使能查询都在 shadow 上做，省掉每次读寄存器的硬件延迟——同时把写入透传到物理 GICD，让真实硬件状态保持同步。
 
 一个关键细节：EL2 访问 GICD 的物理地址时**不经过 Stage-2 翻译**。这是 ARM 架构的设计——EL2 的数据访问使用 Stage-1 翻译（或者绕过，取决于配置），不受 guest 的 Stage-2 约束。
 
@@ -100,7 +100,7 @@ fn write(&mut self, offset: u64, value: u64, size: u8) -> bool {
 
 GICR 是 per-CPU 的——每个 CPU 有自己的 redistributor 帧（128KB）。Guest 写 GICR 来配置自己 CPU 的中断。
 
-与 GICD 不同，GICR 不能写穿。原因很微妙：在 4 个 vCPU 跑在 1 个 pCPU 上的场景（我们的 single-pCPU 模式），guest 的 vCPU 2 写 GICR[2] 实际上应该更新 vCPU 2 的虚拟状态，而不是物理 CPU 2 的真实 GICR——物理上只有一个 CPU。
+与 GICD 不同，GICR 不能写穿。原因很微妙：在 4 个 vCPU 跑在 1 个 pCPU 上的场景（我们的单物理 CPU 模式），guest 的 vCPU 2 写 GICR[2] 实际上应该更新 vCPU 2 的虚拟状态，而不是物理 CPU 2 的真实 GICR——物理上只有一个 CPU。
 
 所以 GICR 必须纯软件模拟：
 
@@ -116,10 +116,10 @@ shadow_state.gicr[2].isenabler0 |= (1<<27)
 
 那 GICR 的地址怎么触发 Stage-2 fault？**把它从 Stage-2 页表里拆出来 unmap。**
 
-GICR 每个 CPU 占 128KB（两个 64KB 帧）。我们先用 2MB block 映射了整个 GIC 区域（包含 GICD + GICR），然后把 GICR 对应的 4KB 页逐个 unmap：
+GIC 区域在 QEMU virt 上占 16MB（用 8 个 2MB block 覆盖 GICD + 所有 GICR），其中 GICR 每个 CPU 占 128KB（两个 64KB 帧）。hypervisor 初始化时先用 2MB block 粗粒度映射，再针对 GICR 命中的那几个 block 拆 split 成 4KB，然后把 GICR 对应的 4KB 页逐个 unmap：
 
 ```rust
-// 把 2MB block 拆成 512 个 4KB 页，然后 unmap GICR 的那些页
+// 命中 GICR 的 2MB block 拆成 512 个 4KB 页，然后 unmap GICR 的那些页
 for cpu in 0..num_cpus {
     let base = gicr_rd_base(cpu);
     for page in 0..32u64 {  // 32 × 4KB = 128KB
@@ -128,7 +128,7 @@ for cpu in 0..num_cpus {
 }
 ```
 
-这就是 Part 2 提到的"先粗后细"——2MB block 覆盖大范围，然后拆到 4KB 精度来控制特定地址。ARM 称之为 **break-before-make**：先 invalidate 旧的 2MB entry，TLB flush，然后写新的 L3 page table。
+这就是 Part 2 提到的"先粗后细"——2MB block 覆盖大范围，然后在需要精细控制的地方 split 到 4KB 粒度。ARM 称之为 **break-before-make**：先 invalidate 旧的 2MB entry，TLB flush，然后写新的 L3 page table。
 
 ### List Register：硬件帮你注入中断
 
@@ -182,7 +182,7 @@ CLAUDE.md 里有一行大写加粗的警告：
 
 ## Virtio-blk：Guest 怎么读磁盘
 
-Linux 启动需要根文件系统。我们用 virtio-blk 提供一块虚拟磁盘。
+BusyBox shell 本身不依赖 virtio-blk——根文件系统是内核启动时 QEMU 一起加载的 initramfs（`rdinit=/init`）。virtio-blk 是作为额外的块设备挂上去的：内核在 virtio-mmio probe 阶段会发现它、建立 `/dev/vda`，之后 guest userspace 可以读写。换句话说它不是启动路径上的必需品，但要让 Linux 的 virtio subsystem 能一路 probe 过去不卡住，这块的模拟必须做对。
 
 Virtio 是一套为虚拟化设计的 I/O 规范。核心思路：guest 和 hypervisor 共享一段内存（virtqueue），guest 往里放请求，通知 hypervisor 处理。比网络协议高效得多——没有网络栈，就是 shared memory + doorbell。
 
@@ -234,7 +234,7 @@ Virtio-mmio 的 virtqueue 由三部分组成：
 
 Guest 通过写 MMIO 寄存器 `QUEUE_NOTIFY` 来"按门铃"——这会触发 Stage-2 Data Abort，hypervisor 处理请求。处理完后 hypervisor 注入 SPI 48（virtio-blk 的中断号）通知 guest 去取结果。
 
-整个 virtio-mmio 的 MMIO 寄存器空间只有 0x100 字节。其中最先被读的是偏移量 0 的 magic 值 `0x74726976`（ASCII "virt"）——这就是 Part 2 讲过的 HPFAR_EL2 bug 的受害者。当 MMIO 地址解析错误时，magic 读出来是 0，驱动报 "Wrong magic value"。
+整个 virtio-mmio 的 MMIO 寄存器空间是 0x200 字节（virtio-mmio spec；其中 0x100 以后是 device-specific config）。其中最先被读的是偏移量 0 的 magic 值 `0x74726976`（ASCII "virt"）——这就是 Part 2 讲过的 HPFAR_EL2 bug 的受害者。当 MMIO 地址解析错误时，magic 读出来是 0，驱动报 "Wrong magic value"。
 
 ---
 
@@ -244,7 +244,7 @@ Linux 内核启动时只有 vCPU 0。当它需要更多 CPU，会通过 PSCI CPU
 
 ### PSCI CPU_ON
 
-Guest 执行 `smc #0`，x0 = PSCI_CPU_ON，x1 = target_cpu，x2 = entry_point。Hypervisor 收到后，不能立刻启动——因为当前正在 handle_exception 里处理 vCPU 0 的 SMC exit。所以我们把请求放进一个队列：
+Guest 执行 `hvc #0`（我们的 Linux DTB 里 `psci-method = "hvc"`，所以 PSCI 走 HVC 而不是 SMC），x0 = PSCI_CPU_ON，x1 = target_cpu，x2 = entry_point。Hypervisor 收到后，不能立刻启动——因为当前正在 handle_exception 里处理 vCPU 0 的 HVC exit。所以我们把请求放进一个队列：
 
 ```rust
 // 异常处理里：把 CPU_ON 请求入队
@@ -271,7 +271,9 @@ vm_state.vcpu_online_mask.fetch_or(1 << id, Ordering::Release);
 
 **协作式**：vCPU 执行 WFI（Wait For Interrupt）→ hypervisor trap → 标记为 Blocked → 调度下一个。这是最自然的切换点——vCPU 主动说"我没事干了"。
 
-**抢占式**：如果一个 vCPU 一直在跑 CPU 密集型代码，不执行 WFI 怎么办？CNTHP（Hypervisor Physical Timer）每 10ms 触发一次 IRQ（INTID 26），强制 vCPU 退出。
+**抢占式**：如果一个 vCPU 一直在跑 CPU 密集型代码不执行 WFI 怎么办？CNTHP（Hypervisor Physical Timer）每 10ms 触发一次 IRQ（INTID 26），强制 vCPU 退出。
+
+另外：在 timer 注入这一路上有个纪律必须守住——**永远不要修改 guest 的 `SPSR_EL2`**。guest 的 `PSTATE.I`（中断屏蔽位）是 guest 自己的状态，hypervisor 只负责往 List Register 里塞待注入的中断号，至于 guest 什么时候真正响应，由它自己的 PSTATE 决定。我早期写了一版"顺手帮 guest 打开中断"的代码，直接导致 guest 内核自旋锁持有时中断被异常允许，锁保护期内外访问交错，内核立刻死锁。
 
 ```rust
 // 在 2 个以上 vCPU online 时才启动定时器
@@ -287,11 +289,15 @@ if multi_vcpu {
 
 ### 踩坑：定时器必须每次重新使能
 
-CNTHP 的 INTID 是 26（PPI）。Guest 有能力通过 GICR 写来禁用 PPI 26——我们的 VirtualGicr 只更新 shadow state，但某些 GICR 写会被写穿到物理硬件（在 multi-pCPU 模式下）。
+CNTHP 的 INTID 是 26（PPI）。Guest 的 GICR 写**只**会更新 `VirtualGicr` shadow state——不会写穿到物理 GICR。真正会踩的坑在另一边：抢占定时器和 guest 的 vtimer 都是 per-CPU 的 PPI，物理 GICR 的使能状态是 hypervisor 自己需要维护的。hypervisor 每次进入 guest 前都要确认这几个关键 PPI 在物理 GICR 上是使能的，否则：
 
-在 single-pCPU 模式下这不是问题（GICR 纯模拟）。但在 multi-pCPU 模式下，guest 的 GICR 写被物理执行了，PPI 26 被真正禁用，抢占定时器不再触发，只要有一个 vCPU 不执行 WFI，其它 vCPU 就永远不会被调度。
+- 进入 guest 以后遇到某个 vCPU 跑 CPU 密集型代码不 WFI；
+- 物理 CNTHP 到期触发 PPI 26；
+- 物理 GICR 没使能这个 PPI → 中断被丢掉；
+- hypervisor 永远不会被重新拉回来做 round-robin 切换；
+- 其它 vCPU 被饿死。
 
-修复：每次 enter_guest 之前，都重新使能 INTID 26。
+修复：每次 enter_guest 之前，都直接写物理 GICR 的 ISENABLER0 把 INTID 26 使能上。guest 的 vtimer（PPI 27）同样处理。
 
 ```rust
 fn ensure_cnthp_enabled() {
@@ -313,31 +319,32 @@ fn ensure_cnthp_enabled() {
 
 把所有东西串起来，Linux 从 QEMU 加载到 BusyBox shell 的完整路径：
 
-```
-QEMU 加载:
+```text
+QEMU 加载 (single-VM 配置):
   0x40200000 — hypervisor 二进制
-  0x47000000 — DTB (QEMU 生成)
+  0x47000000 — 给 guest 的 DTB
   0x48000000 — Linux 6.12 kernel Image
   0x54000000 — initramfs (BusyBox)
   0x58000000 — virtio-blk 磁盘镜像
         │
         ▼
 Hypervisor 启动 (EL2):
-  1. 解析 DTB → UART, GIC, RAM, CPU count
-  2. 初始化 GICv3 (GICD write-through, GICR unmapped)
-  3. 建 Stage-2 页表 (0x40000000-0x58000000, 2MB blocks)
-  4. 创建 vCPU 0, PC=kernel entry, x0=DTB addr
+  1. 解析 host DTB → UART, GIC, RAM, CPU count
+  2. 初始化 GICv3 (GICD trap+shadow+write-through, GICR 4KB unmap)
+  3. 建 Stage-2 页表 (0x40000000-0x88000000, 2MB blocks，覆盖
+     DTB + kernel + initramfs + guest RAM + 磁盘镜像)
+  4. 创建 vCPU 0, PC=kernel entry, x0=guest DTB 地址
   5. enter_guest() → ERET
         │
         ▼
 Linux 内核启动 (EL1):
-  6. 解析 DTB → 发现 UART, GIC, 4 CPUs, 256MB RAM
+  6. 解析 guest DTB → 发现 UART、GIC、4 CPUs、memory@48000000 大小 1GB
   7. 使能 MMU (Stage-1)
   8. 初始化 GICv3 (GICD + GICR 写) ← 全部被 hypervisor 拦截
-  9. PSCI CPU_ON → SMC → hypervisor 创建 vCPU 1/2/3
-  10. 调度器 round-robin, 4 vCPU time-sliced on 1 pCPU
-  11. virtio-mmio probe → 发现 virtio-blk
-  12. mount initramfs → /init → BusyBox shell
+  9. PSCI CPU_ON → HVC → hypervisor 入队后创建 vCPU 1/2/3
+  10. 调度器 round-robin，4 vCPU time-sliced on 1 pCPU
+  11. virtio-mmio probe → 发现 virtio-blk（/dev/vda）+ virtio-net
+  12. cpio initramfs → rdinit=/init → BusyBox shell
         │
         ▼
 [    1.234567] Welcome to BusyBox!

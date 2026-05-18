@@ -4,11 +4,9 @@
 
 上一篇写了四个文件、两个 commit、一句 "Hello from EL2!"。那是在 EL2 执行代码的证明，但还不是虚拟化。
 
-虚拟化的本质是一个无限循环：guest 跑 → 碰到特权操作 → 硬件陷入 hypervisor → hypervisor 模拟该操作 → 恢复 guest 继续跑。ARM 架构手册把这叫做 **trap-and-emulate**。我更喜欢说"陷入-模拟-恢复"，因为第三步才是关键——恢复。模拟完了你得能回去。
+虚拟化说穿了就一件事：guest 一碰特权操作，CPU 就把它拎回 EL2；你处理完，再塞回去继续跑。ARM 架构手册管这叫 **trap-and-emulate**。我更喜欢说"陷入-模拟-恢复"，因为第三步才是关键——恢复。模拟完了你得能回去。
 
-这篇讲的就是这个循环。它是 hypervisor 的心跳。Part 0a 说过，这个循环本身一个周末就能写完，然后花接下来 9 个月跟周边的一切搏斗。
-
-但在搏斗之前，你得先有心跳。
+这篇就盯这一件事。Part 0a 说过，这个循环本身一个周末就能写完，然后花接下来 9 个月跟周边的一切搏斗。
 
 ---
 
@@ -27,7 +25,7 @@ ARM64 硬件会把以下操作从 EL1 陷入到 EL2（前提是 HCR_EL2 里对�
 | Data Abort | 0x24 | Guest 访问了未映射的地址（MMIO） |
 | Instruction Abort | 0x20 | Guest 从未映射的地址取指 |
 
-每一种陷入都是一次心跳。Hypervisor 必须正确处理每一次，然后把控制权还给 guest。
+每次 trap 都得接住。接不住，guest 就没了。
 
 这些陷入原因在代码里对应一个枚举：
 
@@ -69,7 +67,7 @@ pub struct VcpuContext {
 
 `#[repr(C)]` 不是装饰。这个结构体的内存布局必须和汇编代码里的偏移量一一对应——汇编用硬编码的数字偏移来 `ldp`/`stp` 寄存器。Rust 默认的字段布局不保证顺序，`repr(C)` 让它变成 C 语言的布局规则：按声明顺序排列。
 
-换句话说，如果你在 Rust 侧加了一个字段，忘了更新汇编偏移量，结果不是编译错误——是安静的寄存器错位，guest 跑着跑着飞到一个随机地址。后来我们加了编译期偏移量断言来防御这种事：
+这里最烦的不是编不过，是能编过。字段一挪，汇编偏移没改，guest 直接跑飞。后来加了编译期断言来防：
 
 ```rust
 // 编译期检查：如果偏移量不对，编译直接报错
@@ -83,7 +81,7 @@ const _: () = {
 
 ## enter_guest：最关键的 50 行汇编
 
-整个 hypervisor 里最重要的函数只有 50 行汇编。它做三件事：保存宿主状态、恢复 guest 状态、ERET。
+最要命的就是 `enter_guest()` 这几十行汇编。前面存宿主寄存器，后面恢复 guest，最后 `eret`。
 
 ```asm
 // arch/aarch64/exception.S
@@ -122,8 +120,6 @@ enter_guest:
 
 当 guest 碰到下一次陷入，硬件自动切回 EL2，跳到异常向量表。异常处理代码把 guest 寄存器存回 VcpuContext，调用 Rust 的 `handle_exception()`，处理完再走一遍 enter_guest。
 
-**这就是心跳。**
-
 ```
 enter_guest()                    handle_exception()
     ↓                                ↓
@@ -140,7 +136,7 @@ enter_guest()                    handle_exception()
 
 ## Stage-2 页表：给 Guest 一个假的物理地址空间
 
-Guest 以为自己有一整块物理内存。实际上，它的每一次内存访问都经过了两层翻译：
+Guest 看到的是自己的"物理地址"，但后面其实还套了一层 Stage-2：
 
 ```
 Guest VA  ──Stage-1(EL1)──→  Guest PA (IPA)  ──Stage-2(EL2)──→  真实 PA
@@ -187,7 +183,7 @@ Stage-2 的另一个功能是**控制 guest 能看到什么**。把一段地址�
 9. VirtualUart 把字符写到真实的物理 UART
 10. 推进 guest PC + 4，恢复 guest
 
-这 10 步每输出一个字符走一遍。这就是 trap-and-emulate——代价不小，但它让 guest 完全不需要知道底下的硬件是虚拟的。
+Guest 每打一个字符，这套流程就走一遍。很慢，但好处是 guest 不用知道自己在假的 UART 上。
 
 设备路由用 enum dispatch 而不是 trait objects：
 
@@ -227,7 +223,7 @@ pub fn handle_mmio(&mut self, addr: u64, ...) -> Option<u64> {
 }
 ```
 
-8 个 slot 线性扫描，不优雅。但设备数量就这么几个（UART、GIC、virtio-blk、virtio-net、RTC），O(N) 和 O(1) 的差距在 N=6 时不存在。
+就 8 个槽，直接扫。设备总共没几个，没必要为这点东西上复杂结构。
 
 ---
 
@@ -259,7 +255,7 @@ Guest 写虚拟 UART → Data Abort → hypervisor 模拟 → 写真实 UART。�
 
 ## 踩坑：HPFAR_EL2 — 一天的代价
 
-Part 0b 的 AI 工作流篇提到过这个 bug，这里展开讲。
+这是整个项目里定位时间最长的 bug 之一。
 
 故事是这样的：MMIO trap-and-emulate 在裸机 guest（没有 MMU）上一直工作正常。但当 Linux 开启 MMU 之后，所有 MMIO 设备突然消失了。virtio-mmio 报 "Wrong magic value 0x00000000"。
 
@@ -294,11 +290,11 @@ let addr = ipa_page | page_offset;
 
 ### AI 在这里的表现
 
-这是 AI 辅助系统编程的一个典型案例。我跟 Claude 描述了现象："virtio-mmio 读 magic 为 0，但设备已注册"。AI 的第一反应是检查设备注册逻辑、Stage-2 映射范围、virtio-mmio 初始化顺序——全是合理的下游排查方向。
+这事也很说明问题。我跟 Claude 描述了现象："virtio-mmio 读 magic 为 0，但设备已注册"。它第一反应是查设备注册、Stage-2 映射、virtio-mmio 初始化——全是合理的下游方向。
 
-当我自己看了一眼 handle_mmio_abort 的 addr 参数值（0xFFFF...），问题就清楚了。这个值太大了，不可能是物理地址。AI 不知道这个——因为它没有在运行时看到寄存器值的能力。一旦我指出"FAR_EL2 在 guest MMU on 的时候是 VA"，AI 立刻给出了 HPFAR_EL2 的正确用法和位移计算。
+但我自己看了一眼 handle_mmio_abort 拿到的 addr（0xFFFF...），就知道不对了。这个值太大了，不是物理地址。AI 看不到运行时的寄存器值，所以它不会像你一样看到 `0xFFFF` 就起疑心。一旦我指出"FAR_EL2 在 guest MMU on 的时候是 VA"，它立刻给出了 HPFAR_EL2 的正确位移计算。
 
-这里的模式很清晰：**AI 对 "HPFAR_EL2 怎么用" 的知识是准确的，但它不具备"这个运行时值看起来不对"的直觉。** 架构知识 OK，运行时诊断需要人。
+AI 会背寄存器用法，但不会替你做运行时诊断。这种活还是得人来。
 
 ---
 
@@ -314,7 +310,7 @@ let addr = ipa_page | page_offset;
 
 结果：中断打断了自旋锁的临界区，中断处理程序试图获取同一把锁 → 死锁。
 
-教训很简单：
+这地方别自作聪明：
 
 ```rust
 // DO NOT modify SPSR_EL2 (guest's saved PSTATE).
@@ -328,9 +324,9 @@ let addr = ipa_page | page_offset;
 
 ## 测试：在裸机上"断言"
 
-传统软件的测试是运行一个函数、比较返回值。裸机 hypervisor 的"测试"是：启动一个 guest，让它跑完，检查它是不是活着。
+这玩意很难像普通代码那样测。你没法只调个函数看返回值，基本都得把 guest 拉起来跑。
 
-我们的测试策略分两层：
+我这边测试大概就两类：
 
 **第一层：宿主侧单元测试。** 不需要启动 guest，直接测试数据结构和逻辑。比如测试 Stage-2 页表能不能正确映射一个地址，测试 DeviceManager 能不能正确路由一个 MMIO 请求。这些测试跑在 `make run` 里，快且确定性强。
 
@@ -348,13 +344,13 @@ pub fn run_test_guest() {
 }
 ```
 
-这种测试的信噪比很高——如果 guest 没有按预期陷入，要么是 HCR_EL2 的 trap 位没设对，要么是 enter_guest 的 ERET 没到正确的地址。排查范围很小。
+这种小 guest 挺好用。没 trap 到，问题一般就卡在 trap 位或者 `eret` 那一段，不会查太散。
 
-到 Part 2 结束时，我们有约 30 个这样的断言。不多，但每一个都在保护一条关键路径。
+到这个阶段大概有 30 个断言。不多，但每个都盯着一条关键路径。
 
 ---
 
-## 精简版：整个循环一图看完
+## 懒得翻前面的话，看这张图
 
 ```
                  ┌──────────────────────────────────────────┐
@@ -387,24 +383,10 @@ pub fn run_test_guest() {
 
 Stage-2 页表决定了哪些地址让 guest 直接访问（RAM），哪些故意不映射以触发 Data Abort（MMIO 设备）。VcpuContext 保存和恢复 CPU 的全部状态。`enter_guest()` 和异常向量表构成了 EL1↔EL2 的跳板。
 
-这就是 hypervisor 的心跳。它在每个 MMIO 访问、每次 WFI、每次系统调用时跳动。Linux 每秒产生成千上万次这样的陷入——打印一行日志就是几十次。
-
-下一篇：让这个心跳驱动一个真正的 Linux 内核启动。GICv3 虚拟化、virtio-blk、4 个 vCPU 的调度。那是 95% 的工程量。
+这套循环就是一直在跑。MMIO、WFI、系统调用，全都要回来过一遍。Linux 跑起来以后次数非常夸张——打印一行日志就是几十次 trap。
 
 ---
 
-## 小结
+核心循环其实两天就写出来了。Sprint 1.1（vCPU 框架）到 Sprint 1.4（设备模拟），一天之内完成了主要 commit，第二天调通中断注入。
 
-| 概念 | 一句话 |
-|------|--------|
-| VcpuContext | Guest 的全部 CPU 状态，`repr(C)` 保证和汇编偏移对齐 |
-| enter_guest | 50 行汇编，保存宿主 → 恢复 guest → ERET |
-| Stage-2 | 第二层地址翻译，identity map，2MB block 粒度 |
-| MMIO | 故意不映射 → Data Abort → hypervisor 模拟设备 |
-| HPFAR_EL2 | Guest MMU 开启后，FAR_EL2 是 VA，IPA 在 HPFAR_EL2 |
-| SPSR_EL2 | 不要碰。Guest 的中断屏蔽状态是它自己的事 |
-| 测试 | 宿主侧单元测试 + 极小 guest 交互测试 |
-
-这些东西合在一起，大约花了两天。Sprint 1.1（vCPU 框架）到 Sprint 1.4（设备模拟），在 2026 年 1 月 26 日一天之内完成了主要 commit。第二天调通了中断注入。
-
-两天写完心跳。接下来的故事，是那另外 95%。
+后面才是真的脏活：GICv3 几十个寄存器的全虚拟化、virtio-blk 磁盘、4 个 vCPU 之间的调度切换。下一篇写这些。

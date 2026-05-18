@@ -62,3 +62,6 @@ FVP_*.tgz
 # AI tooling state
 .codex/
 .context/
+
+# Local GitHub traffic snapshots
+metrics/github-traffic/

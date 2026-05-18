@@ -1,32 +1,23 @@
 ---
-layout: default
 title: "Building a Rust ARM64 SPMC that Replaces Hafnium and Runs Beside pKVM"
+published: true
 description: "A no_std Rust Secure Partition Manager Core at S-EL2 that boots Linux, manages Secure Partitions, and passes 35/35 end-to-end tests through TF-A and pKVM."
----
-
-*A bare-metal Secure Partition Manager Core at S-EL2, written in `no_std` Rust, that boots Linux, manages Secure Partitions, and passes 35/35 end-to-end tests through real TF-A firmware.*
-
-[View on GitHub](https://github.com/willamhou/hypervisor)
-
-**Also read:** [你的 Android 手机里藏着一个 Hypervisor：pKVM 完全解析](pkvm.md)
-
-### `make run` — 34 test suites, 457 assertions
-
-<p align="center">
-  <img src="demo.svg" alt="make run demo" width="700">
-</p>
-
+tags: rust, arm, embedded, virtualization
+cover_image:
+canonical_url: https://willamhou.github.io/hypervisor/
 ---
 
 I built an ARM64 hypervisor that runs next to Android pKVM on the same chip.
 
-pKVM owns the Normal world at `NS-EL2`. This project owns the Secure world at `S-EL2`. The two sides communicate through ARM's FF-A protocol, relayed by EL3 firmware. On the full stack, a Linux kernel module can send an FF-A request that crosses pKVM, TF-A, the SPMC, and a Secure Partition, then makes the whole trip back. Right now that path passes `35/35` end-to-end tests.
+pKVM owns the Normal world at `NS-EL2`. This project owns the Secure world at `S-EL2`. The two sides communicate through ARM's FF-A protocol, relayed by EL3 firmware. On the full stack, a Linux kernel module can send a request that crosses pKVM, TF-A, the SPMC, and a Secure Partition, then makes the whole trip back. Right now that path passes `35/35` end-to-end tests.
 
-The Secure side already had a reference implementation: [Hafnium](https://hafnium.googlesource.com/hafnium/), maintained by Google and Arm. It is large, production-oriented, and written in C. I wanted something else: a smaller codebase I could understand line by line, with the type system helping in the parts where Secure-world control flow gets subtle.
+The Secure side already had a reference implementation: [Hafnium](https://hafnium.googlesource.com/hafnium/), maintained by Google and Arm. It is large, production-oriented, and written in C. I wanted something smaller and easier to reason about line by line, especially in the parts where Secure-world control flow gets subtle.
 
 So I rebuilt the Secure Partition Manager Core in about `30,000` lines of `no_std` Rust. It has one dependency, boots Linux to a BusyBox shell, manages three Secure Partitions, supports FF-A v1.1 messaging and memory sharing, and runs beside pKVM on four physical CPUs.
 
-This is the version of the project I would want to read before clicking into the repo: what the system is, what was actually hard, and where Rust helped in ways that were more concrete than "memory safety is nice."
+This is the short version of what the system is, what was actually hard, and where Rust helped in ways that were more concrete than "memory safety is good."
+
+{% github willamhou/hypervisor %}
 
 ## What Makes This System Unusual
 
@@ -53,7 +44,7 @@ The Normal world runs Linux or Android under a hypervisor such as pKVM. The Secu
 
 My project fills the Secure-world hypervisor slot at `S-EL2`. That role is called the Secure Partition Manager Core, or SPMC.
 
-The interesting part is not just that it runs at `S-EL2`. It is that it has to coexist with another hypervisor on the same physical CPUs, while speaking a protocol that spans multiple privilege levels and world switches. Most hypervisor projects do not have to care about this shape at all.
+The unusual part is not just the privilege level. It is the coexistence. Two hypervisors share the same physical CPUs, while FF-A messages cross multiple exception levels and world switches.
 
 The boot chain looks like this:
 
@@ -71,31 +62,31 @@ Linux (NS-EL1) -> pKVM (NS-EL2) -> TF-A/SPMD (EL3)
                -> back through the same stack
 ```
 
-That is the system shape that drove most of the complexity.
+That system shape drove most of the complexity.
 
 ## Why Rebuild Hafnium Instead of Using It
 
-The practical reason is that rebuilding the Secure-world control plane teaches you things that reading the FF-A spec does not.
+The practical answer is that rebuilding the Secure-world control plane teaches you things that reading the FF-A spec does not.
 
-The FF-A spec tells you what messages exist. It does not tell you where the real footguns are:
+The spec tells you what messages exist. It does not tell you where the real footguns are:
 
 - which CPU actually resumes after an SMC
 - what happens when pKVM boots secondaries and SPMD state is per-CPU
 - how Secure and Non-Secure memory aliases behave when the MMU is off
 - what compiler codegen assumptions become hardware traps below the OS
 
-The engineering reason is that this domain is dense with state machines, ownership transitions, and error paths. That is exactly where Rust is more than branding. A lot of the important logic in an SPMC is not algorithmically hard; it is "easy to get 95% right and still ship a subtle bug." I wanted the compiler to force more of those cases into the open.
+The engineering answer is that this domain is dense with state machines, ownership transitions, and error paths. That is exactly where Rust is more than branding. A lot of the important logic in an SPMC is not algorithmically hard; it is "easy to get 95% right and still ship a subtle bug." I wanted the compiler to force more of those cases into the open.
 
 ## What It Does Today
 
-The current project has four main capabilities:
+The current project does four main things:
 
 - boots Linux 6.12 to a BusyBox shell
 - manages three Secure Partitions at `S-EL1`
 - implements FF-A v1.1 flows including direct messaging, indirect messaging, memory sharing, and notifications
 - coexists with pKVM on four physical CPUs and passes full-stack tests through TF-A
 
-The metrics are good enough that this is not just a design exercise:
+The current scoreboard:
 
 - `make run`: `34` test suites, `457` assertions
 - BL33 integration tests: `20/20`
@@ -107,11 +98,9 @@ The metrics are good enough that this is not just a design exercise:
 
 ### 1. SPMD Is Per-CPU
 
-This was one of the first places where the actual system behavior diverged from the mental model you might get from the spec.
+TF-A's Secure Partition Manager Dispatcher keeps separate state for each physical CPU. That matters because pKVM boots secondaries via PSCI, and each one enters the Secure world on whatever physical core it lands on.
 
-TF-A's Secure Partition Manager Dispatcher keeps separate state for each physical CPU. That matters because pKVM boots secondary CPUs via PSCI, and each one enters the Secure world on whatever physical core it lands on. It is not enough to bring up CPU 0 and assume the Secure side is globally initialized.
-
-Each secondary has to do its own `FFA_MSG_WAIT` handshake so SPMD knows that CPU's Secure world is ready. If one CPU skips that handshake, SPMD can block the Normal-world `CPU_ON` sequence. The result looks like a secondary boot failure in pKVM, but the real cause is that the Secure side never finished its per-CPU setup.
+Each secondary has to do its own `FFA_MSG_WAIT` handshake so SPMD knows that CPU's Secure world is ready. If one CPU skips that handshake, SPMD can block the Normal-world `CPU_ON` sequence. The result looks like a pKVM secondary boot failure, but the real cause is that the Secure side never finished its per-CPU setup.
 
 The fix was to register `FFA_SECONDARY_EP_REGISTER`, allocate per-CPU stacks, and run a full event loop on every core.
 
@@ -119,9 +108,9 @@ That may sound obvious in hindsight. It was not obvious from the public spec. I 
 
 ### 2. The NS Bit and the Invisible Write
 
-This was the most memorable architecture bug in the whole project.
+This was the most memorable architecture bug in the project.
 
-`PARTITION_INFO_GET` worked perfectly from a BL33 harness. The SPMC wrote descriptors to the caller's RX buffer, and the caller read them back correctly. Then pKVM called the same path and got zeros.
+`PARTITION_INFO_GET` worked perfectly from a BL33 harness. Then pKVM called the same path and got zeros.
 
 There was no fault. The address was correct. GDB showed the store executed. But the data was not there when the Normal world read it.
 
@@ -145,15 +134,11 @@ enum SpState {
 }
 ```
 
-That alone is not special. What mattered was what happened when the design changed.
-
 During SP-to-SP messaging, one partition can block on another. Then a Normal-world interrupt can arrive mid-chain, which means a `Running` partition becomes `Preempted`, while an upstream `Blocked` partition may also need to move into a preempted state so the chain can resume consistently later.
 
 When I added that behavior, Rust forced me to revisit every transition point and every `match` that assumed a smaller state graph. That flushed out two bugs before runtime.
 
-In application code, this would be a nice correctness benefit. At `S-EL2`, it is more than that. Many failure modes do not give you a friendly crash. They give you a hang, a world-switch dead end, or a corrupted control path that only becomes visible several exception levels later.
-
-This was probably the clearest example in the entire project of Rust paying for itself in a way that was specific to the job.
+At `S-EL2`, many failure modes do not give you a friendly crash. They give you a hang, a world-switch dead end, or a corrupted control path that only becomes visible several exception levels later. This was the clearest example in the project of Rust paying for itself in a way that was specific to the job.
 
 ## Two Bugs That Best Capture The Work
 
@@ -167,7 +152,7 @@ The real cause was compiler codegen. In debug mode, the alignment path around `r
 
 The fix was one build flag: `CTX_INCLUDE_FPREGS=1`.
 
-The lesson was not "remember this one TF-A flag." The lesson was that once you run below an OS, your compiler's code generation is part of the hardware contract. You do not get to pretend codegen details are an implementation detail anymore.
+The lesson was that once you run below an OS, your compiler's code generation is part of the hardware contract.
 
 ### The Stale Cache And The Phantom Data Abort
 
@@ -177,7 +162,7 @@ The descriptor had been written by pKVM into a Normal-world TX buffer on CPU 0. 
 
 What fixed it was copying the entire descriptor into a local stack buffer before parsing it. Parsing from a local, stable copy turned a sporadic crash into a clean validation path.
 
-That is a very specific bug, but it captures the broader theme of this project: once two worlds and multiple CPUs are involved, "the data is there" is not a strong enough statement. You need to reason about where the data was written, which CPU sees it, under which translation regime, and in which world.
+That bug captures the broader theme of this project: once two worlds and multiple CPUs are involved, "the data is there" is not a strong enough statement.
 
 ## Why I Think This Is a Good Rust Project
 
@@ -196,7 +181,7 @@ That combination makes Rust feel less like a fashionable choice and more like a 
 
 ## Try It
 
-If you want the short path, start here:
+If you want the short path:
 
 ```bash
 git clone https://github.com/willamhou/hypervisor
@@ -206,13 +191,8 @@ make run
 
 That runs the bare-metal test suites on QEMU in a few seconds.
 
-If you want the code and architecture next:
+More context:
 
+- canonical write-up: <https://willamhou.github.io/hypervisor/>
 - repo: <https://github.com/willamhou/hypervisor>
 - architecture overview: <https://github.com/willamhou/hypervisor/blob/main/ARCHITECTURE.md>
-
-And if this is the kind of work you care about, the repo is set up to be read in layers: quick start first, architecture second, source code third.
-
----
-
-*Built with Rust nightly, QEMU 9.2, and the ARM Architecture Reference Manual open on a second monitor for 10 weeks straight.*
