@@ -5,6 +5,10 @@ SHELL := /bin/bash
 CARGO_HOME ?= $(HOME)/.cargo
 export PATH := $(CARGO_HOME)/bin:$(PATH)
 
+# Cross-compiler toolchain prefix (override with: make CROSS_COMPILE=aarch64-none-elf-)
+CROSS_COMPILE ?= aarch64-none-linux-gnu-
+export CROSS_COMPILE
+
 # Target binary name
 TARGET := hypervisor
 # RELEASE=1 enables release mode (smaller binary, faster execution)
@@ -37,7 +41,7 @@ build:
 	@echo "Building hypervisor..."
 	cargo build --target aarch64-unknown-none $(CARGO_RELEASE)
 	@echo "Creating raw binary..."
-	aarch64-linux-gnu-objcopy -O binary $(BINARY) $(BINARY_BIN)
+	$(CROSS_COMPILE)objcopy -O binary $(BINARY) $(BINARY_BIN)
 
 # Run in QEMU
 run: build
@@ -56,7 +60,7 @@ endif
 	@echo "Building hypervisor with guest support..."
 	cargo build --target aarch64-unknown-none $(CARGO_RELEASE) --features guest
 	@echo "Creating raw binary..."
-	aarch64-linux-gnu-objcopy -O binary $(BINARY) $(BINARY_BIN)
+	$(CROSS_COMPILE)objcopy -O binary $(BINARY) $(BINARY_BIN)
 	@echo "Starting QEMU with guest: $(GUEST_ELF)"
 	@echo "Press Ctrl+A then X to exit QEMU"
 	$(QEMU) $(QEMU_FLAGS) \
@@ -73,7 +77,7 @@ run-linux:
 	@echo "Building hypervisor with Linux guest support..."
 	cargo build --target aarch64-unknown-none $(CARGO_RELEASE) --features linux_guest
 	@echo "Creating raw binary..."
-	aarch64-linux-gnu-objcopy -O binary $(BINARY) $(BINARY_BIN)
+	$(CROSS_COMPILE)objcopy -O binary $(BINARY) $(BINARY_BIN)
 	@echo "Starting QEMU with Linux kernel..."
 	@echo "Press Ctrl+A then X to exit QEMU"
 	$(QEMU) $(QEMU_FLAGS) \
@@ -87,7 +91,7 @@ run-linux-smp:
 	@echo "Building hypervisor with multi-pCPU support..."
 	cargo build --target aarch64-unknown-none $(CARGO_RELEASE) --features multi_pcpu
 	@echo "Creating raw binary..."
-	aarch64-linux-gnu-objcopy -O binary $(BINARY) $(BINARY_BIN)
+	$(CROSS_COMPILE)objcopy -O binary $(BINARY) $(BINARY_BIN)
 	@echo "Starting QEMU with Linux kernel (multi-pCPU)..."
 	@echo "Press Ctrl+A then X to exit QEMU"
 	$(QEMU) $(QEMU_FLAGS) \
@@ -113,7 +117,7 @@ run-multi-vm:
 	@echo "Building hypervisor with multi-VM support..."
 	cargo build --target aarch64-unknown-none $(CARGO_RELEASE) --features multi_vm
 	@echo "Creating raw binary..."
-	aarch64-linux-gnu-objcopy -O binary $(BINARY) $(BINARY_BIN)
+	$(CROSS_COMPILE)objcopy -O binary $(BINARY) $(BINARY_BIN)
 	@echo "Starting QEMU with 2 Linux VMs..."
 	@echo "Press Ctrl+A then X to exit QEMU"
 	$(QEMU) $(QEMU_FLAGS_MULTI_VM) \
@@ -145,7 +149,7 @@ run-android:
 	@echo "Building hypervisor with Linux guest support..."
 	cargo build --target aarch64-unknown-none $(CARGO_RELEASE) --features linux_guest
 	@echo "Creating raw binary..."
-	aarch64-linux-gnu-objcopy -O binary $(BINARY) $(BINARY_BIN)
+	$(CROSS_COMPILE)objcopy -O binary $(BINARY) $(BINARY_BIN)
 	@echo "Starting QEMU with Android-configured kernel..."
 	@echo "Press Ctrl+A then X to exit QEMU"
 	$(QEMU) $(QEMU_FLAGS_ANDROID) \
@@ -246,7 +250,7 @@ run-tfa-linux:
 	@echo "Building hypervisor with TF-A boot support..."
 	cargo build --target aarch64-unknown-none $(CARGO_RELEASE) --features tfa_boot
 	@echo "Creating raw binary..."
-	aarch64-linux-gnu-objcopy -O binary $(BINARY) $(BINARY_BIN)
+	$(CROSS_COMPILE)objcopy -O binary $(BINARY) $(BINARY_BIN)
 	@echo "Starting TF-A → hypervisor → Linux boot chain..."
 	@echo "Press Ctrl+A then X to exit QEMU"
 	$(QEMU_SEL2) -machine virt,secure=on,virtualization=on,gic-version=3 \
@@ -268,7 +272,7 @@ SPMC_BIN := $(BUILD_DIR)/$(TARGET)_spmc.bin
 build-spmc:
 	@echo "Building SPMC (sel2 feature)..."
 	cargo build --target aarch64-unknown-none $(CARGO_RELEASE) --features sel2
-	aarch64-linux-gnu-objcopy -O binary $(BINARY) $(SPMC_BIN)
+	$(CROSS_COMPILE)objcopy -O binary $(BINARY) $(SPMC_BIN)
 	@echo "SPMC binary: $(SPMC_BIN)"
 
 # SP Hello binary (S-EL1 Secure Partition)
@@ -276,9 +280,9 @@ SP_HELLO_BIN := tfa/sp_hello/sp_hello.bin
 
 build-sp-hello:
 	@echo "Building SP Hello (S-EL1)..."
-	aarch64-linux-gnu-as -o tfa/sp_hello/sp_hello.o tfa/sp_hello/start.S
-	aarch64-linux-gnu-ld -T tfa/sp_hello/linker.ld -o tfa/sp_hello/sp_hello.elf tfa/sp_hello/sp_hello.o
-	aarch64-linux-gnu-objcopy -O binary tfa/sp_hello/sp_hello.elf $(SP_HELLO_BIN)
+	$(CROSS_COMPILE)as -o tfa/sp_hello/sp_hello.o tfa/sp_hello/start.S
+	$(CROSS_COMPILE)ld -T tfa/sp_hello/linker.ld -o tfa/sp_hello/sp_hello.elf tfa/sp_hello/sp_hello.o
+	$(CROSS_COMPILE)objcopy -O binary tfa/sp_hello/sp_hello.elf $(SP_HELLO_BIN)
 	@echo "SP Hello binary: $(SP_HELLO_BIN)"
 
 # SP IRQ binary (S-EL1 Secure Partition with interrupt handling)
@@ -286,9 +290,9 @@ SP_IRQ_BIN := tfa/sp_irq/sp_irq.bin
 
 build-sp-irq:
 	@echo "Building SP IRQ (S-EL1)..."
-	aarch64-linux-gnu-as -o tfa/sp_irq/sp_irq.o tfa/sp_irq/start.S
-	aarch64-linux-gnu-ld -T tfa/sp_irq/linker.ld -o tfa/sp_irq/sp_irq.elf tfa/sp_irq/sp_irq.o
-	aarch64-linux-gnu-objcopy -O binary tfa/sp_irq/sp_irq.elf $(SP_IRQ_BIN)
+	$(CROSS_COMPILE)as -o tfa/sp_irq/sp_irq.o tfa/sp_irq/start.S
+	$(CROSS_COMPILE)ld -T tfa/sp_irq/linker.ld -o tfa/sp_irq/sp_irq.elf tfa/sp_irq/sp_irq.o
+	$(CROSS_COMPILE)objcopy -O binary tfa/sp_irq/sp_irq.elf $(SP_IRQ_BIN)
 	@echo "SP IRQ binary: $(SP_IRQ_BIN)"
 
 # SP Relay binary (S-EL1, SP-to-SP testing)
@@ -296,17 +300,17 @@ SP_RELAY_BIN := tfa/sp_relay/sp_relay.bin
 
 build-sp-relay:
 	@echo "Building SP Relay (S-EL1)..."
-	aarch64-linux-gnu-as -o tfa/sp_relay/sp_relay.o tfa/sp_relay/start.S
-	aarch64-linux-gnu-ld -T tfa/sp_relay/linker.ld -o tfa/sp_relay/sp_relay.elf tfa/sp_relay/sp_relay.o
-	aarch64-linux-gnu-objcopy -O binary tfa/sp_relay/sp_relay.elf $(SP_RELAY_BIN)
+	$(CROSS_COMPILE)as -o tfa/sp_relay/sp_relay.o tfa/sp_relay/start.S
+	$(CROSS_COMPILE)ld -T tfa/sp_relay/linker.ld -o tfa/sp_relay/sp_relay.elf tfa/sp_relay/sp_relay.o
+	$(CROSS_COMPILE)objcopy -O binary tfa/sp_relay/sp_relay.elf $(SP_RELAY_BIN)
 	@echo "SP Relay binary: $(SP_RELAY_BIN)"
 
 # Build BL33 FF-A test client (sends FF-A SMCs to SPMC, prints PASS/FAIL)
 build-bl33-ffa-test:
 	@echo "Building BL33 FF-A test client..."
-	aarch64-linux-gnu-as -o $(BUILD_DIR)/bl33_ffa_test.o tfa/bl33_ffa_test/start.S
-	aarch64-linux-gnu-ld -T tfa/bl33_ffa_test/linker.ld -o $(BUILD_DIR)/bl33_ffa_test.elf $(BUILD_DIR)/bl33_ffa_test.o
-	aarch64-linux-gnu-objcopy -O binary $(BUILD_DIR)/bl33_ffa_test.elf tfa/bl33_ffa_test.bin
+	$(CROSS_COMPILE)as -o $(BUILD_DIR)/bl33_ffa_test.o tfa/bl33_ffa_test/start.S
+	$(CROSS_COMPILE)ld -T tfa/bl33_ffa_test/linker.ld -o $(BUILD_DIR)/bl33_ffa_test.elf $(BUILD_DIR)/bl33_ffa_test.o
+	$(CROSS_COMPILE)objcopy -O binary $(BUILD_DIR)/bl33_ffa_test.elf tfa/bl33_ffa_test.bin
 	@echo "BL33 test client: tfa/bl33_ffa_test.bin"
 
 # Build TF-A with real SPMC (BL32) + FF-A test client (BL33)
@@ -361,7 +365,7 @@ run-tfa-linux-ffa:
 	@echo "Building hypervisor with TF-A boot support..."
 	cargo build --target aarch64-unknown-none $(CARGO_RELEASE) --features tfa_boot
 	@echo "Creating raw binary..."
-	aarch64-linux-gnu-objcopy -O binary $(BINARY) $(BINARY_BIN)
+	$(CROSS_COMPILE)objcopy -O binary $(BINARY) $(BINARY_BIN)
 	@echo "Starting TF-A → SPMC → hypervisor → Linux boot chain..."
 	@echo "Press Ctrl+A then X to exit QEMU"
 	$(QEMU_SEL2) -machine virt,secure=on,virtualization=on,gic-version=3 \

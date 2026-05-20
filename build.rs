@@ -7,6 +7,10 @@ fn main() {
     let arch = env::var("CARGO_CFG_TARGET_ARCH").unwrap();
 
     if arch == "aarch64" {
+        let cross_compile =
+            env::var("CROSS_COMPILE").unwrap_or_else(|_| format!("{}-none-linux-gnu-", arch));
+        println!("cargo:rerun-if-env-changed=CROSS_COMPILE");
+
         // Determine which boot file and linker script to use based on features
         let sel2 = env::var("CARGO_FEATURE_SEL2").is_ok();
 
@@ -37,7 +41,7 @@ fn main() {
             println!("cargo:rerun-if-changed={}", asm_src);
 
             // Try gcc first, fall back to as
-            let status = Command::new("aarch64-linux-gnu-gcc")
+            let status = Command::new(format!("{}gcc", cross_compile))
                 .args([
                     "-c",
                     asm_src,
@@ -49,7 +53,7 @@ fn main() {
                 .status()
                 .or_else(|_| {
                     // Fallback to using assembler directly
-                    Command::new("aarch64-linux-gnu-as")
+                    Command::new(format!("{}as", cross_compile))
                         .args([asm_src, "-o", obj_path.to_str().unwrap()])
                         .status()
                 })
@@ -62,7 +66,7 @@ fn main() {
 
         // Create archive with all object files
         let boot_a = out_dir.join("libboot.a");
-        let mut ar_cmd = Command::new("aarch64-linux-gnu-ar");
+        let mut ar_cmd = Command::new(format!("{}ar", cross_compile));
         ar_cmd.arg("crs").arg(boot_a.to_str().unwrap());
 
         for obj in &object_files {
