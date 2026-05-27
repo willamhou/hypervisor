@@ -274,9 +274,9 @@ Android Boot          ██████████░░░░░░░░░�
 **关键文件**: `src/vcpu_interrupt.rs`, `tests/test_guest_interrupt.rs`
 
 **待完善** (Sprint 1.6 可选):
-- [ ] Guest 异常向量表和 IRQ handler
-- [ ] EOI (End of Interrupt) 处理
-- [ ] 多次中断注入测试
+- [x] Guest 异常向量表和 IRQ handler
+- [x] EOI (End of Interrupt) 处理
+- [x] 多次中断注入测试
 
 ---
 
@@ -711,14 +711,14 @@ NS-EL1: Linux guest (当前 hypervisor 功能降级为 SPMC)
 
 2. **SPMD ↔ SPMC 协议**:
    - [x] FFA_MSG_WAIT (0x8400006B) — 信号 SPMD init 完成，解锁 BL33
-   - [ ] FFA_SECONDARY_EP_REGISTER (0x84000087) — 注册辅助核入口点 (Sprint 4.4 Phase B)
+   - [x] FFA_SECONDARY_EP_REGISTER (0x84000087) — 注册辅助核入口点 (Sprint 4.4 Phase B)
    - [x] FFA_VERSION 响应（作为 SPMC 回复 SPMD 的版本查询）✅ Sprint 4.4 Phase A
    - [x] FFA_FEATURES 响应（向 SPMD 声明支持的功能）✅ Sprint 4.4 Phase A
 
 3. **Secure Stage-2 页表** (推迟到 Sprint 4.4):
-   - [ ] VSTTBR_EL2 替代 VTTBR_EL2（Secure 世界用 VSTTBR）
-   - [ ] Secure 内存区域隔离（TZASC 配置）
-   - [ ] SP 的 Stage-2 隔离
+   - [x] VSTTBR_EL2 替代 VTTBR_EL2（Secure 世界用 VSTTBR）— `SecureStage2Config` in `src/secure_stage2.rs`
+   - [x] Secure 内存区域隔离（TZASC 配置）— S-EL2 Stage-1 NS=1 区分 NWd/Secure DRAM (`src/sel2_mmu.rs`)
+   - [x] SP 的 Stage-2 隔离 — `build_sp_stage2()` per-SP identity map
 
 4. **构建系统**:
    - [x] `make build-spmc` — 编译 BL32 binary（S-EL2 入口, `--features sel2`）
@@ -809,8 +809,8 @@ NS-EL1: Linux guest (当前 hypervisor 功能降级为 SPMC)
    - [x] BL33 test: PARTITION_INFO_GET expects count=1, DIRECT_REQ verifies x3/x4/x5 echo
 
 3. **Secure 中断路由** (推迟到 Phase C):
-   - [ ] FIQ 路由到 S-EL2
-   - [ ] 注入到 SP (S-EL1)
+   - [x] FIQ 路由到 S-EL2 — 安全 vIRQ 注入 via HCR_EL2.VI (`inject_pending_virq()` in `src/spmc_handler.rs`)
+   - [x] 注入到 SP (S-EL1) — 跨 SP `dispatch_interrupt_to_sp()` + `HF_INTERRUPT_GET` paravirt (Phase D)
 
 **Unit Tests**:
    - [x] `test_sp_context` — 16 assertions (state machine, transitions, args)
@@ -831,7 +831,7 @@ NS-EL1: Linux guest (当前 hypervisor 功能降级为 SPMC)
 - [x] 我们的 hypervisor 同时支持 NS-EL2 和 S-EL2 (SPMC) 模式 ✅ Sprint 4.3
 - [x] SPMD ↔ SPMC 协议握手成功 (FFA_MSG_WAIT) ✅ Sprint 4.3
 - [x] NS → SP 的 FF-A 直接消息传递正常 (Sprint 4.4 Phase B) ✅
-- [ ] 为 pKVM 集成做好准备（NS-EL2 空闲，可被 pKVM 占据）
+- [x] 为 pKVM 集成做好准备（NS-EL2 空闲，可被 pKVM 占据）— Phase 4.5: `make run-pkvm` 启动 AOSP android16-6.12 + 我们 SPMC,`ffa_test.ko` 35/35 PASS
 
 **预估总时间**: 6-8 周（Week 29-36）
 **状态**: ✅ 已完成 (Sprint 4.1/4.2/4.3 ✅, Sprint 4.4 Phase A/B ✅, Phase C ✅, Phase D ✅, 20/20 BL33 tests)
@@ -882,9 +882,9 @@ NS-EL1: Linux/Android guest
    - [x] SPMC 正确处理 FFA_VERSION framework message (返回 v1.1)
    - [x] SPMC 正确处理 FFA_FEATURES(FFA_RXTX_MAP) (返回 SUCCESS)
    - [x] FF-A 在 nVHE 模式下端到端工作 (`kvm-arm.mode=nvhe`): FFA_VERSION ✓, FFA_FEATURES ✓, RXTX_MAP ✓, PARTITION_INFO_GET ✓
-   - [ ] FF-A 在 protected 模式下被 pKVM FF-A proxy 阻断 — Linux 6.12 pKVM FFA proxy 有已知 bug (LKML Nov 2025)
-   - [ ] FFA_MEM_SHARE 端到端（blocked by FF-A discovery failure in protected mode）
-   - [ ] FFA_MSG_SEND_DIRECT_REQ 端到端（blocked）
+   - [x] FF-A 在 protected 模式下工作 — AOSP android16-6.12 修复后,FF-A driver v1.2 在 `kvm-arm.mode=protected` 下正常注册(详见 L897)
+   - [x] FFA_MEM_SHARE 端到端 — `ffa_test.ko` 含 SP1 6 个 + SP2 6 个 MEM_SHARE 用例,SP-to-SP 共享/回收 9 个,全 PASS
+   - [x] FFA_MSG_SEND_DIRECT_REQ 端到端 — `ffa_test.ko` 含 SP1/SP2/SP3 DIRECT_REQ + relay chain,全 PASS
 
 2. **双 Hypervisor 协调**:
    - [x] pKVM (NS-EL2) 和我们的 SPMC (S-EL2) 同时运行
@@ -928,9 +928,9 @@ NS-EL1: Linux/Android guest
 **优先级**: P0 — pKVM FF-A proxy 会代理 host kernel 的 MEM_SHARE 到 SPMC，无此功能则真实 TEE 用例不可能
 
 **前置: 并发安全改造**:
-- [ ] `NWD_RXTX` 从 `static mut` 改为 `SpinLock<NwdRxtxState>`
-- [ ] `SpStore` (sp_context.rs) 从 `UnsafeCell` 改为 `SpinLock` 保护（或 per-CPU 分片）
-- [ ] 新增 `SpinLock<ShareRecordStore>` 全局 share 记录管理
+- [x] `NWD_RXTX` 从 `static mut` 改为 `SpinLock<NwdRxtxState>`
+- [x] `SpStore` (sp_context.rs) 从 `UnsafeCell` 改为 `SpinLock` 保护（或 per-CPU 分片）
+- [x] 新增 `SpinLock<ShareRecordStore>` 全局 share 记录管理(`SpinLock<SpmcShareRecordStore>` in `spmc_handler.rs`)
 
 **可复用的 NS-proxy 代码**:
 | NS-proxy 文件 | 复用方式 | 说明 |
@@ -975,18 +975,18 @@ FFA_MEM_RECLAIM → handle_mem_reclaim()
 ```
 
 **测试**:
-- [ ] NWd MEM_SHARE → SPMC 记录 ShareRecord
-- [ ] SP MEM_RETRIEVE → Secure Stage-2 映射验证
-- [ ] SP MEM_RELINQUISH → Secure Stage-2 unmap 验证
-- [ ] NWd MEM_RECLAIM → ShareRecord 删除
-- [ ] MEM_RECLAIM while retrieved → DENIED
-- [ ] 并发: 两个 CPU 同时 MEM_SHARE 不死锁
+- [x] NWd MEM_SHARE → SPMC 记录 ShareRecord
+- [x] SP MEM_RETRIEVE → Secure Stage-2 映射验证
+- [x] SP MEM_RELINQUISH → Secure Stage-2 unmap 验证
+- [x] NWd MEM_RECLAIM → ShareRecord 删除
+- [x] MEM_RECLAIM while retrieved → DENIED
+- [x] 并发: 两个 CPU 同时 MEM_SHARE 不死锁(STAGE2_LOCK 序列化 map/unmap)
 
 **验收**:
-- [ ] `dispatch_ffa()` 处理 MEM_SHARE/LEND/RETRIEVE/RELINQUISH/RECLAIM
-- [ ] Secure Stage-2 动态 map/unmap 工作
-- [ ] ShareRecord 全局管理（SpinLock 保护）
-- [ ] 单元测试全部通过
+- [x] `dispatch_ffa()` 处理 MEM_SHARE/LEND/RETRIEVE/RELINQUISH/RECLAIM(另含 DONATE)
+- [x] Secure Stage-2 动态 map/unmap 工作(`Stage2Walker` + `STAGE2_LOCK`)
+- [x] ShareRecord 全局管理（SpinLock 保护）
+- [x] 单元测试全部通过(`test_spmc_handler` 182 assertions)
 
 **预估**: 2-3 周
 
@@ -1014,14 +1014,14 @@ FFA_MEM_RECLAIM → handle_mem_reclaim()
    - SET 后触发 vIRQ 唤醒目标 SP（通过现有 `inject_pending_virq()` 机制）
 
 **测试**:
-- [ ] BITMAP_CREATE/DESTROY 生命周期
-- [ ] BIND + SET + GET 端到端
-- [ ] INFO_GET 返回正确的 SP ID 列表
-- [ ] 未 BIND 的 SET → DENIED
+- [x] BITMAP_CREATE/DESTROY 生命周期
+- [x] BIND + SET + GET 端到端
+- [x] INFO_GET 返回正确的 SP ID 列表
+- [x] 未 BIND 的 SET → DENIED
 
 **验收**:
-- [ ] 6 个通知 FF-A 调用在 SPMC 侧全部实现
-- [ ] 单元测试通过
+- [x] 6 个通知 FF-A 调用在 SPMC 侧全部实现(BITMAP_CREATE/DESTROY/BIND/UNBIND/SET/GET/INFO_GET)
+- [x] 单元测试通过(`test_ffa` + `test_spmc_handler` 通知子集全 PASS)
 
 **预估**: 1-2 周
 
@@ -1434,10 +1434,10 @@ GitHub Actions配置：
 
 ### 8.2 工程成功标准
 
-- [ ] 代码质量：通过clippy无警告
+- [x] 代码质量：通过clippy无警告(CI: Check/Clippy/Format pass)
 - [ ] 测试覆盖率：核心模块>80%
 - [ ] 文档完善：每个模块有设计文档
-- [ ] CI/CD：自动化测试和构建
+- [x] CI/CD：自动化测试和构建(GitHub Actions: Check/Clippy/Format + QEMU Unit Tests)
 
 ### 8.3 社区成功标准
 
