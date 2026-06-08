@@ -8,7 +8,7 @@
 
 `multi_vm` 是"两台 VM 抢一颗 pCPU 的时间片",`multi_pcpu` 是"一台 VM 的 4 个 vCPU 各占一颗 pCPU,谁也不让谁"。两条 feature 是互斥的——`multi_vm` 假设 vCPU 远多于 pCPU,所以得调度;`multi_pcpu` 假设 vCPU 数 == pCPU 数,所以根本不要调度器。运行模型差太多,放一个二进制里就要满地 `if cfg`,所以代码层就分了。
 
-听起来 1:1 比时间片简单——没调度器、没切换。实际上不简单,但**复杂在你想不到的地方**。这篇讲四个非平凡的问题,从"secondary pCPU 怎么活过来"开始,到"为什么 `inject_spi()` 不能拿那把它本该拿的锁"。
+听起来 1:1 比时间片简单——没调度器、没切换。实际上不简单,但**复杂在你想不到的地方**。这篇讲**七个非平凡的问题**,从"secondary pCPU 怎么活过来"开始,到"为什么 `inject_spi()` 不能拿那把它本该拿的锁",再到"跨 pCPU 唤醒该用什么硬件原语"。
 
 整个 multi_pcpu 这条分支加起来 ~500 行新代码,但每行都有故事。
 
@@ -200,7 +200,7 @@ pub fn ensure_vtimer_enabled(cpu_id: usize) {
 
 为什么每次都要写?**guest 自己可能再去 disable 它**——比如某些 Linux 启动路径会把 vtimer 关掉重开。我们的 `VirtualGicr` 接受这次 disable(改 shadow),但物理 GICR 已经被关了,下一次 vtimer 就再也不会触发,guest 时钟死掉。所以每次进 guest 前重新确认物理使能,简单粗暴但能用。
 
-EL2 直接写物理 GICR 是**绕过 Stage-2 翻译**的(EL2 访问对 Stage-2 透明),没有任何中间层,几条指令就完成。
+EL2 直接写物理 GICR 是**绕过 Stage-2 翻译**的——准确说,EL2 自己的访问不经过 Stage-2(它仍然走自己的 EL2 Stage-1 + 内存属性,但 Stage-2 这层对 EL2 透明),所以可以直达物理 GIC,没有中间层,几条指令就完成。
 
 ---
 
