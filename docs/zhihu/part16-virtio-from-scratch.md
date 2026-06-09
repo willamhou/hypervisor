@@ -137,7 +137,7 @@ fn process_request(&mut self, queue: &mut Virtqueue, head: u16,
 
 ## virtio-net 的 12 字节前缀
 
-virtio-net 跟 virtio-blk 的结构类似——两个 virtqueue(RX queue 0,TX queue 1),descriptor 链,scatter-gather。但有个特别的细节:**每个数据包前面有一个 12 字节的 `virtio_net_hdr_v1`**。
+virtio-net 跟 virtio-blk 的结构类似——两个 virtqueue(RX queue 0,TX queue 1),descriptor 链,scatter-gather。但有个特别的细节:**每个数据包前面有一个 header 前缀**——协商了 `VIRTIO_NET_F_MRG_RXBUF` feature(我们这边默认协商)就是 `virtio_net_hdr_v1`,**12 字节**;没协商就是更老的 `virtio_net_hdr`,**10 字节**(差那 2 字节就是 `num_buffers` 字段)。我们这边一律按 12 字节走。
 
 ```
 virtio_net_hdr_v1 (12 B):

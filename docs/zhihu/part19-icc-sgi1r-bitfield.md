@@ -14,7 +14,7 @@ asm!("msr icc_sgi1r_el1, {val}", val = in(reg) val, ...);
 正确的字段位置:
 
 ```rust
-let val: u64 = (1u64 << 0)     // TargetList[15:0]: bit for CPU 1 (Aff0 == 1)
+let val: u64 = (1u64 << 1)     // TargetList[15:0]: bit 1 = Aff0 == 1 (CPU 1)
              | (4u64 << 24);    // INTID[27:24]: 4
 ```
 
