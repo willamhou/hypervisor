@@ -4,7 +4,7 @@ pKVM 在 Normal 世界发了一条 SMC,函数号 `0x84000073`,FF-A `MEM_SHARE`�
 
 那块内存里此刻有半张 Android 启动用的字体位图。pKVM 想让 SP2 能读到它。它不打算让 SP2 写——读完用完就还回来,所以不是 LEND,不是 DONATE,是 SHARE。
 
-这条 SMC 走过 EL3 的 SPMD,落到 S-EL2 我这边。从这一刻开始,这块 4 KB 内存就要换三次属性、记三笔账、过六个 SMC 才能回到原状。本篇讲这六个 SMC 怎么走完一遍。
+这条 SMC 走过 EL3 的 SPMD,落到 S-EL2 我这边。从这一刻开始,这块 4 KB 内存就要换好几次属性、在两本账上记多次,最后才能回到原状。本篇讲这一来一回怎么走完。
 
 代码主线在 `src/ffa/memory.rs`、`src/ffa/stage2_walker.rs`、`src/spmc_handler.rs` 的 `handle_spmc_mem_*` 这一组函数里。
 
@@ -104,7 +104,7 @@ validate_page_for_share(sw_bits)?;     // 要求 Owned
 
 `validate_page_for_share` 只在 `Owned` 时返回 `Ok`。其他三种状态都不能再 SHARE——不能把别人借给你的东西转借给第三个人,这是协议级别的约束,不是工程约束。
 
-验证通过之后,改状态:pKVM 这边的 SW bits 从 `Owned` 翻成 `SharedOwned`。这一笔是 atomic 的(`walker.write_sw_bits()`,带 cmpxchg)。S2AP 同时收紧——SHARE 的语义是"我借出去,自己不写",所以把发送方的访问权改成只读:
+验证通过之后,改状态:pKVM 这边的 SW bits 从 `Owned` 翻成 `SharedOwned`。这一笔是 atomic 的(`walker.write_sw_bits()`,带 cmpxchg)。本实现里 S2AP 同步收紧到只读——SHARE 的语义这边是"我借出去,自己不写"。FF-A 规范本身并不强制 sender 必须 RO,这是我们的策略选择,但它让"发送方在共享期间不会改写内容"成为可观测属性,后面 receiver 端的不变式才能稳:
 
 ```rust
 walker.write_sw_bits(ipa, PageOwnership::SharedOwned as u8)?;
@@ -177,9 +177,9 @@ walker.write_s2ap(ipa, S2AP_NONE)?;   // ← LEND 的关键差别
 
 `SharedOwned` 状态相同(都是"我分享出去但所有权还在"),区别只在 S2AP 那一位。
 
-DONATE 又不一样。DONATE 是不可逆转让,发送方直接 unmap——`walker.unmap_page(ipa)`——这块内存就在发送方的 Stage-2 里**消失了**。SW bits 写成 `Donated`,但其实没什么用,因为 PTE 已经无效。之所以保留这个状态值,是兼容性:接收方那边要标 `Donated`,沿用同一套编码。
+DONATE 又不一样。DONATE 是不可逆转让,发送方直接 unmap——`walker.unmap_page(ipa)`——这块内存就在发送方的 Stage-2 里消失了。PTE 已经无效,所以 SW bits 也不再有意义;`Donated` 这个状态值真正起作用的地方在 receiver 端,它从 PTE 里读到 `Donated` 时知道"这是别人转让给我的"(还可以拿去 SHARE 给第三方)。我们在 sender 端还是把 SW bits 写一次 `Donated`,纯粹是为了让全局账本的两端 SW 编码统一,方便日志和断言。
 
-DONATE 之后 `is_donate=true` 写进 `SpmcShareRecord`。后面的 RELINQUISH 和 RECLAIM 看到这个 flag 都返回 `FFA_DENIED`——DONATE 是单程票。
+DONATE 之后 `is_donate=true` 写进 `SpmcShareRecord`。本实现里后面的 RELINQUISH 和 RECLAIM 看到这个 flag 都返回 `FFA_DENIED`——这是我们对 FF-A "DONATE 是单程票"语义的强制实现,规范允许但不强求这条具体的 deny 路径。
 
 ---
 
@@ -290,13 +290,13 @@ ARM 留这两个 SW bits 给软件用,有人用来做 PTE 缓存标记、有人�
 
 ---
 
-## 收尾
+## 现在的页表
 
-`MEM_SHARE` 走完一圈,六个 SMC、两本账、四个状态。听起来繁琐,实际上是 FF-A 把"两个互不信任的 hypervisor 共享一块内存"这件事做对的最低成本——任何一步省掉,要么内存泄漏(句柄不销),要么权限混乱(S2AP 不收紧),要么有人能读到本不该读的内容(SW bits 不查)。
+走到最后,pKVM 那块 IPA `0x4200_0000` 的 PTE 又是 `Owned + RW`,SW bits[56:55] 是 `0b00`,S2AP 是 `0b11`。`SPMC_SHARES` 里那一条记录的 `active` 已经翻成 `false`,槽位空着,等下一次。SP2 的 Secure Stage-2 里那条曾经存在的 4 KB 映射已经被清掉,TLB 也被 `tlbi vae2is` 赶过一次。
 
-代码量上,`memory.rs` + `stage2_walker.rs` + `spmc_handler.rs` 里的六个 handler,加起来大约 1500 行。看起来不少,但每一行都对着 FF-A 规范的某一个语义,删一行就有一个语义不成立。这种"接口规约驱动"的代码密度,跟普通业务逻辑的那种"一行写不完两件事"很不一样——这边的每一行都是合规义务。
+跟 SHARE 发出之前比,什么都没多,什么都没少——只有一段 SMC 历史和一段日志。
 
-下一篇,我打算讲 GICv3 的虚拟化:四个 List Register、HW=1 怎么把物理 vtimer EOI 自动透传给虚拟世界、EOImode 把优先级降权和去激活拆成两步。FF-A 是协议,GICv3 是硬件——下一篇是硬件这条线。
+下一篇我想讲 GICv3 的 List Register:vtimer 中断怎么从物理 GIC 一路注入到 guest,EOI 在虚拟世界点完之后又怎么把物理那边的 active 位也一并清掉。换条主线,从协议切到硬件。
 
 ---
 
