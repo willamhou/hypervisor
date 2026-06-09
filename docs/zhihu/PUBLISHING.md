@@ -39,9 +39,9 @@ ARM64 Hypervisor 开发系列的知乎发布状态与排程。每发一篇,把�
 
 | 顺序 | 文章 | 文件 | 档 | 选位理由 |
 |---|---|---|---|---|
-| 1 | Part 11 — Stage-2 演进与堆 gap | `part11-stage2-heap-gap.md` | A ~200 | "堆放 guest PA 但 Stage-2 不映射"反直觉钩子;紧接 part10 内存主题 |
-| 2 | Part 12 — GICv3 虚拟化从零(LR/HW=1/EOImode) | `part12-gicv3-virt.md` | A ~270 | 硬件 deep dive,part10/11 是协议+内存,这条换主线 |
-| 3 | Part 13 — HPFAR_EL2 vs FAR_EL2 | `part13-hpfar-el2.md` | B ~150 | 短篇调试现场,deep dive 之间喘口气 |
+| 1 | Part 12 — GICv3 虚拟化从零(LR/HW=1/EOImode) | `part12-gicv3-virt.md` | A ~270 | 紧接 part10 末尾"下一篇 GICv3"预告;硬件主线 |
+| 2 | Part 11 — Stage-2 演进与堆 gap | `part11-stage2-heap-gap.md` | A ~200 | 接 part12 的 GIC 进入 MMU 主题,反直觉钩子"堆在 guest PA 但 Stage-2 不映射" |
+| 3 | Part 13 — HPFAR_EL2 vs FAR_EL2 | `part13-hpfar-el2.md` | B ~150 | 短篇调试现场,本身是 Stage-2 fault 话题,跟 part11 紧紧扣上 |
 | 4 | Part 14 — TF-A 启动链 & SPKG 打包陷阱 | `part14-tfa-boot-chain.md` | A ~230 | 工程 war story,SPKG header 现场记忆点强 |
 | 5 | Part 15 — FF-A v1.1 协议机制(描述符 + RXTX + 分片) | `part15-ffa-protocol-mechanics.md` | A ~260 | 接 part10 lifecycle 把协议层补完 |
 | 6 | Part 16 — virtio-blk + virtio-net 从零 | `part16-virtio-from-scratch.md` | A ~260 | virtio 是独立主题,换条主线 |
