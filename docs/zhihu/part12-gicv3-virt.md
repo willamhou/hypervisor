@@ -199,11 +199,11 @@ Guest 处理完一个 IRQ、写 EOIR 之后,对应的 LR 状态从 active 翻成
 8. 虚拟 GIC 把 ICV_HPPIR1_EL1 = 27 送给 guest
 9. Guest IRQ handler: mrs ICC_IAR1_EL1 → 27 (硬件自动重定向到 ICV_IAR1_EL1)
 10. 跑 timer handler
-11. msr ICC_EOIR1_EL1, 27 → 硬件清 LR_2 (state=invalid, ELRSR[2]=1)
-                              priority drop (虚拟侧)
-12. msr ICC_DIR_EL1, 27    → 硬件 deactivation:
-                              虚拟侧无作用(LR_2 已 invalid)
-                              物理侧 (因 HW=1) deactivate GIC INTID 27
+11. msr ICC_EOIR1_EL1, 27 → 虚拟侧 priority drop。LR_2 的 state
+                              由 active → invalid(EOImode=1 + HW=1 路径),
+                              ELRSR[2]=1。物理侧不动作。
+12. msr ICC_DIR_EL1, 27    → 触发 deactivation。因 LR 之前是 HW=1,
+                              硬件把物理 GIC INTID 27 也 deactivate。
 13. 下次 vtimer 到期可以重新触发
 ```
 

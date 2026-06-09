@@ -14,7 +14,7 @@ exception::init();
 
 `exception::init()` 把 `VBAR_EL2` 设成我们 vector table 的物理地址。**这必须是第一步**——之前任何 trap、page fault、中断都会去硬件默认的位置(通常是 ROM 中的某段无效区域),hypervisor 直接挂。
 
-Primary CPU 启动时也做同样的事,但 secondary 不能共享 primary 那一次设置——`VBAR_EL2` **不是** banked per CPU,每颗 CPU 都得自己 `msr vbar_el2, ...`。
+Primary CPU 启动时也做同样的事,但 secondary 不能共享 primary 那一次设置——`VBAR_EL2` 是**每颗物理 CPU 独立的(per-PE)**,你在 primary 上写的值跟 secondary 上的值是两个不同的实例。每颗 CPU 醒来都得自己 `msr vbar_el2, ...`。
 
 ---
 
@@ -29,7 +29,7 @@ asm!("msr hcr_el2, {hcr}", "isb",
 
 `HCR_EL2.VM=1` 让 secure Stage-2 翻译生效。SP1/SP2/SP3 在 S-EL1 跑,它们的 IPA 经过 Secure Stage-2 翻译才到真物理地址。
 
-为什么 primary CPU init 阶段已经设过这位,secondary 还要再设?因为 `HCR_EL2` 也**不是** banked——它是 per-CPU 物理寄存器,从 reset 状态出来值为 0。TF-A 的 secondary warm-boot 把 secondary 转交给 SPMC 时不会替你保留 primary 的设置。
+为什么 primary CPU init 阶段已经设过这位,secondary 还要再设?因为 `HCR_EL2` 跟 `VBAR_EL2` 一样,**每颗物理 CPU 一份独立的(per-PE)**,从 reset 状态出来值为 0。TF-A 的 secondary warm-boot 把 secondary 转交给 SPMC 时不会替你保留 primary 的设置。
 
 `isb` 不能省。`msr hcr_el2` 之后下一条指令的取指阶段可能用旧的 trap 配置去判断,要 `isb` 强制 pipeline 同步才能让新值生效。
 

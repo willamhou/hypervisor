@@ -2,7 +2,7 @@
 
 pKVM 在 Normal 世界发了一条 SMC,函数号 `0x84000073`,FF-A `MEM_SHARE`。它说:这块 4 KB 内存,从 IPA `0x4200_0000` 起,我借给 SP2。
 
-那块内存里此刻有半张 Android 启动用的字体位图。pKVM 想让 SP2 能读到它。它不打算让 SP2 写——读完用完就还回来,所以不是 LEND,不是 DONATE,是 SHARE。
+那块内存里此刻有半张 Android 启动用的字体位图。pKVM 把它借给 SP2 用,但**pKVM 自己也还要继续读这块内存**——这是 SHARE 跟 LEND 的关键差别:SHARE 时 sender 还能读这块,LEND 时 sender 自己彻底放手。这次是前者,所以 SHARE,不是 LEND,更不是 DONATE(那是不可逆转让)。
 
 这条 SMC 走过 EL3 的 SPMD,落到 S-EL2 我这边。从这一刻开始,这块 4 KB 内存就要换好几次属性、在两本账上记多次,最后才能回到原状。本篇讲这一来一回怎么走完。
 

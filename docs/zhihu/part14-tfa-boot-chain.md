@@ -1,6 +1,6 @@
 # TF-A 启动链上几个"规范没写但必须知道"的坑
 
-QEMU 起来,TF-A BL1 → BL2 → BL31 都过了,日志里看到一条"NOTICE: BL31: Preparing for EL3 exit to normal world",然后 BL33(我的 SPMC,挂在 BL32 那一段)直接挂死,串口没新输出。没有 panic,没有 exception 日志,什么都没有。
+QEMU 起来,TF-A BL1 → BL2 → BL31 都过了,日志里看到 BL31 准备转交给 BL32(我的 SPMC,挂在 S-EL2 那一层),然后**SPMC 入口直接挂死**——串口没新输出,没有 panic,没有 exception 日志,什么都没有。
 
 我跑 `fiptool info build/qemu/debug/fip.bin` 想看 FIP 内容。每一项都对得上,SP UUID 列出来,size 不为零。再跑一次 `objdump -d` 看 SPMC 入口附近,反汇编出来是一串 `0x4750_4B53`、`0x0000_0001`、`0x0000_1000`——根本不是 ARM64 指令,而是 ASCII "SPKG" + 一段头部数据。
 

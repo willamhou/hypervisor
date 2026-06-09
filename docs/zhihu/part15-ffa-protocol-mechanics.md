@@ -143,7 +143,7 @@ struct FragmentState {
 }
 ```
 
-per-VM 一个状态。原因是同时刻一个 VM 至多有一笔 MEM_SHARE 在分片中(由 handle 串联),而不同 VM 互不影响。
+per-VM 一个状态。同时刻一个 VM 至多有一笔 MEM_SHARE 在分片中(由 handle 串联),不同 VM 互不影响。**`accum_buf` 4096 字节是本实现给描述符总长度设的上限**——`total_length > 4096` 直接返回 `FFA_INVALID_PARAMETERS`。也就是说这套 fragmentation 不是为"任意大描述符"准备的,而是为"超过单条 SMC 寄存器装载能力(8×8 字节)、但仍在单 TX page 范围内"的场景。生产环境如果真要传更大的描述符,这一段得换成动态分配 + 流式 parse。
 
 接收侧的 `FragRxState` 是镜像问题:`MEM_RETRIEVE_REQ` 的 RESP 描述符比 RX buffer 大时,receiver 第一次拿到的是头部,然后通过 `MEM_FRAG_RX` 一次次取剩余:
 

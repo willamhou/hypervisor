@@ -67,7 +67,7 @@ pub struct IdentityMapper {
 
 ## 演进:GICR 是 4 KB,需要 4 KB 粒度的 Stage-2 控制
 
-GICv3 的 Redistributor (GICR) 是每个 CPU 一个 0x2_0000 (128 KB) 的 MMIO 区域,但里面的 SGI / PPI 子页只占 4 KB。我们要 trap GICR 是因为 guest 直接写它会改物理中断状态,跟我们 SPI 路由表对不上。
+GICv3 的 Redistributor (GICR) 是每颗 CPU 一个 0x2_0000 (128 KB) 的 MMIO 区域,分成 RD_base 和 SGI_base 两个 64 KB frame,但实际有意义的寄存器只在每个 frame 的前 4 KB,其余是 reserved。我们要 trap 的就是 SGI_base 那 4 KB——里面的 ISENABLER0/ICFGR1/IPRIORITYR 等寄存器,guest 直接写会改物理中断状态,跟我们 SPI 路由表对不上。
 
 trap 的实现方式是:**把 GICR 那 4 KB 页从 Stage-2 里 unmap**。Guest 访问就触发 Data Abort,hypervisor 接管,在 `VirtualGicr` 的 shadow 状态上模拟一遍读写,然后透传给物理 GICR(如果需要),最后 ERET 回去。
 
