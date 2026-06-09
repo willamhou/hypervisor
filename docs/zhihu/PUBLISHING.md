@@ -6,7 +6,7 @@ ARM64 Hypervisor 开发系列的知乎发布状态与排程。每发一篇,把�
 
 | 状态 | 篇数 |
 |---|---|
-| ✅ 已发 | 11 |
+| ✅ 已发 | 12 |
 | 📌 下一篇 | part0b |
 | ⏳ 待发 | 1 |
 
@@ -23,6 +23,7 @@ ARM64 Hypervisor 开发系列的知乎发布状态与排程。每发一篇,把�
 | Part 6 — TrustZone 的 NS 位 | `part6-trustzone-ns-bit.md` |
 | Part 7 — 裸机 Rust 三个硬件坑 | `part7-bare-metal-rust-pitfalls.md` |
 | Part 8 — 两台 VM 互 ping(200 行 vSwitch) | `part8-multi-vm-vswitch.md` |
+| Part 9 — 4 个 vCPU 跑在 4 颗 pCPU 上(multi-pCPU 深度) | `part9-multi-pcpu.md` |
 | 综述 — 一颗芯片上跑两个 Hypervisor(替换 Hafnium) | `summary-two-hypervisors.md` |
 | pKVM 完全解析 | `pkvm-explainer.md` |
 
@@ -40,8 +41,25 @@ ARM64 Hypervisor 开发系列的知乎发布状态与排程。每发一篇,把�
 
 ## 发完之后
 
-现有长文清空。继续日更需写新文,候选题材:
-- `multi_pcpu` 分支(part8 结尾预告过,1:1 vCPU↔pCPU,真 PSCI CPU_ON 唤醒物理核)
-- OP-TEE 作为 SP 跑在我们 SPMC 上(兼容性证明,需先做)
-- 性能 benchmark vs KVM(REQUIREMENTS 列的目标,需先做)
-- 完整 distro(Ubuntu/Debian arm64)启动(比 BusyBox 更有说服力)
+现有长文清空。继续日更需写新文,候选题材(按"无需新代码 → 需先做工作"分层):
+
+**Tier 1 — 项目里已有,直接能写:**
+- 跨世界内存共享 deep dive(part9 末尾预告过:MEM_SHARE/LEND/DONATE/RETRIEVE/RELINQUISH/RECLAIM 全套生命周期)
+- GICv3 虚拟化从零(LR 注入 / ICC_SGI1R / EOImode 分离)
+- FF-A v1.1 协议机制(composite descriptor / RXTX mailbox / fragmentation)
+- TF-A 启动链 & SPKG 打包陷阱
+- Secondary CPU warm-boot 完整版(part4 是发现,这篇是补完)
+- Stage-2 页表与 IdentityMapper 演进(2MB → 4KB GICR 拆分)
+- virtio-blk/net 从零
+
+**Tier 2 — 方法论 / meta:**
+- 裸机调试方法论(no JTAG 时怎么活)
+- 30K Rust vs 200K C(Hafnium):为什么差 7 倍
+- Bare-metal TDD 的边界
+- 一个 AI 调出真 bug 的全过程(对照 part0b 的 meta)
+
+**Tier 3 — 需新工作:**
+- OP-TEE 作为 SP 跑在我们 SPMC 上
+- 性能 benchmark vs KVM
+- 完整 distro(Ubuntu/Debian arm64)启动
+- RME/CCA Realm Manager
